@@ -95,16 +95,20 @@ Explicit, documented policies:
   escaped/rejected mode remain future work.
 - Headings: `<h1>`..`<h6>`; levels outside 1..6 are clamped (defensive for
   hand-built documents; frontends never produce them).
+- Thematic breaks: semantic `.thematic_break` leaves render as `<hr />` by
+  default, or `<hr>` under the modern void-element option.
 - Lists: `<ul>`/`<ol>` and `<li>` are emitted from the normalized list
   nodes; tight-list direct paragraphs omit `<p>`, while loose-list
   paragraphs retain it. Code blocks and tables remain unimplemented.
 - Line endings: `\n` only. Every block-level element is followed by exactly
   one `\n`; nonempty output always ends with `\n`. Empty input → empty output.
-- Void elements: `<br />` (CommonMark reference style) by default; toggle
-  `RenderOptions.void_trailing_slash` for HTML5 `<br>`.
-- Attributes: none emitted in this slice. When they arrive: fixed emission
-  order (e.g. `id`, `class`, `style`, `lang`, then others) — never
-  map-iteration order.
+- Void elements: `<br />` and `<hr />` (CommonMark reference style) by
+  default; toggle `RenderOptions.void_trailing_slash` for HTML5 `<br>` and
+  `<hr>`.
+- Extension attributes: none emitted in this slice. Built-in link/image/list
+  attributes use fixed order; future extension attributes must likewise use a
+  documented order (e.g. `id`, `class`, `style`, `lang`, then others), never
+  map iteration.
 
 ## Fuzzability and robustness
 
@@ -119,7 +123,8 @@ Explicit, documented policies:
 - The parsers are single-pass over lines with an incremental cursor; no
   pathological rescanning of the whole document.
 - Adversarial smoke tests exercise empty input, huge delimiter runs, NUL
-  bytes, mixed line endings, and 100 KB single lines (see
+  bytes, mixed line endings, 100 KB single lines, and deterministic
+  10,000-cycle thematic-break/Setext workloads (see
   `tests/fixtures_test.zig`). A real fuzz target is a later milestone; the
   API already supports it.
 

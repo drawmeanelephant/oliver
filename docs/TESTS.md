@@ -1,166 +1,144 @@
-# Oliver Tests and Fixtures
+# Oliver tests and fixtures
 
-Tests are the contract. `zig build test` runs two suites:
+Tests are product contracts. `zig build test` runs two suites:
 
-1. **Library module tests** — `test` blocks inside `src/*.zig` (84 tests):
-   unit tests for `source`, `document`, `diagnostic`, `markdown`
-   (including the emphasis/strong span, mod-3, escape, nesting, code-span
-   run-length/trim/opacity, link precedence/nesting/escape/span,
-   reference-link label-normalization/first-wins/fall-through,
-   reference-image full/collapsed/shortcut resolution and alt
-   flattening, image
-   structure/alt-flattening/nesting/escape/precedence assertions, and
-   autolink URI/email structure, spans, mailto hrefs, inert-escape
-   payloads, literal negatives, nesting inside emphasis/link text, and
-   alt flattening, raw HTML grammar/spans/precedence/multiline suppression,
-   and raw HTML image-alt flattening),
-   `unicode` (case-fold), `textile`, `html` (including hand-built
-   emphasis/strong/code-span/raw-HTML/link/image rendering), and the public API.
-   (The html.zig tests also run standalone via `zig test src/html.zig`;
-   see the build wiring note below.)
-2. **Fixture tests** — `tests/fixtures_test.zig` (6 tests): byte-exact
-   fixture rendering for both dialects (172 Markdown fixtures, of which
-   19 cover emphasis/strong per docs/INLINE-PARSING.md §15, 12 cover
-   code spans per §6.6, 22 cover inline links per §6.6, 17 cover inline
-   images per docs/IMAGES-PARSING.md §7, 18 cover block quotes per
-   docs/BLOCKS-PARSING.md §5.1 (basic/nesting/laziness/blank-marker
-   separation/interruption/empty/definitions-in-quote), 24 cover
-   reference links per §4.7/§6.6 — full/collapsed/shortcut forms,
-   Unicode label folding, whitespace normalization,
-   first-definition-wins, definitions after use, definitions in
-   headings/paragraphs, escaped labels, cannot-interrupt behavior, and
-   the failed-inline fall-through — and 13 cover reference-style images
-   per docs/REFERENCE-IMAGES.md — full/collapsed/shortcut, case-folded
-   labels, emphasis in the description flattening to alt, image inside
-   reference-link text, inline-beats-reference, first-wins, unmatched →
-   literal, and definition-after-use — and 25 cover autolinks per
-   docs/AUTOLINKS.md —
-   all 19 §6.8 spec examples byte-for-byte (URI schemes incl. `+`/`-`/
-   digits, ports, query strings with `&`, uppercase schemes, escaped
-   backslashes in content, emails with `+` and hyphenated domains,
-   `mailto:` hrefs, and the five literal negatives), plus autolinks in
-   sentences, emphasis, adjacent pairs, link text (spec example 526's
-   precedence), and image alt flattening), and 19 raw-HTML fixture cases
-   covering all 20 §6.6 spec examples (the paired comment and
-   backslash-attribute examples share fixtures), the
-   shared-model convergence proof, NUL policy, adversarial smoke (100 KB
-   delimiter/backtick/bracket runs, 10k-deep open chains, 50k
-   alternating `*`/`_` runs, 50k alternating `` ` ``/`*` runs, 20k
-   repeated `[a](` / `[a](<` / `[a](u "` link bombs and `![a](` image
-   bombs, deep `![` openers, the dead-bracket marking shape, 50k
-   shortcut and near-miss label bombs, 30k collapsed forms, 20k
-   failed-inline fall-throughs, a 20k-definition storm with interleaved
-   uses, a 200 KB label against the definitions map, a 100k-deep nested
-   block-quote stack, a 50k-line lazy-continuation flood, 50k
-   quote/blank alternations, reference-image bombs — 30k `![alpha]`
-   shortcuts, 20k collapsed and 20k full forms, 30k near-miss labels —
-   and autolink bombs — 30k URI and 20k email autolinks, 10k near-miss
-   `<ab:...` scans, one 200 KB content run with no `>`, and a 20k mixed
-   autolink/link/image/emphasis workload — completion in ~2s, no
-   crash/leak; the link/image bombs are what forced the §6.6 paren-depth
-   and scan-length DoS guards), and diagnostics.
+1. **Library module tests** — 101 `test` blocks inside `src/*.zig` covering
+   source lines/spans, the normalized document, diagnostics, both dialect
+   frontends, Unicode case folding, the HTML renderer, and the public API.
+   Markdown tests pin the container stack, thematic-break/list precedence,
+   multiline Setext transformation, reference-definition interaction,
+   terminal-backslash behavior, every implemented inline family, exact AST
+   shapes, and exact spans. Renderer tests construct documents directly so
+   renderer behavior is verified without a dialect parser.
+2. **Fixture and adversarial tests** — 7 tests in `tests/fixtures_test.zig`.
+   The explicit index contains 203 Markdown and 10 Textile fixture pairs.
+   It also verifies shared-model convergence, hostile-input completion and
+   leak freedom, NUL policy, diagnostics, and deterministic repeat rendering.
+
+The current complete result is **108/108 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
-For each fixture `<name>` there are exactly two files:
+Every fixture has exactly two files:
 
 ```text
 tests/fixtures/<dialect>/<name>.<ext>   # input
-tests/fixtures/<dialect>/<name>.html    # expected output
+tests/fixtures/<dialect>/<name>.html    # exact expected output
 ```
 
-- `<ext>` is `.md` for Markdown, `.textile` for Textile.
-- Expected outputs are **exact bytes**: trailing newlines matter (the
-  renderer always ends nonempty output with `\n`; raw HTML may additionally
-  preserve source line endings inside a tag).
-- Markdown and Textile fixtures live in **separate directories** even when
-  they produce the same normalized structure.
-- Fixtures are embedded at compile time (`@embedFile`), so tests run
-  anywhere with no filesystem access — consistent with the library's
-  no-filesystem core.
+- `<ext>` is `.md` for Markdown and `.textile` for Textile.
+- Expected output is compared byte for byte. Generated block output ends in
+  `\n`; raw HTML may preserve source line-ending bytes inside its span.
+- Dialects have separate directories even when their normalized documents
+  converge.
+- Files are embedded at compile time with `@embedFile`, so fixture execution
+  does not give the library core a filesystem dependency.
+- `tests/fixtures_test.zig` is the explicit index. An unindexed pair is not a
+  test and must not be treated as coverage.
 
-### Adding a fixture
+To add a fixture:
 
-1. Write `tests/fixtures/<dialect>/<name>.<ext>` and
-   `tests/fixtures/<dialect>/<name>.html`.
-2. Add one entry to the corresponding table (`markdown_fixtures` or
-   `textile_fixtures`) in `tests/fixtures_test.zig`. This table is the
-   explicit index — keeping it in sync is part of the convention.
-3. Run `zig build test`.
+1. Add the input and `.html` files.
+2. Add one entry to the appropriate fixture table.
+3. Run `zig build test --summary all`.
 
-## Coverage expectations per feature
+## Coverage requirements
 
-When a syntax feature lands, its fixture set should include, where meaningful:
+A completed syntax feature should include, where meaningful:
 
-- simplest valid example
-- nested example
-- ambiguous example
-- malformed example (must degrade to text, not crash)
-- Unicode example
-- source-span assertions (unit tests where useful)
-- exact deterministic HTML output
+- simplest valid form;
+- nesting and interaction with already-landed syntax;
+- ambiguous/precedence cases;
+- malformed literal fallback;
+- Unicode and line-ending cases;
+- exact source-span assertions;
+- byte-exact deterministic HTML;
+- an adversarial shape capable of exposing accidental quadratic work.
 
-See the fixture list in `tests/fixtures_test.zig` for the current shape.
+The current Markdown wall covers emphasis/strong, code spans, inline and
+reference links/images, definitions, autolinks, inline raw HTML, block quotes,
+thematic breaks, Setext headings, escapes, breaks, paragraphs, and ATX
+headings. The leaf-block slice adds four thematic-break fixture groups, eight
+Setext groups, a terminal-backslash fixture, exact AST/span tests, renderer
+profile tests, and a deterministic 10,000-cycle heading/break workload.
 
 ## Direct document-to-HTML tests
 
-HTML rendering must be testable without any dialect: `src/html.zig` builds
-documents by hand (`document.Document.init` + `createNode` + `appendChild`)
-and asserts rendered bytes. This covers escaping, break policies, heading
-clamping, void-element style, and the empty document — all renderer-owned
-behavior, independent of Markdown/Textile.
+`src/html.zig` builds documents with `Document.init`, `createNode`, and
+`appendChild`, then asserts rendered bytes. These tests cover escaping, breaks,
+heading clamping, list tightness, raw HTML, thematic breaks, both void-element
+styles, and empty documents independently of Markdown or Textile.
 
-## Span assertions
+## Span contract
 
-Unit tests assert exact `Span` values for structure (e.g. a heading's span
-covers the whole line; a text node's span covers the trimmed content).
-Spans are a first-class contract, not incidental.
+Spans are first-class behavior. Tests assert, among other things:
 
-## Adversarial smoke
+- an ATX heading covers its marker line;
+- a Setext heading covers its content lines plus underline;
+- a thematic break covers its marker line after container markers;
+- inline children cover only emitted content bytes;
+- line-break nodes cover the actual line terminator;
+- stripped markers and consumed escape/delimiter bytes are not assigned to
+  unrelated nodes.
 
-`tests/fixtures_test.zig` runs hostile inputs through both dialects and the
-renderer under `std.testing.allocator` (leak-checking): empty input, blank
-runs, huge `#` runs, mixed `\r\n`/`\r`/`\n`, NUL bytes, 100 KB single lines.
-Contract: no crash, no hang, no unbounded recursion, deterministic output.
-A dedicated fuzz target is a later milestone; the public API
-(`parse(allocator, bytes, dialect, options)`) is already the fuzz entry
-point.
+## Adversarial wall
 
-## CommonMark spec-conformance scorecard
+`tests/fixtures_test.zig` sends hostile bytes through parsing and rendering
+under `std.testing.allocator`:
 
-`tools/spec_conformance.zig` extracts every normative example from a
-CommonMark `spec.txt` — the specification's own test corpus, an explicitly
-allowed clean-room source — runs each through the library, and prints a
-per-section scorecard. This is the project's conformance oracle: every
-milestone can be measured against the whole spec, not just its own
-fixtures.
+- 100 KB delimiter, backtick, bracket, backslash, and single-line runs;
+- deep opener chains and mixed delimiter/code workloads;
+- link/image component and unmatched-bracket storms;
+- shortcut, collapsed, full, near-miss, and definition-map reference storms;
+- very large labels;
+- URI/email autolink matches and near misses;
+- a 100,000-deep block-quote stack, lazy-continuation flood, and quote/blank
+  alternation;
+- mixed LF, CRLF, and CR plus NUL bytes;
+- 10,000 repeated Setext/thematic transitions rendered twice and compared;
+- a 20,000-level list/thematic near-miss that exercises linear suffix
+  recognition.
+
+The contract is completion without crash, leak, unbounded recursion, or output
+nondeterminism. A dedicated fuzz target remains planned; the public
+`parse(allocator, bytes, dialect, options)` API is already the fuzz entry point.
+
+## CommonMark 0.31.2 scorecard
+
+`tools/spec_conformance.zig` extracts every normative example from the
+official CommonMark `spec.txt`, runs it through Oliver, and prints a per-section
+scorecard. Normative examples are an allowed clean-room source.
 
 ```bash
-# Fetch the canonical spec (allowed source; see docs/CLEANROOM.md)
 curl -O https://spec.commonmark.org/0.31.2/spec.txt
 
-zig build spec-conformance -- spec.txt              # full scorecard
-zig build spec-conformance -- spec.txt --section "Images"   # one section
-zig build spec-conformance -- spec.txt --gate       # exit 1 on any failure
+zig build spec-conformance -- spec.txt
+zig build spec-conformance -- spec.txt --section "Setext headings"
+zig build spec-conformance -- spec.txt --section "Code spans" --gate
 ```
 
-Normalization mirrors the spec's own test driver: `→` is the tab
-character (converted in both input and expected output), and the expected
-outputs omit the final newline block renderers emit (one trailing newline
-on the actual output is ignored). The report is deterministic and exits 0
-in report mode; `--gate` is for CI-style enforcement once a section is
-where we want it. Baseline (0.31.2, after the blockquote and
-reference-style-images milestones and before raw HTML): **382/655 examples
-pass** — inline sections are mostly green (images 100%, emphasis 96%, links
-91%, code spans 90%, ATX headings 88%), block quotes went 0/25 → 18/25 (the
-7 failures are exactly the pending indented/fenced code, thematic-break, and
-list constructs), and the remaining block-level sections (HTML blocks 0%,
-lists ~7%) are the ongoing work. Refresh this scorecard after each
-conformance milestone.
+The harness converts the spec's tab-arrow marker to a real tab and ignores one
+renderer-owned final newline. Report mode exits zero while showing failures;
+`--gate` exits nonzero on any mismatch in the selected corpus.
 
-## Running
+Current canonical baseline: **513/652 examples pass**.
+
+- Thematic breaks: 18/19; the remaining example is indented code.
+- Setext headings: 25/27; both remaining examples are indented code.
+- ATX headings: 17/18; the remaining example is indented code.
+- Link reference definitions: 24/27.
+- Block quotes: 21/25.
+- List items: 32/48; Lists: 21/27.
+- Code spans, emphasis/strong, images, autolinks, inline raw HTML, hard/soft
+  breaks, and textual content: 100%.
+
+Failures are not silently skipped. Scores for implemented sections can be
+strictly gated; unfinished sections remain visible in the full report.
+
+## Commands
 
 ```bash
-zig build test            # all tests
-zig build test --summary all   # per-suite pass counts
+zig fmt --check build.zig build.zig.zon src tests tools
+zig build test --summary all
+zig build
 ```

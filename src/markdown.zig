@@ -1,13 +1,15 @@
 //! Markdown frontend.
 //!
-//! Implemented: paragraphs, ATX headings, block quotes (§5.1), list items
-//! and lists (§5.2/§5.3), backslash escapes, hard and soft line breaks,
+//! Implemented: paragraphs, ATX and Setext headings (§4.2/§4.3), thematic
+//! breaks (§4.1), block quotes (§5.1), list items and lists (§5.2/§5.3),
+//! backslash escapes, hard and soft line breaks,
 //! emphasis and strong emphasis, code spans (§6.1), raw HTML tags (§6.6),
-//! inline links (§6.6), inline images (§6.7), and autolinks (§6.8). Behavior
+//! inline links (§6.3), inline images (§6.4), and autolinks (§6.5). Behavior
 //! is taken from the CommonMark specification (0.31.2) where the slice
 //! implements it; divergences and chosen behaviors are documented in
 //! docs/FEATURE-MATRIX.md, and the emphasis/strong algorithm is derived
-//! in docs/INLINE-PARSING.md (images: docs/IMAGES-PARSING.md;
+//! in docs/INLINE-PARSING.md (leaf blocks: docs/LEAF-BLOCKS.md; images:
+//! docs/IMAGES-PARSING.md;
 //! autolinks: docs/AUTOLINKS.md).
 //!
 //! Code spans are discovered *before* the delimiter scan (a discovery pass
@@ -28,7 +30,7 @@
 //! emphasis matcher then runs separately inside each link (the spec's
 //! "process emphasis with the `[` opener as stack_bottom"), and brackets
 //! that never form a link stay literal text. Because a link kills every
-//! earlier `[` (links cannot contain links, §6.6), links are always
+//! earlier `[` (links cannot contain links, §6.3), links are always
 //! innermost-first and link text never contains another link. This is the
 //! second delimiter-opacity rule (link brackets bind more tightly than
 //! emphasis; `*[foo*](/uri)` is a link).
@@ -42,7 +44,7 @@
 //! description"), so `.image` is a leaf node like `code_span`. Images
 //! reuse the link `(...)` parser and its DoS guards verbatim.
 //!
-//! Autolinks (§6.8) are recognized at scan time, like code spans: on an
+//! Autolinks (§6.5) are recognized at scan time, like code spans: on an
 //! unescaped `<` the scan tries a URI autolink (`<scheme:...>`, scheme
 //! 2-32 chars) then an email autolink (`<user@host>`, the HTML5 regex),
 //! and a match becomes a leaf `autolink` item whose content is opaque to
@@ -60,8 +62,9 @@
 //!
 //! The parser runs in two passes, matching the spec's precedence model:
 //! block structure first, then inline structure. The block pass recognizes
-//! paragraphs, ATX headings, block quotes, list items, and lists; unsupported
-//! leaf-block forms currently fall back to paragraphs.
+//! paragraphs, ATX and Setext headings, thematic breaks, block quotes, list
+//! items, and lists; unsupported leaf-block forms currently fall back to
+//! paragraphs.
 //!
 //! The inline pass is discovery plus three phases (see
 //! docs/INLINE-PARSING.md §8):
@@ -86,8 +89,8 @@
 //!   spaces produces a hard break, otherwise a soft break; the whole run is
 //!   consumed. An unescaped trailing backslash also produces a hard break.
 //! - ATX heading content is stripped of leading/trailing spaces/tabs before
-//!   inline parsing (spec §4.2); only a trailing unescaped backslash can
-//!   produce a hard break inside a heading (chosen behavior, see matrix).
+//!   inline parsing (spec §4.2); a terminal backslash stays literal because
+//!   hard breaks require a following inline-content line.
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -98,7 +101,8 @@ const unicode = @import("unicode.zig");
 pub const ParseError = error{OutOfMemory};
 
 /// Parses `doc.src` as Markdown, appending block nodes under `doc.root`.
-/// The caller (`oliver.parse`) guarantees `doc.src.bytes.len <=\n/// source.max_input_len`, so all offsets fit in `u32`.
+/// The caller (`oliver.parse`) guarantees
+/// `doc.src.bytes.len <= source.max_input_len`, so all offsets fit in `u32`.
 pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnostic)) ParseError!void {
     _ = diags;
 
@@ -125,6 +129,11 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
 
     var lines = source.Lines.init(doc.src.bytes);
     while (lines.next()) |line| {
+        // The same physical line can be re-examined at many nested list
+        // depths. Summarize its thematic-break suffixes once so precedence
+        // checks stay O(1) per consumed container marker.
+        const thematic_facts = ThematicLineFacts.init(line);
+
         // A. Match open containers top-down, consuming one marker each. A
         // block quote consumes `> `; a list item consumes its content
         // indentation; a list consumes nothing (its fate is decided by its
@@ -186,9 +195,9 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // reprocessed as a fresh start. A list whose item failed without a
         // replacement item closes too.
         if (matched < containers.items.len) {
-            const list_sibling = startsListSibling(&containers, matched, view);
-            resolveListBlankPending(&containers, matched, view);
-            if (paragraph != null and !list_sibling and isParagraphContinuationText(view)) {
+            const list_sibling = startsListSibling(&containers, matched, view, &thematic_facts);
+            resolveListBlankPending(&containers, matched, view, &thematic_facts);
+            if (paragraph != null and !list_sibling and isParagraphContinuationText(view, &thematic_facts)) {
                 try appendParagraphLine(doc, &paragraph, view);
                 extendContainerSpans(&containers, view);
                 continue;
@@ -197,20 +206,22 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             containers.shrinkRetainingCapacity(matched);
             if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
                 const top_list = containers.items[containers.items.len - 1].node;
-                const m = tryListMarker(view);
+                const m = tryListMarkerAfterLeafPrecedence(view, &thematic_facts);
                 if (m == null or !sameListType(top_list, m.?)) {
                     containers.shrinkRetainingCapacity(containers.items.len - 1);
                 }
             }
         } else {
-            resolveListBlankPending(&containers, matched, view);
+            resolveListBlankPending(&containers, matched, view, &thematic_facts);
         }
 
         // D. New block starts on the remainder. Block quotes and list
         // markers may nest (each consumes its marker and the remainder is
-        // re-examined); an ATX heading ends the loop (its content is inline
-        // text). A list item interrupts an open paragraph only when it can
-        // (§5.2 rule 1 exceptions); otherwise the line is paragraph text.
+        // re-examined). Thematic breaks take precedence over list markers;
+        // a Setext underline transforms an eligible open paragraph before a
+        // one- or two-dash line can become an empty list item (§4.1/§4.3).
+        // A list item interrupts an open paragraph only when it can (§5.2
+        // rule 1 exceptions); otherwise the line is paragraph text.
         while (true) {
             if (tryStripBlockQuoteMarker(view)) |stripped| {
                 try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
@@ -219,6 +230,11 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 try containers.append(doc.allocator(), .{ .node = node });
                 view = stripped;
                 continue;
+            }
+            if (isThematicBreak(view, &thematic_facts) or
+                (trySetextUnderline(view) != null and setextContentIndex(doc, paragraph) != null))
+            {
+                break;
             }
             if (tryListMarker(view)) |m| {
                 if (paragraph != null and !m.can_interrupt) break;
@@ -262,6 +278,33 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             extendContainerSpans(&containers, view);
             continue;
         }
+        if (trySetextUnderline(view)) |underline| {
+            if (try emitSetextHeading(
+                doc,
+                &paragraph,
+                view,
+                underline,
+                leafParent(doc, &containers),
+                &defs,
+                &pending,
+            )) {
+                extendContainerSpans(&containers, view);
+                continue;
+            }
+        }
+        if (isThematicBreak(view, &thematic_facts)) {
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            // A failed list item can leave its list as the deepest matched
+            // container. A thematic break is not a sibling item: it belongs
+            // beside that list, never directly under the `.list` node.
+            if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
+                containers.shrinkRetainingCapacity(containers.items.len - 1);
+            }
+            const node = try doc.createNode(.thematic_break, view.contentSpan(), .none);
+            try doc.appendChild(leafParent(doc, &containers), node);
+            extendContainerSpans(&containers, view);
+            continue;
+        }
         if (tryAtxHeading(view)) |heading| {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
             try emitHeading(doc, view, heading, leafParent(doc, &containers), &pending);
@@ -280,6 +323,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         switch (job) {
             .paragraph => |pp| try parseParagraphInlines(doc, pp.node, pp.lines, &defs),
             .heading => |hh| try parseHeadingInlines(doc, hh.node, hh.span, &defs),
+            .setext_heading => |hh| try parseSetextHeadingInlines(doc, hh.node, hh.lines, &defs),
         }
     }
 }
@@ -462,6 +506,17 @@ fn tryListMarker(line: source.Line) ?ListMarker {
     };
 }
 
+/// Applies the §4.1 precedence rule before interpreting a line as a list
+/// marker: a thematic break is never a list item, even when its first marker
+/// and following whitespace also satisfy the list-marker grammar.
+fn tryListMarkerAfterLeafPrecedence(
+    line: source.Line,
+    thematic_facts: *const ThematicLineFacts,
+) ?ListMarker {
+    if (isThematicBreak(line, thematic_facts)) return null;
+    return tryListMarker(line);
+}
+
 /// Are `m`'s items of the same list type as `list_node` (§5.3): same
 /// bullet character, or same ordered delimiter?
 fn sameListType(list_node: *document.Node, m: ListMarker) bool {
@@ -522,10 +577,11 @@ fn startsListSibling(
     containers: *const std.ArrayList(ContainerState),
     matched: usize,
     line: source.Line,
+    thematic_facts: *const ThematicLineFacts,
 ) bool {
     if (matched == 0 or matched > containers.items.len) return false;
     if (containers.items[matched - 1].node.tag != .list) return false;
-    return tryListMarker(line) != null;
+    return tryListMarkerAfterLeafPrecedence(line, thematic_facts) != null;
 }
 
 /// Resolves pending blank lines once a nonblank line arrives. A list is loose
@@ -536,9 +592,10 @@ fn resolveListBlankPending(
     containers: *std.ArrayList(ContainerState),
     matched: usize,
     line: source.Line,
+    thematic_facts: *const ThematicLineFacts,
 ) void {
     const old_len = containers.items.len;
-    const marker = tryListMarker(line);
+    const marker = tryListMarkerAfterLeafPrecedence(line, thematic_facts);
 
     var i = old_len;
     while (i > 0) {
@@ -596,13 +653,18 @@ fn resolveListBlankPending(
 
 /// Is the remainder of a line paragraph continuation text (§5.1 laziness)?
 /// That is, it does not start a block that can interrupt a paragraph:
-/// currently a block quote marker, an ATX heading, or a list item that can
+/// a block quote marker, ATX heading, thematic break, or list item that can
 /// interrupt (a blank-start item or an ordered item not starting at 1
-/// cannot, §5.2 rule 1 exceptions). Thematic breaks join this check when
-/// that milestone lands (docs/BLOCKS-PARSING.md §5).
-fn isParagraphContinuationText(line: source.Line) bool {
+/// cannot, §5.2 rule 1 exceptions). A Setext underline does not join this
+/// predicate: it may transform only a paragraph at the same matched container
+/// depth, never through a missing container marker.
+fn isParagraphContinuationText(
+    line: source.Line,
+    thematic_facts: *const ThematicLineFacts,
+) bool {
     if (tryStripBlockQuoteMarker(line) != null) return false;
     if (tryAtxHeading(line) != null) return false;
+    if (isThematicBreak(line, thematic_facts)) return false;
     if (tryListMarker(line)) |m| return !m.can_interrupt;
     return true;
 }
@@ -612,6 +674,7 @@ fn isParagraphContinuationText(line: source.Line) bool {
 const PendingInline = union(enum) {
     paragraph: struct { node: *document.Node, lines: []const Paragraph.LineRef },
     heading: struct { node: *document.Node, span: source.Span },
+    setext_heading: struct { node: *document.Node, lines: []const Paragraph.LineRef },
 };
 
 /// A paragraph under construction. `content` is the full raw line span
@@ -656,6 +719,147 @@ fn appendParagraphLine(doc: *document.Document, paragraph: *?Paragraph, line: so
         .content = line.contentSpan(),
         .terminator = line.terminatorSpan(),
     });
+}
+
+/// A Setext heading underline (§4.3): one or more `=` or `-` bytes, with up
+/// to three leading spaces and only spaces/tabs after the marker run.
+const SetextUnderline = struct {
+    level: u8,
+};
+
+fn trySetextUnderline(line: source.Line) ?SetextUnderline {
+    const text = line.text;
+    var i: usize = 0;
+    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
+    if (i > 3 or i >= text.len) return null;
+
+    const marker = text[i];
+    if (marker != '=' and marker != '-') return null;
+    while (i < text.len and text[i] == marker) : (i += 1) {}
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
+    if (i != text.len) return null;
+    return .{ .level = if (marker == '=') 1 else 2 };
+}
+
+/// Once-per-physical-line suffix facts for thematic-break recognition.
+/// Container parsing advances only the line's start, so a query at any nested
+/// view needs two facts per marker: the last non-whitespace byte of another
+/// kind, and the third marker from the end. Both are computed in one reverse
+/// scan and make every later suffix query constant-time.
+const ThematicLineFacts = struct {
+    last_other: [3]?usize,
+    third_from_end: [3]?usize,
+
+    fn init(line: source.Line) ThematicLineFacts {
+        const markers = [_]u8{ '-', '_', '*' };
+        var facts = ThematicLineFacts{
+            .last_other = .{ null, null, null },
+            .third_from_end = .{ null, null, null },
+        };
+        var seen = [_]u8{ 0, 0, 0 };
+
+        for (0..line.text.len) |reverse_index| {
+            const local = line.text.len - 1 - reverse_index;
+            const byte = line.text[local];
+            if (byte == ' ' or byte == '\t') continue;
+            const absolute = line.start + local;
+            for (markers, 0..) |marker, marker_index| {
+                if (byte == marker) {
+                    if (seen[marker_index] < 3) {
+                        seen[marker_index] += 1;
+                        if (seen[marker_index] == 3) {
+                            facts.third_from_end[marker_index] = absolute;
+                        }
+                    }
+                } else if (facts.last_other[marker_index] == null) {
+                    facts.last_other[marker_index] = absolute;
+                }
+            }
+        }
+        return facts;
+    }
+};
+
+/// A thematic break (§4.1): three or more matching `-`, `_`, or `*` bytes,
+/// with up to three leading spaces and arbitrary spaces/tabs between or
+/// after markers. No other byte is permitted.
+fn isThematicBreak(line: source.Line, facts: *const ThematicLineFacts) bool {
+    const text = line.text;
+    var i: usize = 0;
+    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
+    if (i > 3 or i >= text.len) return false;
+
+    const marker = text[i];
+    const marker_index: usize = switch (marker) {
+        '-' => 0,
+        '_' => 1,
+        '*' => 2,
+        else => return false,
+    };
+    const marker_start = line.start + i;
+    if (facts.last_other[marker_index]) |last_other| {
+        if (last_other >= marker_start) return false;
+    }
+    const third = facts.third_from_end[marker_index] orelse return false;
+    return third >= marker_start;
+}
+
+/// Returns the first paragraph line that can become Setext heading content,
+/// after leading link-reference definitions. Definitions alone are not
+/// heading content (§4.7 examples 207/208), and a first content line with
+/// more than three spaces of indentation is not eligible (§4.3).
+fn setextContentIndex(doc: *document.Document, paragraph: ?Paragraph) ?usize {
+    const p = paragraph orelse return null;
+    const lines = p.lines.items;
+    var k: usize = 0;
+    while (k < lines.len) {
+        const def = tryParseDefinition(doc, lines[k..]) orelse break;
+        k += def.consumed_lines;
+    }
+    if (k == lines.len) return null;
+
+    const first = doc.src.bytes[lines[k].content.start..lines[k].content.end];
+    var indent: usize = 0;
+    while (indent < first.len and first[indent] == ' ') : (indent += 1) {}
+    if (indent > 3 or (indent < first.len and first[indent] == '\t')) return null;
+    return k;
+}
+
+/// Converts the open paragraph to a Setext heading. Leading reference
+/// definitions are registered exactly as they would be at normal paragraph
+/// close; only the remaining lines become heading content. The heading span
+/// covers the content lines plus the underline, while inline child spans
+/// continue to point only at content bytes.
+fn emitSetextHeading(
+    doc: *document.Document,
+    paragraph: *?Paragraph,
+    underline_line: source.Line,
+    underline: SetextUnderline,
+    parent: *document.Node,
+    defs: *Definitions,
+    pending: *std.ArrayList(PendingInline),
+) ParseError!bool {
+    const k = setextContentIndex(doc, paragraph.*) orelse return false;
+    const p = paragraph.*.?;
+
+    var i: usize = 0;
+    while (i < k) {
+        const def = tryParseDefinition(doc, p.lines.items[i..]) orelse unreachable;
+        try registerDefinition(doc, defs, def);
+        i += def.consumed_lines;
+    }
+
+    const content = p.lines.items[k..];
+    const node = try doc.createNode(.heading, .{
+        .start = content[0].content.start,
+        .end = @intCast(underline_line.content_end),
+    }, .{ .heading = underline.level });
+    try doc.appendChild(parent, node);
+    try pending.append(doc.allocator(), .{
+        .setext_heading = .{ .node = node, .lines = content },
+    });
+    paragraph.* = null;
+    return true;
 }
 
 /// A parsed link reference definition (§4.7): the label content span and
@@ -808,7 +1012,7 @@ const ScannedLabel = struct {
     after: usize,
 };
 
-/// Scans a link label (§6.6): `[` ... first `]` not backslash-escaped,
+/// Scans a link label (§6.3): `[` ... first `]` not backslash-escaped,
 /// with no unescaped brackets inside, at least one non-whitespace
 /// character, at most 999 characters. The label may span lines (line
 /// endings are content, later normalized away). Returns null when the text
@@ -831,7 +1035,7 @@ fn scanDefinitionLabel(bytes: []const u8, lines: []const Paragraph.LineRef, star
         if (b == '[' and !isEscaped(bytes, p)) return null; // unescaped bracket inside
         if (b != ' ' and b != '\t' and b != '\n' and b != '\r') has_nonspace = true;
         count += 1;
-        if (count > 999) return null; // §6.6: at most 999 characters
+        if (count > 999) return null; // §6.3: at most 999 characters
     }
     return null;
 }
@@ -901,7 +1105,7 @@ fn consumedLines(bytes: []const u8, lines: []const Paragraph.LineRef, line_end: 
     return n;
 }
 
-/// Normalizes a label (§6.6): strip the brackets (the caller passes the
+/// Normalizes a label (§6.3): strip the brackets (the caller passes the
 /// content span), perform the Unicode case fold, strip leading and trailing
 /// spaces/tabs/line endings, and collapse consecutive internal
 /// spaces/tabs/line endings to a single space. The result is an
@@ -1040,6 +1244,27 @@ fn parseParagraphInlines(
     lines: []const Paragraph.LineRef,
     defs: *Definitions,
 ) ParseError!void {
+    return parseMultilineBlockInlines(doc, node, lines, defs);
+}
+
+/// Phase 2 inline pass for Setext content. The underline itself is never part
+/// of the inline input; the shared inline line-joining rules remove leading
+/// spaces/tabs from every continuation line.
+fn parseSetextHeadingInlines(
+    doc: *document.Document,
+    node: *document.Node,
+    lines: []const Paragraph.LineRef,
+    defs: *Definitions,
+) ParseError!void {
+    return parseMultilineBlockInlines(doc, node, lines, defs);
+}
+
+fn parseMultilineBlockInlines(
+    doc: *document.Document,
+    node: *document.Node,
+    lines: []const Paragraph.LineRef,
+    defs: *Definitions,
+) ParseError!void {
     var items = std.ArrayList(InlineItem).empty;
     defer items.deinit(doc.allocator());
 
@@ -1065,21 +1290,22 @@ fn parseParagraphInlines(
     // the shared floor for the per-line scans.
     var exclude: u32 = 0;
     for (lines, 0..) |ref, i| {
-        const end = analyzeLineEnd(doc.src.bytes, ref.content);
+        const has_following_content_line = i + 1 < lines.len;
+        const end = analyzeLineEnd(doc.src.bytes, ref.content, has_following_content_line);
         const start = skipLeadingWhitespace(doc.src.bytes, ref.content);
         try scanLine(doc, &items, ref.content, .{ .start = start, .end = end.content_end }, constructs.items, &exclude);
-        if (i + 1 < lines.len) {
+        if (has_following_content_line) {
             // A line ending inside a construct (code span content — §6.1
             // "line endings are converted to spaces" — or a raw HTML tag)
             // is construct content, never a break: hard line breaks do not
-            // occur inside code spans or HTML tags (§6.6/§6.7).
+            // occur inside code spans or HTML tags (§6.1/§6.6).
             if (!terminatorInsideConstruct(ref.terminator, constructs.items)) {
                 try items.append(doc.allocator(), .{ .brk = .{ .kind = end.kind, .span = ref.terminator } });
             }
         }
     }
     // Second discovery pass: inline links, images, and reference links
-    // (§6.6/§6.7), before emphasis matching.
+    // (§6.3/§6.4), before emphasis matching.
     const para_end = lines[lines.len - 1].content.end;
     try discoverLinksAndImages(doc, &items, para_end, defs);
     try matchInlines(doc, node, items.items);
@@ -1186,38 +1412,21 @@ fn parseHeadingInlines(
     content: source.Span,
     defs: *Definitions,
 ) ParseError!void {
-    // A trailing unescaped backslash at the end of an ATX heading line is a
-    // hard line break inside the heading (chosen behavior, see matrix); it is
-    // scanned up to, and a hard break node is appended after.
-    const bytes = doc.src.bytes;
-    var scan = content;
-    if (bytes[scan.end - 1] == '\\' and !isEscaped(bytes, scan.end - 1)) {
-        scan.end -= 1;
-    }
-
     var items = std.ArrayList(InlineItem).empty;
     defer items.deinit(doc.allocator());
     var spans = std.ArrayList(CodeSpan).empty;
     defer spans.deinit(doc.allocator());
-    try discoverCodeSpans(doc, &[_]source.Span{scan}, &spans);
+    try discoverCodeSpans(doc, &[_]source.Span{content}, &spans);
     var tags = std.ArrayList(HtmlTag).empty;
     defer tags.deinit(doc.allocator());
-    try discoverHtmlTags(doc, &[_]source.Span{scan}, &tags);
+    try discoverHtmlTags(doc, &[_]source.Span{content}, &tags);
     var constructs = std.ArrayList(Construct).empty;
     defer constructs.deinit(doc.allocator());
     try mergeConstructs(doc, spans.items, tags.items, &constructs);
     var exclude: u32 = 0;
-    try scanLine(doc, &items, scan, scan, constructs.items, &exclude);
-    try discoverLinksAndImages(doc, &items, scan.end, defs);
+    try scanLine(doc, &items, content, content, constructs.items, &exclude);
+    try discoverLinksAndImages(doc, &items, content.end, defs);
     try matchInlines(doc, node, items.items);
-
-    if (scan.end != content.end) {
-        const brk = try doc.createNode(.hard_break, .{
-            .start = scan.end,
-            .end = content.end,
-        }, .none);
-        try doc.appendChild(node, brk);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1235,17 +1444,19 @@ const LineEnd = struct {
 
 /// Analyzes the end of a paragraph line per §6.7: a trailing run of
 /// whitespace with two or more spaces is a hard break; an unescaped
-/// backslash as the final character is a hard break; otherwise the break is
-/// soft. Tabs in the trailing run do not trigger a hard break. The entire
-/// trailing run is consumed in every case.
-fn analyzeLineEnd(bytes: []const u8, span: source.Span) LineEnd {
+/// backslash before a following content line is a hard break; otherwise the
+/// break is soft. Tabs in the trailing run do not trigger a hard break. The
+/// entire trailing run is consumed in every case. A final backslash with no
+/// following content line stays literal (example 644, and Setext §4.3).
+fn analyzeLineEnd(bytes: []const u8, span: source.Span, has_following_content_line: bool) LineEnd {
     var end = span.end;
     var spaces: usize = 0;
     while (end > span.start and (bytes[end - 1] == ' ' or bytes[end - 1] == '\t')) : (end -= 1) {
         if (bytes[end - 1] == ' ') spaces += 1;
     }
     const trailing = span.end - end;
-    if (trailing == 0 and
+    if (has_following_content_line and
+        trailing == 0 and
         end > span.start and
         bytes[end - 1] == '\\' and
         !isEscaped(bytes, end - 1))
@@ -3170,6 +3381,86 @@ test "markdown: source spans" {
     try testing.expectEqual(source.Span{ .start = 0, .end = 7 }, h.span);
     const t = h.children.items[0];
     try testing.expectEqual(source.Span{ .start = 2, .end = 7 }, t.span);
+}
+
+test "markdown: thematic breaks precede lists and interrupt paragraphs" {
+    const oliver = @import("oliver.zig");
+    const input = "Foo\n***\n- item\n  * * *";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 3), root.children.items.len);
+    try testing.expectEqual(document.Tag.paragraph, root.children.items[0].tag);
+    try testing.expectEqual(document.Tag.thematic_break, root.children.items[1].tag);
+    try testing.expectEqual(source.Span{ .start = 4, .end = 7 }, root.children.items[1].span);
+
+    const list = root.children.items[2];
+    try testing.expectEqual(document.Tag.list, list.tag);
+    const item = list.children.items[0];
+    try testing.expectEqual(@as(usize, 2), item.children.items.len);
+    try testing.expectEqual(document.Tag.paragraph, item.children.items[0].tag);
+    try testing.expectEqual(document.Tag.thematic_break, item.children.items[1].tag);
+    try testing.expectEqual(source.Span{ .start = 17, .end = 22 }, item.children.items[1].span);
+}
+
+test "markdown: Setext headings transform multiline paragraphs with exact spans" {
+    const oliver = @import("oliver.zig");
+    const input = "  Foo *bar\nbaz*  \n   ----  ";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+
+    const h = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.heading, h.tag);
+    try testing.expectEqual(@as(u8, 2), h.data.heading);
+    try testing.expectEqual(source.Span{ .start = 0, .end = @as(u32, @intCast(input.len)) }, h.span);
+    try testing.expectEqual(document.Tag.text, h.children.items[0].tag);
+    try testing.expectEqualStrings("Foo ", h.children.items[0].data.text);
+    try testing.expectEqual(document.Tag.emphasis, h.children.items[1].tag);
+    const em = h.children.items[1];
+    try testing.expectEqual(@as(usize, 3), em.children.items.len);
+    try testing.expectEqualStrings("bar", em.children.items[0].data.text);
+    try testing.expectEqual(document.Tag.soft_break, em.children.items[1].tag);
+    try testing.expectEqualStrings("baz", em.children.items[2].data.text);
+}
+
+test "markdown: Setext headings register leading definitions and preserve final backslashes" {
+    const oliver = @import("oliver.zig");
+    const input = "[foo]: /url\nBar\\\n===\n[foo]";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 2), root.children.items.len);
+    const h = root.children.items[0];
+    try testing.expectEqual(document.Tag.heading, h.tag);
+    try testing.expectEqual(@as(u8, 1), h.data.heading);
+    try testing.expectEqual(source.Span{ .start = 12, .end = 20 }, h.span);
+    try testing.expectEqual(@as(usize, 1), h.children.items.len);
+    try testing.expectEqualStrings("Bar\\", h.children.items[0].data.text);
+
+    const p = root.children.items[1];
+    try testing.expectEqual(document.Tag.link, p.children.items[0].tag);
+    try testing.expectEqualStrings("/url", p.children.items[0].data.link.href);
+}
+
+test "markdown: a final paragraph backslash remains literal" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "foo\\", .markdown, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(@as(usize, 1), p.children.items.len);
+    try testing.expectEqualStrings("foo\\", p.children.items[0].data.text);
+}
+
+test "markdown: a final ATX backslash remains literal" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "### foo\\", .markdown, .{});
+    defer result.deinit();
+    const h = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.heading, h.tag);
+    try testing.expectEqual(@as(usize, 1), h.children.items.len);
+    try testing.expectEqualStrings("foo\\", h.children.items[0].data.text);
 }
 
 test "markdown: escapes produce literal characters with precise spans" {
