@@ -11,10 +11,11 @@
 //! - The root node is always a `.document` whose children are blocks.
 //! - Block tags contain block or inline children as documented per tag.
 //! - `emphasis`/`strong`/`link` contain inline children; the leaf inline
-//!   tags (`text`, `code_span`, `image`, `soft_break`, `hard_break`)
-//!   never have children.
+//!   tags (`text`, `code_span`, `image`, `autolink`, `soft_break`,
+//!   `hard_break`) never have children.
 //! - `Node.data.text` always points into the document's source bytes;
-//!   `data.code_span`, `data.image` (src/alt/title), and
+//!   `data.code_span`, `data.image` (src/alt/title),
+//!   `data.autolink` (href/label), and
 //!   `data.link` (href/title) are the arena-owned (copied) payloads
 //!   (see docs/DOCUMENT-MODEL.md invariant 5).
 
@@ -54,6 +55,13 @@ pub const Tag = enum {
     /// flattened to a string at parse time; the image node carries no
     /// subtree).
     image,
+    /// An autolink (Markdown `<scheme:...>` or `<user@host>`, §6.8). Leaf:
+    /// no children. `data.autolink` holds the arena-owned href (the raw
+    /// URI, or `mailto:` + the email) and the label (the raw content
+    /// verbatim — backslash escapes are inert inside autolinks, so unlike
+    /// `data.link` this payload is *not* escape-resolved;
+    /// docs/AUTOLINKS.md §3).
+    autolink,
     /// A line break that renders as a newline in HTML (Markdown soft break).
     soft_break,
     /// A line break that renders as `<br />` in HTML (Markdown hard break,
@@ -63,13 +71,13 @@ pub const Tag = enum {
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading => true,
-            .text, .emphasis, .strong, .code_span, .link, .image, .soft_break, .hard_break => false,
+            .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .soft_break, .hard_break => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .code_span, .link, .image, .soft_break, .hard_break => true,
+            .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .soft_break, .hard_break => true,
             .document, .paragraph, .heading => false,
         };
     }
@@ -96,6 +104,21 @@ pub const Data = union(enum) {
     /// docs/IMAGES-PARSING.md §3), so it cannot be a source slice. The
     /// title is null when absent, not an empty string.
     image: Image,
+    /// `.autolink`: the href and label, both arena-owned copies of the
+    /// raw autolink content. Unlike `link`, backslash escapes are inert
+    /// inside autolinks (§6.8), so the content is copied verbatim — never
+    /// passed through escape resolution (docs/AUTOLINKS.md §3).
+    autolink: Autolink,
+};
+
+/// `.autolink` payload: the raw content between `<` and `>`, verbatim
+/// (escapes inert), plus the href it expands to. For a URI autolink the
+/// href is the content itself; for an email autolink it is `mailto:` +
+/// the content. Both are arena-owned copies (the `mailto:` prefix cannot
+/// be a source slice).
+pub const Autolink = struct {
+    href: []const u8,
+    label: []const u8,
 };
 
 /// The payload of a `.image` node: the resolved src, the flattened

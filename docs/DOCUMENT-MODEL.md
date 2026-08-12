@@ -66,12 +66,13 @@ href/title, or the arena-owned `image` src/alt/title.
 2. `.paragraph` children are inlines.
 3. `.heading` children are inlines.
 4. `emphasis`/`strong`/`link` contain inline children. The leaf inline
-   tags (`text`, `code_span`, `image`, `soft_break`, `hard_break`) never
-   have children.
+   tags (`text`, `code_span`, `image`, `autolink`, `soft_break`,
+   `hard_break`) never have children.
 5. `Data.text` always slices the document's source bytes; the other text
    payloads (`code_span`, `link.href`, `link.title`, `image.src`,
-   `image.alt`, `image.title`) are arena-owned copies — normalization
-   (code-span content, escape resolution, alt flattening) cannot be
+   `image.alt`, `image.title`, `autolink.href`, `autolink.label`) are
+   arena-owned copies — normalization (code-span content, escape
+   resolution, alt flattening, the `mailto:` prefix) cannot be
    expressed as a source slice.
 6. `span.start <= span.end`; all spans lie within the source.
 7. Consecutive `text` children of one parent never have contiguous spans:
@@ -86,6 +87,10 @@ href/title, or the arena-owned `image` src/alt/title.
    self-contained inline scope. `image` is a leaf whose `alt` is the
    description's inlines flattened to a string at parse time
    (docs/IMAGES-PARSING.md §3) — the image node carries no subtree.
+   `autolink` is likewise a leaf (no children): its label is the raw
+   content verbatim, and backslash escapes are inert inside autolinks
+   (§6.8), so `data.autolink.label` is *not* escape-resolved — the
+   payload is a verbatim arena copy (docs/AUTOLINKS.md §3).
 
 ## Growth path (planned tags, not yet implemented)
 
@@ -94,13 +99,18 @@ field, e.g. `list: { ordered: bool, start: ?u32 }`), `code_block` (fenced /
 indented, info string), `thematic_break`, `table` (+ `table_row`, `table_cell`
 with header flag), `raw_html` (under policy).
 
-Inlines: `autolink`, `raw_inline` (under policy).
-`emphasis`/`strong`/`link`/`image` are implemented; `emphasis`/`strong`
+Inlines: `raw_inline` (under policy).
+`emphasis`/`strong`/`link`/`image`/`autolink` are implemented;
+`emphasis`/`strong`
 carry no special data — nesting already expresses it. `code_span`,
-`link`, and `image` are the implemented inlines whose payloads are
-**arena-owned**: `data.code_span` is the §6.1-normalized content,
-`data.link` is the escape-resolved href/title, and `data.image` is the
-escape-resolved src/title plus the flattened plain-string alt (copies,
+`link`, `image`, and `autolink` are the implemented inlines whose
+payloads are **arena-owned**: `data.code_span` is the §6.1-normalized
+content,
+`data.link` is the escape-resolved href/title, `data.image` is the
+escape-resolved src/title plus the flattened plain-string alt, and
+`data.autolink` is the verbatim href/label (escapes inert — not
+escape-resolved, unlike `data.link`; the `mailto:` prefix is a copy)
+(copies,
 unlike `data.text` which borrows the source), because normalization
 cannot be expressed as a source slice. Reference links and
 reference-style images (§4.7 + §6.6 reference forms) produce the same
@@ -123,6 +133,7 @@ emit them in a fixed documented order.
 | `` `code span` `` | (Textile `@code@`: later) | `.code_span` (arena-owned content) |
 | `[x](url "title")` | (Textile `"text":url`: later) | `.link` (arena-owned href/title) |
 | `![alt](url "title")` | (Textile `!url(alt)!`: later) | `.image` (arena-owned src/alt/title) |
+| `<scheme:...>` / `<a@b.c>` | (Textile has no autolink; literal) | `.autolink` (arena-owned href/label) |
 | plain text | plain text | `.text` |
 | newline in paragraph | newline in paragraph | `.soft_break` (MD) / `.hard_break` (Textile) |
 | `*x*` / `**x**` | `_x_` / `*x*` (Textile, planned) | `.emphasis` / `.strong` |

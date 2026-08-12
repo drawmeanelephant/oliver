@@ -2,11 +2,12 @@
 //!
 //! Implemented: paragraphs, ATX headings, backslash escapes, hard and soft
 //! line breaks, emphasis and strong emphasis, code spans (§6.1), inline
-//! links (§6.6), and inline images (§6.7). Behavior is taken from the
-//! CommonMark specification (0.31.2) where the slice implements it;
-//! divergences and chosen behaviors are documented in
+//! links (§6.6), inline images (§6.7), and autolinks (§6.8). Behavior is
+//! taken from the CommonMark specification (0.31.2) where the slice
+//! implements it; divergences and chosen behaviors are documented in
 //! docs/FEATURE-MATRIX.md, and the emphasis/strong algorithm is derived
-//! in docs/INLINE-PARSING.md (images: docs/IMAGES-PARSING.md).
+//! in docs/INLINE-PARSING.md (images: docs/IMAGES-PARSING.md;
+//! autolinks: docs/AUTOLINKS.md).
 //!
 //! Code spans are discovered *before* the delimiter scan (a discovery pass
 //! over the paragraph's raw content finds equal-length backtick-string
@@ -39,6 +40,15 @@
 //! `alt` string (the spec's "only the plain string content of the image
 //! description"), so `.image` is a leaf node like `code_span`. Images
 //! reuse the link `(...)` parser and its DoS guards verbatim.
+//!
+//! Autolinks (§6.8) are recognized at scan time, like code spans: on an
+//! unescaped `<` the scan tries a URI autolink (`<scheme:...>`, scheme
+//! 2-32 chars) then an email autolink (`<user@host>`, the HTML5 regex),
+//! and a match becomes a leaf `autolink` item whose content is opaque to
+//! the delimiter stack and to link discovery (docs/AUTOLINKS.md §2). The
+//! first-come-wins rule with code spans falls out of the left-to-right
+//! walk: a backtick run before the `<` is skipped as a code span, a `<`
+//! before the backticks consumes them as ordinary URI content.
 //!
 //! The parser runs in two passes, matching the spec's precedence model:
 //! block structure first, then inline structure. The block pass recognizes
@@ -742,6 +752,15 @@ fn skipLeadingWhitespace(bytes: []const u8, span: source.Span) u32 {
     return i;
 }
 
+/// A recognized autolink (§6.8). `span` covers `<...>`; `content` is the
+/// bytes between the angle brackets, verbatim (backslash escapes are inert
+/// inside autolinks); `is_email` selects the `mailto:` href prefix.
+const AutolinkScan = struct {
+    span: source.Span,
+    content: source.Span,
+    is_email: bool,
+};
+
 /// A transient inline item in the flat list produced by the scan phase.
 /// Allocated from the document arena; dies with the document.
 const InlineItem = union(enum) {
@@ -775,6 +794,12 @@ const InlineItem = union(enum) {
     /// spans like a link's. The description is flattened to the `alt`
     /// string at emit time (docs/IMAGES-PARSING.md §3).
     image: ImageItem,
+    /// A recognized autolink (§6.8): `span` covers `<...>`, `content` the
+    /// bytes between the angle brackets (verbatim — backslash escapes are
+    /// inert inside autolinks), `is_email` selects the `mailto:` href
+    /// prefix. Opaque to the delimiter stack and link discovery, like
+    /// `code_span` (docs/AUTOLINKS.md §2).
+    autolink: AutolinkScan,
 };
 
 /// A discovered inline link (§6.6). See `InlineItem.link`.
@@ -804,6 +829,7 @@ fn itemSpan(item: InlineItem) source.Span {
         .bracket => |b| b.span,
         .link => |l| l.span,
         .image => |im| im.span,
+        .autolink => |a| a.span,
     };
 }
 
@@ -817,6 +843,7 @@ fn setItemSpan(item: *InlineItem, span: source.Span) void {
         .bracket => |*b| b.span = span,
         .link => |*l| l.span = span,
         .image => |*im| im.span = span,
+        .autolink => |*a| a.span = span,
     }
 }
 
@@ -1419,6 +1446,120 @@ const DelimiterRun = struct {
 /// `spans` (sorted, disjoint) are the block's code spans; positions inside
 /// a span are opaque — a code_span item is appended at the opening
 /// backtick, and everything through the closing backtick is skipped.
+/// §2.1 ASCII letter: `[a-zA-Z]` (the first character of a scheme).
+fn isAsciiLetter(b: u8) bool {
+    return (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z');
+}
+
+/// §6.8 scheme character: an ASCII letter, digit, `+`, `.`, or `-`.
+fn isSchemeChar(b: u8) bool {
+    return isAsciiLetter(b) or (b >= '0' and b <= '9') or b == '+' or b == '.' or b == '-';
+}
+
+/// §6.8 email local-part character (the HTML5 regex's first class):
+/// `[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]`.
+fn isEmailLocalChar(b: u8) bool {
+    return switch (b) {
+        'a'...'z', 'A'...'Z', '0'...'9', '.', '!', '#', '$', '%', '&', '\'', '*', '+', '/', '=', '?', '^', '_', '`', '{', '|', '}', '~', '-' => true,
+        else => false,
+    };
+}
+
+/// §6.8 email domain-label character: an ASCII letter or digit, or `-`.
+fn isEmailDomainChar(b: u8) bool {
+    return isAsciiLetter(b) or (b >= '0' and b <= '9') or b == '-';
+}
+
+/// §6.8 URI autolink: `<` + scheme (2–32 chars) + `:` + content (no ASCII
+/// control, space, `<`, `>`) + `>`. `pos` is at the `<`; `end` bounds the
+/// scan (a line end, since content cannot contain line endings). Returns
+/// null when the bytes do not form a URI autolink.
+fn scanUriAutolink(bytes: []const u8, pos: usize, end: usize) ?AutolinkScan {
+    const start = pos + 1;
+    var p = start;
+    // Scheme: first char an ASCII letter, then scheme chars, 2..32 total.
+    if (p >= end or !isAsciiLetter(bytes[p])) return null;
+    var scheme_len: usize = 1;
+    p += 1;
+    while (p < end and isSchemeChar(bytes[p]) and scheme_len < 32) : (p += 1) {
+        scheme_len += 1;
+    }
+    // The scheme ends at the `:` and must be 2..32 chars (`<m:abc>` is
+    // not an autolink); a 33+ char run is not a scheme.
+    if (scheme_len < 2 or scheme_len > 32 or p >= end or bytes[p] != ':') return null;
+    const content_start = p + 1;
+    var q = content_start;
+    while (q < end) : (q += 1) {
+        const b = bytes[q];
+        if (b == '>') {
+            // The label/href is the *whole* text between the angle
+            // brackets — scheme, colon, and content.
+            return .{
+                .span = .{ .start = @intCast(pos), .end = @intCast(q + 1) },
+                .content = .{ .start = @intCast(start), .end = @intCast(q) },
+                .is_email = false,
+            };
+        }
+        // ASCII control, space, and `<` are forbidden in the content.
+        if (b <= 0x20 or b == 0x7F or b == '<') return null;
+    }
+    return null;
+}
+
+/// §6.8 email autolink: `<` + email + `>`, where the email matches the
+/// non-normative HTML5 regex (anchored). `pos` is at the `<`; `end` bounds
+/// the scan. Returns null when the bytes do not form an email autolink.
+fn scanEmailAutolink(bytes: []const u8, pos: usize, end: usize) ?AutolinkScan {
+    const start = pos + 1;
+    var p = start;
+    // Local part: one or more local-part characters.
+    if (p >= end or !isEmailLocalChar(bytes[p])) return null;
+    p += 1;
+    while (p < end and isEmailLocalChar(bytes[p])) : (p += 1) {}
+    if (p >= end or bytes[p] != '@') return null;
+    p += 1;
+    // Domain: one or more dot-separated labels. Each label is
+    // `[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?`: a first alphanumeric,
+    // then a middle run of up to 61 alphanumerics or hyphens, then one
+    // alphanumeric. The label starts and ends alphanumeric, and the whole
+    // label is at most 63 chars (1 + 61 + 1). The regex is greedy, so a
+    // maximal [alnum-] run after the first char is a valid label iff its
+    // length is at most 62 and it ends in an alphanumeric.
+    var labels: usize = 0;
+    while (true) {
+        if (p >= end or !isAsciiLetter(bytes[p]) and !(bytes[p] >= '0' and bytes[p] <= '9')) return null;
+        p += 1;
+        var run: usize = 0;
+        var last_alnum = true;
+        while (p < end and isEmailDomainChar(bytes[p])) : (p += 1) {
+            run += 1;
+            const alnum = isAsciiLetter(bytes[p]) or (bytes[p] >= '0' and bytes[p] <= '9');
+            last_alnum = alnum;
+            if (run > 62) return null; // middle run exceeds 61 + final char
+        }
+        if (!last_alnum) return null; // label must end in an alphanumeric
+        labels += 1;
+        if (p >= end) return null;
+        if (bytes[p] == '>') {
+            if (labels == 0) return null;
+            return .{
+                .span = .{ .start = @intCast(pos), .end = @intCast(p + 1) },
+                .content = .{ .start = @intCast(start), .end = @intCast(p) },
+                .is_email = true,
+            };
+        }
+        if (bytes[p] != '.') return null;
+        p += 1;
+    }
+}
+
+/// Tries to recognize an autolink starting at the `<` at `pos` (§6.8): URI
+/// first, then email. Returns null when neither matches (the `<` stays
+/// literal text).
+fn scanAutolink(bytes: []const u8, pos: usize, end: usize) ?AutolinkScan {
+    return scanUriAutolink(bytes, pos, end) orelse scanEmailAutolink(bytes, pos, end);
+}
+
 fn scanLine(
     doc: *document.Document,
     items: *std.ArrayList(InlineItem),
@@ -1485,6 +1626,24 @@ fn scanLine(
             });
             i = e - 1; // loop increments past the run
             run_start = e;
+        } else if (b == '<' and !isEscaped(bytes, i)) {
+            // §6.8 autolink: `<scheme:...>` or `<user@host>`. The scan is
+            // per-line and the content excludes line endings, so scanning
+            // within `raw` is complete; the autolink item is opaque to the
+            // delimiter stack and link discovery (docs/AUTOLINKS.md §2). A
+            // `(` after a failed match is literal text; an escaped `\<` is
+            // literal (handled above by `!isEscaped`).
+            if (scanAutolink(bytes, i, raw.end)) |al| {
+                try appendTextItem(doc, items, .{ .start = run_start, .end = i }, emit);
+                try items.append(doc.allocator(), .{ .autolink = al });
+                i = al.span.end - 1; // loop increments past the `>`
+                run_start = al.span.end;
+                // An autolink that started before a backtick run wins the
+                // first-come race with code spans: skip any span whose
+                // opening lies inside the consumed `<...>`.
+                while (si < spans.len and spans[si].span.start < al.span.end) si += 1;
+            }
+            // No match: fall through; the `<` is literal text.
         }
     }
     try appendTextItem(doc, items, .{ .start = run_start, .end = raw.end }, emit);
@@ -1817,6 +1976,25 @@ fn emitInlines(
                 });
                 try doc.appendChild(current, node);
             },
+            .autolink => |al| {
+                // Leaf node: the raw content between `<` and `>` becomes
+                // both the label (verbatim, escapes inert) and the href
+                // (with `mailto:` prepended for email autolinks). The href
+                // is arena-owned because of the prefix; the label is the
+                // verbatim content copy (docs/AUTOLINKS.md §3).
+                const content = doc.src.bytes[al.content.start..al.content.end];
+                const href = if (al.is_email)
+                    try std.fmt.allocPrint(doc.allocator(), "mailto:{s}", .{content})
+                else
+                    try doc.allocator().dupe(u8, content);
+                const node = try doc.createNode(.autolink, al.span, .{
+                    .autolink = .{
+                        .href = href,
+                        .label = try doc.allocator().dupe(u8, content),
+                    },
+                });
+                try doc.appendChild(current, node);
+            },
             .delimiter => |run| {
                 const o_start = opener_off[i];
                 const o_end = opener_off[i + 1];
@@ -2075,6 +2253,7 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
                 _ = try matchItems(doc, im.children.items);
                 try work.append(doc.allocator(), .{ .items = im.children.items, .i = 0 });
             },
+            .autolink => |al| try buf.appendSlice(doc.allocator(), doc.src.bytes[al.content.start..al.content.end]),
         }
     }
     return buf.toOwnedSlice(doc.allocator());
@@ -3146,6 +3325,144 @@ test "markdown: unmatched reference image stays literal and shares the inactive-
         // The image does not form: the inner link consumed the bracket.
         try testing.expectEqual(@as(usize, 0), countImages(&result.document));
     }
+}
+
+// --- autolinks (docs/AUTOLINKS.md §6.8) ---
+
+test "markdown: URI autolink structure, spans, and payloads" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "<http://foo.bar.baz>", .markdown, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(@as(usize, 1), p.children.items.len);
+    const a = p.children.items[0];
+    try testing.expectEqual(document.Tag.autolink, a.tag);
+    // The node span covers the whole `<...>` construct (20 bytes).
+    try testing.expectEqual(source.Span{ .start = 0, .end = 20 }, a.span);
+    // URI autolinks: href == label == the raw content, verbatim.
+    try testing.expectEqualStrings("http://foo.bar.baz", a.data.autolink.href);
+    try testing.expectEqualStrings("http://foo.bar.baz", a.data.autolink.label);
+    // Leaf inline: no children.
+    try testing.expectEqual(@as(usize, 0), a.children.items.len);
+}
+
+test "markdown: email autolinks get mailto: href" {
+    const oliver = @import("oliver.zig");
+    {
+        var result = try oliver.parse(testing.allocator, "<foo@bar.example.com>", .markdown, .{});
+        defer result.deinit();
+        const a = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.autolink, a.tag);
+        try testing.expectEqualStrings("mailto:foo@bar.example.com", a.data.autolink.href);
+        try testing.expectEqualStrings("foo@bar.example.com", a.data.autolink.label);
+    }
+    // Case is preserved in both href and label (§6.8: "case-insensitive").
+    {
+        var result = try oliver.parse(testing.allocator, "<FOO@BAR.COM>", .markdown, .{});
+        defer result.deinit();
+        const a = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqualStrings("mailto:FOO@BAR.COM", a.data.autolink.href);
+        try testing.expectEqualStrings("FOO@BAR.COM", a.data.autolink.label);
+    }
+}
+
+test "markdown: backslash escapes are inert inside autolinks" {
+    const oliver = @import("oliver.zig");
+    // §6.8: neither the URI nor the email may contain spaces, and
+    // backslash escapes do not work inside autolinks — the content is
+    // copied verbatim (unlike links, whose destination is escape-resolved).
+    var result = try oliver.parse(testing.allocator, "<https://example.com/\\[\\>", .markdown, .{});
+    defer result.deinit();
+    const a = result.document.root.children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.autolink, a.tag);
+    try testing.expectEqualStrings("https://example.com/\\[\\", a.data.autolink.href);
+    try testing.expectEqualStrings("https://example.com/\\[\\", a.data.autolink.label);
+}
+
+test "markdown: non-autolinks stay literal" {
+    const oliver = @import("oliver.zig");
+    // §6.8 negatives: empty, spaces, 1-char scheme, bare domain. The
+    // `\\+` case stays literal text but the escape *does* resolve outside
+    // autolinks (escapes only fail to work *inside* `<...>`), so its text
+    // is `<foo+@bar.example.com>`.
+    const inputs = [_][2][]const u8{
+        .{ "<>", "<>" },
+        .{ "< https://foo.bar >", "< https://foo.bar >" },
+        .{ "<m:abc>", "<m:abc>" },
+        .{ "<foo.bar.baz>", "<foo.bar.baz>" },
+        .{ "<foo\\+@bar.example.com>", "<foo+@bar.example.com>" },
+        .{ "<https://foo.bar/baz bim>", "<https://foo.bar/baz bim>" },
+    };
+    for (inputs) |input| {
+        var result = try oliver.parse(testing.allocator, input[0], .markdown, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try testing.expectEqual(@as(usize, 0), countAutolinks(&result.document));
+        // And no accidental link/image either: it stays plain text.
+        try testing.expectEqualStrings(input[1], try inlineText(&result.document, p));
+    }
+}
+
+test "markdown: autolinks nest inside emphasis and link text" {
+    const oliver = @import("oliver.zig");
+    // Emphasis around an autolink: *<http://foo.bar>*
+    {
+        var result = try oliver.parse(testing.allocator, "*<http://foo.bar>*", .markdown, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        const em = p.children.items[0];
+        try testing.expectEqual(document.Tag.emphasis, em.tag);
+        try testing.expectEqual(document.Tag.autolink, em.children.items[0].tag);
+    }
+    // §6.8 precedence: the autolink swallows what looks like link syntax
+    // (spec example 526) — `](uri)` is inside the autolink content. The
+    // `[` before it stays literal text (no link forms), so the paragraph
+    // children are [text "[", autolink].
+    {
+        var result = try oliver.parse(testing.allocator, "[<https://example.com/?search=](uri)>", .markdown, .{});
+        defer result.deinit();
+        const kids = result.document.root.children.items[0].children.items;
+        try testing.expectEqual(@as(usize, 2), kids.len);
+        try testing.expectEqual(document.Tag.text, kids[0].tag);
+        try testing.expectEqualStrings("[", kids[0].data.text);
+        const a = kids[1];
+        try testing.expectEqual(document.Tag.autolink, a.tag);
+        try testing.expectEqualStrings("https://example.com/?search=](uri)", a.data.autolink.href);
+        try testing.expectEqual(@as(usize, 0), countLinks(&result.document));
+    }
+}
+
+test "markdown: autolink in an image description flattens into alt" {
+    const oliver = @import("oliver.zig");
+    // The alt string is the description rendered as plain text, so the
+    // autolink contributes its label (`http://x`, no `<...>`).
+    var result = try oliver.parse(testing.allocator, "![<http://x>](img)", .markdown, .{});
+    defer result.deinit();
+    const img = result.document.root.children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.image, img.tag);
+    try testing.expectEqualStrings("http://x", img.data.image.alt);
+}
+
+/// Counts `.autolink` nodes in a document (structural assertions).
+fn countAutolinks(doc: *document.Document) usize {
+    var it = document.Document.Iterator.init(doc.allocator(), doc.root) catch return 0;
+    defer it.deinit();
+    var n: usize = 0;
+    while (it.next() catch null) |node| {
+        if (node.tag == .autolink) n += 1;
+    }
+    return n;
+}
+
+/// Counts `.link` nodes in a document (structural assertions).
+fn countLinks(doc: *document.Document) usize {
+    var it = document.Document.Iterator.init(doc.allocator(), doc.root) catch return 0;
+    defer it.deinit();
+    var n: usize = 0;
+    while (it.next() catch null) |node| {
+        if (node.tag == .link) n += 1;
+    }
+    return n;
 }
 
 /// Counts `.image` nodes in a document (structural assertions).
