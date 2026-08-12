@@ -2,24 +2,32 @@
 
 Tests are the contract. `zig build test` runs two suites:
 
-1. **Library module tests** — `test` blocks inside `src/*.zig` (47 tests):
+1. **Library module tests** — `test` blocks inside `src/*.zig` (56 tests):
    unit tests for `source`, `document`, `diagnostic`, `markdown`
    (including the emphasis/strong span, mod-3, escape, nesting, code-span
-   run-length/trim/opacity, and link precedence/nesting/escape/span
-   assertions), `textile`, `html` (including hand-built
+   run-length/trim/opacity, link precedence/nesting/escape/span, and
+   reference-link label-normalization/first-wins/fall-through assertions),
+   `unicode` (case-fold), `textile`, `html` (including hand-built
    emphasis/strong/code-span/link rendering), and the public API. (The
    html.zig tests also run standalone via `zig test src/html.zig`; see the
    build wiring note below.)
 2. **Fixture tests** — `tests/fixtures_test.zig` (6 tests): byte-exact
-   fixture rendering for both dialects (74 Markdown fixtures, of which 19
+   fixture rendering for both dialects (98 Markdown fixtures, of which 19
    cover emphasis/strong per docs/INLINE-PARSING.md §15, 12 cover code
-   spans per §6.6, and 22 cover inline links per §6.6), the shared-model
-   convergence proof, NUL policy, adversarial smoke (100 KB
+   spans per §6.6, 22 cover inline links per §6.6, and 24 cover reference
+   links per §4.7/§6.6 — full/collapsed/shortcut forms, Unicode label
+   folding, whitespace normalization, first-definition-wins, definitions
+   after use, definitions in headings/paragraphs, escaped labels,
+   cannot-interrupt behavior, and the failed-inline fall-through), the
+   shared-model convergence proof, NUL policy, adversarial smoke (100 KB
    delimiter/backtick/bracket runs, 10k-deep open chains, 50k alternating
    `*`/`_` runs, 50k alternating `` ` ``/`*` runs, 20k repeated
-   `[a](` / `[a](<` / `[a](u "` link bombs — completion in well under a
-   second, no crash/leak; the link bombs are what forced the §6.6
-   paren-depth and scan-length DoS guards), and diagnostics.
+   `[a](` / `[a](<` / `[a](u "` link bombs, 50k shortcut and near-miss
+   label bombs, 30k collapsed forms, 20k failed-inline fall-throughs, a
+   20k-definition storm with interleaved uses, and a 200 KB label against
+   the definitions map — completion in well under a second, no
+   crash/leak; the link bombs are what forced the §6.6 paren-depth and
+   scan-length DoS guards), and diagnostics.
 
 ## Fixture convention
 

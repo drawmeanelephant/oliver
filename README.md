@@ -24,10 +24,12 @@ Implemented so far: paragraphs, headings, backslash escapes, hard and soft
 line breaks, emphasis and strong emphasis (full CommonMark §6.2 rule set,
 including the mod-3 rule and `openers_bottom` pruning), code spans (§6.6,
 run-length matching with delimiter opacity), inline links (§6.6, bracket
-opacity, destination/title syntax, href percent-encoding), plain inline
-text, a shared document model, a deterministic HTML renderer, Markdown
-(ATX) and Textile (`hN.`) frontends, structured diagnostics, and a
-provisional CLI.
+opacity, destination/title syntax, href percent-encoding), reference links
+(§4.7 link reference definitions collected in the block pass; full,
+collapsed, and shortcut forms resolved against a Unicode case-folded
+label map), plain inline text, a shared document model, a deterministic
+HTML renderer, Markdown (ATX) and Textile (`hN.`) frontends, structured
+diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
 implemented, planned, and deferred. The emphasis/strong algorithm contract

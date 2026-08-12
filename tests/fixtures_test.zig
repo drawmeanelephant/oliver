@@ -392,6 +392,126 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/link-entity.md"),
         .expected = @embedFile("fixtures/markdown/link-entity.html"),
     },
+    .{
+        .name = "ref-full",
+        .input = @embedFile("fixtures/markdown/ref-full.md"),
+        .expected = @embedFile("fixtures/markdown/ref-full.html"),
+    },
+    .{
+        .name = "ref-collapsed",
+        .input = @embedFile("fixtures/markdown/ref-collapsed.md"),
+        .expected = @embedFile("fixtures/markdown/ref-collapsed.html"),
+    },
+    .{
+        .name = "ref-shortcut",
+        .input = @embedFile("fixtures/markdown/ref-shortcut.md"),
+        .expected = @embedFile("fixtures/markdown/ref-shortcut.html"),
+    },
+    .{
+        .name = "ref-unicode",
+        .input = @embedFile("fixtures/markdown/ref-unicode.md"),
+        .expected = @embedFile("fixtures/markdown/ref-unicode.html"),
+    },
+    .{
+        .name = "ref-case",
+        .input = @embedFile("fixtures/markdown/ref-case.md"),
+        .expected = @embedFile("fixtures/markdown/ref-case.html"),
+    },
+    .{
+        .name = "ref-whitespace",
+        .input = @embedFile("fixtures/markdown/ref-whitespace.md"),
+        .expected = @embedFile("fixtures/markdown/ref-whitespace.html"),
+    },
+    .{
+        .name = "ref-inline-content",
+        .input = @embedFile("fixtures/markdown/ref-inline-content.md"),
+        .expected = @embedFile("fixtures/markdown/ref-inline-content.html"),
+    },
+    .{
+        .name = "ref-no-nesting",
+        .input = @embedFile("fixtures/markdown/ref-no-nesting.md"),
+        .expected = @embedFile("fixtures/markdown/ref-no-nesting.html"),
+    },
+    .{
+        .name = "ref-precedence",
+        .input = @embedFile("fixtures/markdown/ref-precedence.md"),
+        .expected = @embedFile("fixtures/markdown/ref-precedence.html"),
+    },
+    .{
+        .name = "ref-inline-beats",
+        .input = @embedFile("fixtures/markdown/ref-inline-beats.md"),
+        .expected = @embedFile("fixtures/markdown/ref-inline-beats.html"),
+    },
+    .{
+        .name = "ref-failed-inline",
+        .input = @embedFile("fixtures/markdown/ref-failed-inline.md"),
+        .expected = @embedFile("fixtures/markdown/ref-failed-inline.html"),
+    },
+    .{
+        .name = "ref-chain",
+        .input = @embedFile("fixtures/markdown/ref-chain.md"),
+        .expected = @embedFile("fixtures/markdown/ref-chain.html"),
+    },
+    .{
+        .name = "ref-chain-two-defined",
+        .input = @embedFile("fixtures/markdown/ref-chain-two-defined.md"),
+        .expected = @embedFile("fixtures/markdown/ref-chain-two-defined.html"),
+    },
+    .{
+        .name = "ref-escaped-label",
+        .input = @embedFile("fixtures/markdown/ref-escaped-label.md"),
+        .expected = @embedFile("fixtures/markdown/ref-escaped-label.html"),
+    },
+    .{
+        .name = "ref-no-match-escapes",
+        .input = @embedFile("fixtures/markdown/ref-no-match-escapes.md"),
+        .expected = @embedFile("fixtures/markdown/ref-no-match-escapes.html"),
+    },
+    .{
+        .name = "ref-invalid-brackets",
+        .input = @embedFile("fixtures/markdown/ref-invalid-brackets.md"),
+        .expected = @embedFile("fixtures/markdown/ref-invalid-brackets.html"),
+    },
+    .{
+        .name = "ref-first-wins",
+        .input = @embedFile("fixtures/markdown/ref-first-wins.md"),
+        .expected = @embedFile("fixtures/markdown/ref-first-wins.html"),
+    },
+    .{
+        .name = "ref-def-after",
+        .input = @embedFile("fixtures/markdown/ref-def-after.md"),
+        .expected = @embedFile("fixtures/markdown/ref-def-after.html"),
+    },
+    .{
+        .name = "ref-multiline-title",
+        .input = @embedFile("fixtures/markdown/ref-multiline-title.md"),
+        .expected = @embedFile("fixtures/markdown/ref-multiline-title.html"),
+    },
+    .{
+        .name = "ref-title-next-line",
+        .input = @embedFile("fixtures/markdown/ref-title-next-line.md"),
+        .expected = @embedFile("fixtures/markdown/ref-title-next-line.html"),
+    },
+    .{
+        .name = "ref-no-visible",
+        .input = @embedFile("fixtures/markdown/ref-no-visible.md"),
+        .expected = @embedFile("fixtures/markdown/ref-no-visible.html"),
+    },
+    .{
+        .name = "ref-cannot-interrupt",
+        .input = @embedFile("fixtures/markdown/ref-cannot-interrupt.md"),
+        .expected = @embedFile("fixtures/markdown/ref-cannot-interrupt.html"),
+    },
+    .{
+        .name = "ref-in-heading",
+        .input = @embedFile("fixtures/markdown/ref-in-heading.md"),
+        .expected = @embedFile("fixtures/markdown/ref-in-heading.html"),
+    },
+    .{
+        .name = "ref-partial-paragraph",
+        .input = @embedFile("fixtures/markdown/ref-partial-paragraph.md"),
+        .expected = @embedFile("fixtures/markdown/ref-partial-paragraph.html"),
+    },
 };
 
 const TextileFixture = struct {
@@ -572,6 +692,43 @@ test "adversarial smoke: hostile input never crashes or leaks" {
     defer unbalanced_links.deinit(gpa);
     for (0..20_000) |_| try unbalanced_links.appendSlice(gpa, "[a](");
 
+    // Reference-link label bombs: every `]` forces a label scan, case-fold
+    // normalization, and map lookup. Shortcut forms must stay linear even
+    // when the definitions map is large and labels differ by one codepoint.
+    var shortcut_bomb = std.ArrayList(u8).empty;
+    defer shortcut_bomb.deinit(gpa);
+    for (0..50_000) |_| try shortcut_bomb.appendSlice(gpa, "[alpha] ");
+    var shortcut_near_miss = std.ArrayList(u8).empty;
+    defer shortcut_near_miss.deinit(gpa);
+    for (0..50_000) |_| try shortcut_near_miss.appendSlice(gpa, "[ALPHA!] ");
+    var collapsed_bomb = std.ArrayList(u8).empty;
+    defer collapsed_bomb.deinit(gpa);
+    for (0..30_000) |_| try collapsed_bomb.appendSlice(gpa, "[alpha][] ");
+    var failed_inline_bomb = std.ArrayList(u8).empty;
+    defer failed_inline_bomb.deinit(gpa);
+    for (0..20_000) |_| try failed_inline_bomb.appendSlice(gpa, "[alpha]( ");
+
+    // Definition storms: 20k unique definitions with one-line titles; the
+    // definitions map grows, label normalization must stay linear, and
+    // first-definition-wins is exercised. Mixed with uses so both the
+    // block collection and inline resolution see the full map.
+    var def_storm = std.ArrayList(u8).empty;
+    defer def_storm.deinit(gpa);
+    var buf: [64]u8 = undefined;
+    var i: usize = 0;
+    while (i < 20_000) : (i += 1) {
+        const def = try std.fmt.bufPrint(&buf, "[x{d}]: /url{d} \"t{d}\"\n", .{ i, i, i });
+        try def_storm.appendSlice(gpa, def);
+        const use = try std.fmt.bufPrint(&buf, "[x{d}] ", .{i});
+        try def_storm.appendSlice(gpa, use);
+    }
+    // One giant label (worst-case normalization scan) plus an unclosed `[`.
+    var giant_label = std.ArrayList(u8).empty;
+    defer giant_label.deinit(gpa);
+    try giant_label.appendSlice(gpa, "[alpha]: /url\n[");
+    for (0..200_000) |_| try giant_label.append(gpa, 'a');
+    try giant_label.appendSlice(gpa, "]");
+
     const cases = [_][]const u8{
         "",
         "\n",
@@ -604,6 +761,12 @@ test "adversarial smoke: hostile input never crashes or leaks" {
         link_mix.items,
         deep_brackets.items,
         unbalanced_links.items,
+        shortcut_bomb.items,
+        shortcut_near_miss.items,
+        collapsed_bomb.items,
+        failed_inline_bomb.items,
+        def_storm.items,
+        giant_label.items,
     };
     for (cases) |c| {
         inline for ([_]oliver.Dialect{ .markdown, .textile }) |dialect| {

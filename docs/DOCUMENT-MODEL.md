@@ -94,7 +94,10 @@ special data — nesting already expresses it. `code_span` and `link` are the
 implemented inlines whose payloads are **arena-owned**: `data.code_span` is
 the §6.1-normalized content and `data.link` is the escape-resolved
 href/title (copies, unlike `data.text` which borrows the source), because
-normalization cannot be expressed as a source slice. Image data will be
+normalization cannot be expressed as a source slice. Reference links
+(§4.7 + §6.6 reference forms) produce the same `link` node as inline
+links — the definitions map is parser-internal state, not a model
+concept, so the model is unchanged by that milestone. Image data will be
 `{ url: []const u8, title: ?[]const u8 }`, like `link`.
 
 Attributes (Textile classes/ids/styles; Markdown image/link titles) will be
