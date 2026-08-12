@@ -107,6 +107,35 @@ A dedicated fuzz target is a later milestone; the public API
 (`parse(allocator, bytes, dialect, options)`) is already the fuzz entry
 point.
 
+## CommonMark spec-conformance scorecard
+
+`tools/spec_conformance.zig` extracts every normative example from a
+CommonMark `spec.txt` — the specification's own test corpus, an explicitly
+allowed clean-room source — runs each through the library, and prints a
+per-section scorecard. This is the project's conformance oracle: every
+milestone can be measured against the whole spec, not just its own
+fixtures.
+
+```bash
+# Fetch the canonical spec (allowed source; see docs/CLEANROOM.md)
+curl -O https://spec.commonmark.org/0.31.2/spec.txt
+
+zig build spec-conformance -- spec.txt              # full scorecard
+zig build spec-conformance -- spec.txt --section "Images"   # one section
+zig build spec-conformance -- spec.txt --gate       # exit 1 on any failure
+```
+
+Normalization mirrors the spec's own test driver: `→` is the tab
+character (converted in both input and expected output), and the expected
+outputs omit the final newline block renderers emit (one trailing newline
+on the actual output is ignored). The report is deterministic and exits 0
+in report mode; `--gate` is for CI-style enforcement once a section is
+where we want it. Baseline (0.31.2, after the images/reference-links
+merge): **348/655 examples pass** — inline sections are mostly green
+(emphasis 96%, links 91%, code spans 90%, ATX headings 88%), while the
+block-level sections are the remaining work (block quotes 0%, HTML blocks
+0%, lists ~7%).
+
 ## Running
 
 ```bash

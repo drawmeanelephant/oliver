@@ -43,7 +43,10 @@ Code spans, links, and images ride the same scan → match → emit seam.
 
 ## Building and testing
 
-Requires Zig 0.16.0.
+Requires Zig 0.16.0. `zig build test` runs the unit and fixture suites;
+`zig build spec-conformance -- spec.txt` scores Oliver against every
+normative example in a CommonMark spec (see docs/TESTS.md for the
+current 348/655 baseline and how to fetch the spec).
 
 ```bash
 zig build test    # run all tests (73 tests)
