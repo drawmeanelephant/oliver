@@ -290,6 +290,52 @@ and degrades malformed input to null).
   `[text][label]` and `[text][]` forms) or images (§6.7) or Textile inline
   mapping onto the same seam.
 
+## Addendum: inline images (session 5)
+
+- **Implemented §6.7 (inline images)** on the same seam, per the design
+  contract docs/IMAGES-PARSING.md (written from the spec and committed
+  before any image code). `![` (unescaped `!` immediately followed by an
+  unescaped `[`) is its own opener on the link discovery stack; the
+  description is matched as a fresh inline scope and flattened to an
+  arena-owned `alt` string ("only the plain string content"), so `.image`
+  is a leaf inline with `data.image = { src, alt, title }`. `<img
+  src="..." alt="..." title="..." />` renders as a void element under
+  `void_trailing_slash`; `src` shares the href percent-encoding policy,
+  `alt` is always emitted (possibly empty), `title` only when present,
+  attribute order fixed `src`, `alt`, `title`.
+- **The appendix's active/inactive bracket semantics**, faithfully: a
+  formed *link* inactivates every earlier `[` opener, never a `![`, and an
+  inactive `[` still intercepts a later `]` (a dead `[` above a live `![`
+  must not let that `]` reach the image). Oliver implements the marker
+  with a monotone O(1) out-position check instead of re-marking, so the
+  adversarial dead-bracket shape stays linear. This fixes the documented
+  divergence: `![foo](bar)` is now one `.image` node, not `!` + link.
+- **Model/renderer:** `.image` joined the leaf inlines; invariants 4/5/8
+  in docs/DOCUMENT-MODEL.md updated; the convergence table gained
+  Markdown `![alt](url)` ↔ future Textile `!url(alt)!`. `Data.attrs`
+  remains the reserved extension point for future image metadata
+  (classes/ids/width-height/custom attributes) — no extension syntax was
+  invented.
+- 17 new Markdown fixtures (91 Markdown total): spec examples 572, 574,
+  575, 578–581, and the literal forms of 592–593 verified byte-for-byte
+  through the CLI before being locked, plus nested images, image-in-link
+  (spec example 540), alt flattening (emphasis/code), the chosen
+  break-to-`\n` alt behavior, image in heading/emphasis, code-span
+  precedence, unclosed → literal, and the inactive-bracket fixture. 6 new
+  unit tests (image structure/spans/payloads, alt flattening, nesting,
+  escape boundaries, precedence, escape-resolved payloads) and 1
+  renderer-only image test; adversarial smoke extended with `![a](` bombs,
+  deep `![` openers, an image workload mix, and the dead-bracket marking
+  shape. Tests: 59/59.
+- **Chosen behaviors recorded** (docs/IMAGES-PARSING.md §8 and the matrix
+  ambiguities 12–14): soft/hard breaks flatten to `\n`; code spans
+  flatten to their §6.1-normalized content; empty description → `alt=""`;
+  inactive brackets are kept and checked (not cleared); and the repo's
+  §6.7 citation for images (the numbered 0.31.2 HTML says §6.4) is kept
+  for continuity.
+- Next slice: reference links (§4.7, which also enables reference-style
+  images) or Textile inline mapping onto the same seam.
+
 ## Architectural concerns discovered
 
 1. **Zig 0.16's I/O redesign.** `std.io.AnyWriter` is gone; writers are

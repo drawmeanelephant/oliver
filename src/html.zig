@@ -11,6 +11,11 @@
 //!   alphanumerics and `-_.~!*'(),;:&=+$#@/%?`) and then HTML-escaped;
 //!   `title` is HTML-escaped without percent-encoding. Attributes are
 //!   emitted in the fixed order `href` then `title`, in double quotes.
+//! - Images render as a void element `<img src="..." alt="..."
+//!   title="..." />` under `void_trailing_slash`. `src` uses the same
+//!   percent-encoding + HTML-escaping policy as `href`; `alt` is always
+//!   emitted (possibly empty) and HTML-escaped like text; `title` only
+//!   when present. Attribute order is fixed: `src`, `alt`, `title`.
 //! - Headings use the level 1..6 (clamped for hand-built documents).
 //! - Code spans render `<code>...</code>` with the same escaping as text.
 //! - Lists/code blocks/tables: not yet implemented (no tags exist).
@@ -122,6 +127,23 @@ fn writeOpen(
             try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = node });
         },
+        .image => {
+            // Void element: the whole tag is written on enter and no exit
+            // frame is pushed (leaf tag, no children). `src` follows the
+            // href policy; `alt` is always emitted (possibly empty) and
+            // HTML-escaped like text; `title` only when present.
+            try writer.writeAll("<img src=\"");
+            try writeEscapedHref(writer, node.data.image.src);
+            try writer.writeAll("\" alt=\"");
+            try writeEscaped(writer, node.data.image.alt);
+            try writer.writeByte('\"');
+            if (node.data.image.title) |title| {
+                try writer.writeAll(" title=\"");
+                try writeEscaped(writer, title);
+                try writer.writeByte('\"');
+            }
+            try writer.writeAll(if (options.void_trailing_slash) " />" else ">");
+        },
         .text => try writeEscaped(writer, node.data.text),
         .soft_break => try writer.writeAll("\n"),
         .hard_break => {
@@ -147,7 +169,7 @@ fn writeClose(writer: anytype, node: *const document.Node, options: RenderOption
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .text, .soft_break, .hard_break => unreachable,
+        .text, .image, .soft_break, .hard_break => unreachable,
     }
 }
 
@@ -408,6 +430,69 @@ test "html: link renders href and title with escaping policy" {
         var out = try renderDoc(&doc);
         defer out.deinit(testing.allocator);
         try testing.expectEqualStrings("<p><a href=\"/u\">x</a></p>\n", out.items);
+    }
+}
+
+test "html: image renders as a void element with fixed attribute order" {
+    // Renderer-only: hand-built image nodes — the renderer consumes the
+    // model, never the dialect (docs/IMAGES-PARSING.md §4).
+    {
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        try doc.appendChild(p, try doc.createNode(.image, .{ .start = 0, .end = 0 }, .{
+            .image = .{ .src = "/uri", .alt = "foo", .title = "the title" },
+        }));
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p><img src=\"/uri\" alt=\"foo\" title=\"the title\" /></p>\n", out.items);
+    }
+    {
+        // Empty alt is always emitted; no title attribute when absent.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        try doc.appendChild(p, try doc.createNode(.image, .{ .start = 0, .end = 0 }, .{
+            .image = .{ .src = "/u", .alt = "", .title = null },
+        }));
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p><img src=\"/u\" alt=\"\" /></p>\n", out.items);
+    }
+    {
+        // src percent-encoding follows the href policy; alt and title are
+        // HTML-escaped like text.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        try doc.appendChild(p, try doc.createNode(.image, .{ .start = 0, .end = 0 }, .{
+            .image = .{ .src = "/my url\"&x", .alt = "a <b> & \"c\"", .title = "t&t" },
+        }));
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings(
+            "<p><img src=\"/my%20url%22&amp;x\" alt=\"a &lt;b&gt; &amp; &quot;c&quot;\" title=\"t&amp;t\" /></p>\n",
+            out.items,
+        );
+    }
+    {
+        // void_trailing_slash = false gives the HTML5-style <img>.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        try doc.appendChild(p, try doc.createNode(.image, .{ .start = 0, .end = 0 }, .{
+            .image = .{ .src = "/u", .alt = "a", .title = null },
+        }));
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try render(testing.allocator, &aw.writer, &doc, .{ .void_trailing_slash = false });
+        var out = aw.toArrayList();
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p><img src=\"/u\" alt=\"a\"></p>\n", out.items);
     }
 }
 
