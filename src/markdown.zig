@@ -1097,8 +1097,8 @@ const max_link_scan: usize = 2048;
 /// never inactive. Reference precedence (§6.6): an inline link (`(...)`),
 /// then full (`[text][label]`), then collapsed (`[text][]`), then shortcut
 /// (`[text]`); a failed inline `(...)` does not block the shortcut form
-/// (spec example 561); reference forms apply only to `[` openers —
-/// reference-style images are deferred (docs/IMAGES-PARSING.md). Runs
+/// (spec example 561). Reference forms apply to both `[` and `![` openers
+/// (reference-style images per docs/REFERENCE-IMAGES.md). Runs
 /// before emphasis matching: link/image items are opaque to the delimiter
 /// stack, and their children are matched separately (link text as a fresh
 /// inline scope; image descriptions flattened to the alt string at emit
@@ -1137,8 +1137,11 @@ fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineI
             const is_image = out.items[o].bracket.ch == '!';
             const open_start = out.items[o].bracket.span.start;
 
-            // The link text span: between the opener and this `]`.
-            const text = source.Span{ .start = open_start + 1, .end = close_end - 1 };
+            // The bracket text span: between the opener and this `]`. A `[`
+            // opener is one byte; a `![` opener spans two, so the text
+            // starts past the bang. Used for collapsed/shortcut labels and
+            // as the link text for image alt-flattening inputs.
+            const text = source.Span{ .start = open_start + (if (is_image) @as(u32, 2) else 1), .end = close_end - 1 };
 
             // 1. Inline link/image: `(` immediately after the `]`.
             if (close_end < para_end and bytes[close_end] == '(') {
@@ -1199,12 +1202,12 @@ fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineI
                 // reference, with `(not a link)` as literal text).
             }
 
-            // 2. Reference forms (links only; reference-style images are
-            // deferred, see docs/IMAGES-PARSING.md): a `[` immediately after
-            // the `]` is a full or collapsed reference; nothing else is a
-            // shortcut.
-            if (!is_image and close_end < para_end and bytes[close_end] == '[') {
-                // Collapsed: `[]` — the label is the link text itself.
+            // 2. Reference forms: a `[` immediately after the `]` is a full
+            // or collapsed reference; nothing else is a shortcut. Applies to
+            // both links and images (spec appendix: the procedure is
+            // uniform; reference-style images per docs/REFERENCE-IMAGES.md).
+            if (close_end < para_end and bytes[close_end] == '[') {
+                // Collapsed: `[]` — the label is the bracket text itself.
                 if (close_end + 1 < para_end and bytes[close_end + 1] == ']') {
                     if (try tryResolveReference(doc, defs, text)) |def| {
                         var children = std.ArrayList(InlineItem).empty;
@@ -1218,15 +1221,26 @@ fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineI
                         }
 
                         out.shrinkRetainingCapacity(o);
-                        try out.append(doc.allocator(), .{
-                            .link = .{
-                                .span = .{ .start = open_start, .end = close_end + 2 },
-                                .children = children,
-                                .dest = def.dest,
-                                .title = def.title,
-                            },
-                        });
-                        max_link_opener_out = @max(max_link_opener_out, o);
+                        if (is_image) {
+                            try out.append(doc.allocator(), .{
+                                .image = .{
+                                    .span = .{ .start = open_start, .end = close_end + 2 },
+                                    .children = children,
+                                    .dest = def.dest,
+                                    .title = def.title,
+                                },
+                            });
+                        } else {
+                            try out.append(doc.allocator(), .{
+                                .link = .{
+                                    .span = .{ .start = open_start, .end = close_end + 2 },
+                                    .children = children,
+                                    .dest = def.dest,
+                                    .title = def.title,
+                                },
+                            });
+                            max_link_opener_out = @max(max_link_opener_out, o);
+                        }
                         while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
                         i = j - 1;
                         continue;
@@ -1252,15 +1266,26 @@ fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineI
                         }
 
                         out.shrinkRetainingCapacity(o);
-                        try out.append(doc.allocator(), .{
-                            .link = .{
-                                .span = .{ .start = open_start, .end = @intCast(lab.after) },
-                                .children = children,
-                                .dest = def.dest,
-                                .title = def.title,
-                            },
-                        });
-                        max_link_opener_out = @max(max_link_opener_out, o);
+                        if (is_image) {
+                            try out.append(doc.allocator(), .{
+                                .image = .{
+                                    .span = .{ .start = open_start, .end = @intCast(lab.after) },
+                                    .children = children,
+                                    .dest = def.dest,
+                                    .title = def.title,
+                                },
+                            });
+                        } else {
+                            try out.append(doc.allocator(), .{
+                                .link = .{
+                                    .span = .{ .start = open_start, .end = @intCast(lab.after) },
+                                    .children = children,
+                                    .dest = def.dest,
+                                    .title = def.title,
+                                },
+                            });
+                            max_link_opener_out = @max(max_link_opener_out, o);
+                        }
                         while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
                         i = j - 1;
                         continue;
@@ -1277,22 +1302,34 @@ fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineI
             // 3. Shortcut reference: `[text]` not followed by `[]` or a
             // link label (§6.6) — i.e. not followed by `[`. A `(` after a
             // failed inline link does not block the shortcut (§6.6 example
-            // `[foo](not a link)` with `[foo]: /url1`).
-            if (!is_image and (close_end >= para_end or bytes[close_end] != '[')) {
+            // `[foo](not a link)` with `[foo]: /url1`). Applies to links
+            // and images alike.
+            if (close_end >= para_end or bytes[close_end] != '[') {
                 if (try tryResolveReference(doc, defs, text)) |def| {
                     var children = std.ArrayList(InlineItem).empty;
                     try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
 
                     out.shrinkRetainingCapacity(o);
-                    try out.append(doc.allocator(), .{
-                        .link = .{
-                            .span = .{ .start = open_start, .end = close_end },
-                            .children = children,
-                            .dest = def.dest,
-                            .title = def.title,
-                        },
-                    });
-                    max_link_opener_out = @max(max_link_opener_out, o);
+                    if (is_image) {
+                        try out.append(doc.allocator(), .{
+                            .image = .{
+                                .span = .{ .start = open_start, .end = close_end },
+                                .children = children,
+                                .dest = def.dest,
+                                .title = def.title,
+                            },
+                        });
+                    } else {
+                        try out.append(doc.allocator(), .{
+                            .link = .{
+                                .span = .{ .start = open_start, .end = close_end },
+                                .children = children,
+                                .dest = def.dest,
+                                .title = def.title,
+                            },
+                        });
+                        max_link_opener_out = @max(max_link_opener_out, o);
+                    }
                     while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
                     continue;
                 }
@@ -2986,6 +3023,129 @@ test "markdown: image destination and title resolve backslash escapes" {
     try testing.expectEqualStrings("(foo)", img.data.image.src);
     try testing.expectEqualStrings("ti*tle", img.data.image.title.?);
     try testing.expectEqual(@as(usize, 0), img.children.items.len);
+}
+
+test "markdown: reference-style images resolve from definitions (full, collapsed, shortcut)" {
+    const oliver = @import("oliver.zig");
+
+    // Full: ![foo][bar] resolves through the definition table.
+    {
+        var result = try oliver.parse(testing.allocator, "![foo][bar]\n\n[bar]: /url\n", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("/url", img.data.image.src);
+        try testing.expectEqualStrings("foo", img.data.image.alt);
+        try testing.expectEqual(@as(?[]const u8, null), img.data.image.title);
+        try testing.expectEqual(@as(usize, 1), countImages(&result.document));
+    }
+
+    // Collapsed: ![foo][] uses the opener's own text as the label.
+    {
+        var result = try oliver.parse(testing.allocator, "![foo][]\n\n[foo]: /url \"title\"\n", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("/url", img.data.image.src);
+        try testing.expectEqualStrings("foo", img.data.image.alt);
+        try testing.expectEqualStrings("title", img.data.image.title.?);
+    }
+
+    // Shortcut: ![foo] with no trailing label.
+    {
+        var result = try oliver.parse(testing.allocator, "![foo]\n\n[foo]: /url\n", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("/url", img.data.image.src);
+        try testing.expectEqualStrings("foo", img.data.image.alt);
+    }
+}
+
+test "markdown: reference-style image descriptions flatten to alt" {
+    const oliver = @import("oliver.zig");
+
+    // Emphasis drops its markers; the label matches the *raw* bracket
+    // text (matching is on normalized strings, not parsed content).
+    {
+        var result = try oliver.parse(testing.allocator, "![*foo* bar][]\n\n[*foo* bar]: /url\n", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("/url", img.data.image.src);
+        try testing.expectEqualStrings("foo bar", img.data.image.alt);
+    }
+
+    // Case-insensitive labels: ![Foo][] matches [foo]:
+    {
+        var result = try oliver.parse(testing.allocator, "![Foo][]\n\n[foo]: /url \"title\"\n", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("Foo", img.data.image.alt); // alt keeps the source text
+    }
+}
+
+test "markdown: reference precedence and image inline beats reference" {
+    const oliver = @import("oliver.zig");
+
+    // Inline destination wins over the reference form (appendix order).
+    {
+        var result = try oliver.parse(testing.allocator, "![foo](inline \"t\")\n\n[foo]: /url\n", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("inline", img.data.image.src);
+        try testing.expectEqualStrings("t", img.data.image.title.?);
+    }
+
+    // A failed full reference is not retried as a shortcut: with both
+    // [bar] and [foo] defined, ![foo][bar] is the full reference to /url;
+    // the opener's own text ([foo]) is never tried.
+    {
+        var result = try oliver.parse(testing.allocator, "![foo][bar]\n\n[bar]: /url\n[foo]: /url2\n", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("/url", img.data.image.src);
+    }
+}
+
+test "markdown: reference-style image inside reference-link text" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "[![foo][bar]][baz]\n\n[bar]: /img\n[baz]: /page\n", .markdown, .{});
+    defer result.deinit();
+    const lnk = result.document.root.children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.link, lnk.tag);
+    try testing.expectEqualStrings("/page", lnk.data.link.href);
+    const img = lnk.children.items[0];
+    try testing.expectEqual(document.Tag.image, img.tag);
+    try testing.expectEqualStrings("/img", img.data.image.src);
+    try testing.expectEqualStrings("foo", img.data.image.alt);
+}
+
+test "markdown: unmatched reference image stays literal and shares the inactive-bracket rule" {
+    const oliver = @import("oliver.zig");
+
+    // No definition: ![foo][bar] stays literal text.
+    {
+        var result = try oliver.parse(testing.allocator, "![foo][bar]\n", .markdown, .{});
+        defer result.deinit();
+        try testing.expectEqual(@as(usize, 0), countImages(&result.document));
+        const para = result.document.root.children.items[0];
+        try testing.expectEqualStrings("![foo][bar]", try inlineText(&result.document, para));
+    }
+
+    // A formed reference *link* inactivates earlier `[` openers, never a
+    // `![`; a dead `[` still intercepts a later `]` (appendix rule).
+    // `![a [b][c]]` — the inner [b][c] is a reference link, so `![a <link>`;
+    // the image opener below the dead `[` cannot use that `]`.
+    {
+        var result = try oliver.parse(testing.allocator, "![a [b][c]]\n\n[c]: /url\n", .markdown, .{});
+        defer result.deinit();
+        // The image does not form: the inner link consumed the bracket.
+        try testing.expectEqual(@as(usize, 0), countImages(&result.document));
+    }
 }
 
 /// Counts `.image` nodes in a document (structural assertions).
