@@ -1,12 +1,16 @@
 # Oliver Inline Parsing: Emphasis and Strong Emphasis
 
 **Status: implemented (Markdown), with code spans (§6.6), inline links
-(§6.6), and reference links (§4.7 + §6.6 reference forms) landed on the
-same scan → match → emit seam.** This document was
-written *before* any delimiter code existed, as the design contract; the
+(§6.6), inline images (§6.7), and reference links (§4.7 + §6.6
+reference forms) landed on the same scan → match → emit seam.** This
+document waswritten *before* any delimiter code existed, as the design contract; the
 implementation in `src/markdown.zig` (scan → match → emit,
 `openers_bottom` pruning) follows it, and the §15 fixture corpus plus the
-span unit tests lock the behavior.
+span unit tests lock the behavior. Images share the link discovery pass
+(`![` is its own bracket-stack opener with the appendix's active/inactive
+semantics) and flatten their description to an arena-owned `alt` string;
+their algorithm is the separate contract docs/IMAGES-PARSING.md (also
+written before its code).
 Code-span discovery (§6.6, the first delimiter-opacity rule) runs ahead
 of delimiter scanning: backtick strings are resolved and marked opaque
 before `*`/`_` runs are classified. Inline-link discovery is the second

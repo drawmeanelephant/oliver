@@ -290,7 +290,7 @@ and degrades malformed input to null).
   `[text][label]` and `[text][]` forms) or images (§6.7) or Textile inline
   mapping onto the same seam.
 
-## Addendum: reference links (session 5)
+## Addendum: reference links (session 6)
 
 - **Two-phase restructure.** Link reference definitions (§4.7) must be
   known before inline parsing (a use may precede its definition), so
@@ -302,7 +302,8 @@ and degrades malformed input to null).
   follow on the same line (spaces/tabs separated) or on the *next* line;
   nothing else may follow a title on its line — a failed title attempt
   ends the definition at the destination's line (spec example
-  `[foo]: /url\n"title" ok` is definition + paragraph). A paragraph whose
+  `[foo]: /url
+"title" ok` is definition + paragraph). A paragraph whose
   content is entirely definitions renders nothing; a definition inside a
   paragraph of real content is consumed without affecting the rest.
 - **Label matching (§6.3):** labels are normalized by Unicode full
@@ -333,9 +334,57 @@ and degrades malformed input to null).
   fall-throughs, a 20k-definition storm with interleaved uses, and a
   200 KB label against the definitions map — all linear, suite still
   runs in well under a second.
-- 98 Markdown fixtures (24 new), 56 library tests (9 new: unicode
-  case-fold, label normalization, first-wins, fall-through).
-  Tests: 62/62; `zig fmt --check` clean; build clean.
+- 115 Markdown fixtures (24 new on top of the images milestone's 91),
+  62 library tests, 68/68 total; `zig fmt --check` clean; build clean.
+
+## Addendum: inline images (session 5)
+
+- **Implemented §6.7 (inline images)** on the same seam, per the design
+  contract docs/IMAGES-PARSING.md (written from the spec and committed
+  before any image code). `![` (unescaped `!` immediately followed by an
+  unescaped `[`) is its own opener on the link discovery stack; the
+  description is matched as a fresh inline scope and flattened to an
+  arena-owned `alt` string ("only the plain string content"), so `.image`
+  is a leaf inline with `data.image = { src, alt, title }`. `<img
+  src="..." alt="..." title="..." />` renders as a void element under
+  `void_trailing_slash`; `src` shares the href percent-encoding policy,
+  `alt` is always emitted (possibly empty), `title` only when present,
+  attribute order fixed `src`, `alt`, `title`.
+- **The appendix's active/inactive bracket semantics**, faithfully: a
+  formed *link* inactivates every earlier `[` opener, never a `![`, and an
+  inactive `[` still intercepts a later `]` (a dead `[` above a live `![`
+  must not let that `]` reach the image). Oliver implements the marker
+  with a monotone O(1) out-position check instead of re-marking, so the
+  adversarial dead-bracket shape stays linear. This fixes the documented
+  divergence: `![foo](bar)` is now one `.image` node, not `!` + link.
+- **Model/renderer:** `.image` joined the leaf inlines; invariants 4/5/8
+  in docs/DOCUMENT-MODEL.md updated; the convergence table gained
+  Markdown `![alt](url)` ↔ future Textile `!url(alt)!`. `Data.attrs`
+  remains the reserved extension point for future image metadata
+  (classes/ids/width-height/custom attributes) — no extension syntax was
+  invented.
+- 17 new Markdown fixtures (91 Markdown total): spec examples 572, 574,
+  575, 578–581, and the literal forms of 592–593 verified byte-for-byte
+  through the CLI before being locked, plus nested images, image-in-link
+  (spec example 540), alt flattening (emphasis/code), the chosen
+  break-to-`
+` alt behavior, image in heading/emphasis, code-span
+  precedence, unclosed → literal, and the inactive-bracket fixture. 6 new
+  unit tests (image structure/spans/payloads, alt flattening, nesting,
+  escape boundaries, precedence, escape-resolved payloads) and 1
+  renderer-only image test; adversarial smoke extended with `![a](` bombs,
+  deep `![` openers, an image workload mix, and the dead-bracket marking
+  shape. Tests: 59/59.
+- **Chosen behaviors recorded** (docs/IMAGES-PARSING.md §8 and the matrix
+  ambiguities 12–14): soft/hard breaks flatten to `
+`; code spans
+  flatten to their §6.1-normalized content; empty description → `alt=""`;
+  inactive brackets are kept and checked (not cleared); and the repo's
+  §6.7 citation for images (the numbered 0.31.2 HTML says §6.4) is kept
+  for continuity.
+- Next slice: reference links (§4.7, which also enables reference-style
+  images) or Textile inline mapping onto the same seam.
+
 
 ## Architectural concerns discovered
 

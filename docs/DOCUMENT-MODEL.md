@@ -23,10 +23,11 @@ Node {
 ```
 
 `Tag` in the slice: `document`, `paragraph`, `heading`, `text`,
-`emphasis`, `strong`, `code_span`, `link`, `soft_break`, `hard_break`.
-Blocks and inlines are distinguished by `Tag.isBlock` / `Tag.isInline`.
-`Data` carries `heading` level (1..6), the borrowed `text` slice, the
-arena-owned `code_span` content, or the arena-owned `link` href/title.
+`emphasis`, `strong`, `code_span`, `link`, `image`, `soft_break`,
+`hard_break`. Blocks and inlines are distinguished by `Tag.isBlock` /
+`Tag.isInline`. `Data` carries `heading` level (1..6), the borrowed
+`text` slice, the arena-owned `code_span` content, the arena-owned `link`
+href/title, or the arena-owned `image` src/alt/title.
 
 ## Design decisions
 
@@ -65,11 +66,12 @@ arena-owned `code_span` content, or the arena-owned `link` href/title.
 2. `.paragraph` children are inlines.
 3. `.heading` children are inlines.
 4. `emphasis`/`strong`/`link` contain inline children. The leaf inline
-   tags (`text`, `code_span`, `soft_break`, `hard_break`) never have
-   children.
+   tags (`text`, `code_span`, `image`, `soft_break`, `hard_break`) never
+   have children.
 5. `Data.text` always slices the document's source bytes; the other text
-   payloads (`code_span`, `link.href`, `link.title`) are arena-owned
-   copies — normalization (code-span content, escape resolution) cannot be
+   payloads (`code_span`, `link.href`, `link.title`, `image.src`,
+   `image.alt`, `image.title`) are arena-owned copies — normalization
+   (code-span content, escape resolution, alt flattening) cannot be
    expressed as a source slice.
 6. `span.start <= span.end`; all spans lie within the source.
 7. Consecutive `text` children of one parent never have contiguous spans:
@@ -79,7 +81,11 @@ arena-owned `code_span` content, or the arena-owned `link` href/title.
    docs/INLINE-PARSING.md §15; a consumed backslash or delimiter byte can
    still leave a gap, which is why `a\*b` stays two nodes).
 8. `link` children never contain another `link` (links cannot contain
-   links, §6.6); each link's children are a self-contained inline scope.
+   links, §6.6), but may contain `image` nodes (an image description may
+   contain links and images, §6.7); each link's children are a
+   self-contained inline scope. `image` is a leaf whose `alt` is the
+   description's inlines flattened to a string at parse time
+   (docs/IMAGES-PARSING.md §3) — the image node carries no subtree.
 
 ## Growth path (planned tags, not yet implemented)
 
@@ -88,17 +94,18 @@ field, e.g. `list: { ordered: bool, start: ?u32 }`), `code_block` (fenced /
 indented, info string), `thematic_break`, `table` (+ `table_row`, `table_cell`
 with header flag), `raw_html` (under policy).
 
-Inlines: `image`, `autolink`, `raw_inline` (under policy).
-`emphasis`/`strong`/`link` are implemented; `emphasis`/`strong` carry no
-special data — nesting already expresses it. `code_span` and `link` are the
-implemented inlines whose payloads are **arena-owned**: `data.code_span` is
-the §6.1-normalized content and `data.link` is the escape-resolved
-href/title (copies, unlike `data.text` which borrows the source), because
-normalization cannot be expressed as a source slice. Reference links
-(§4.7 + §6.6 reference forms) produce the same `link` node as inline
-links — the definitions map is parser-internal state, not a model
-concept, so the model is unchanged by that milestone. Image data will be
-`{ url: []const u8, title: ?[]const u8 }`, like `link`.
+Inlines: `autolink`, `raw_inline` (under policy).
+`emphasis`/`strong`/`link`/`image` are implemented; `emphasis`/`strong`
+carry no special data — nesting already expresses it. `code_span`,
+`link`, and `image` are the implemented inlines whose payloads are
+**arena-owned**: `data.code_span` is the §6.1-normalized content,
+`data.link` is the escape-resolved href/title, and `data.image` is the
+escape-resolved src/title plus the flattened plain-string alt (copies,
+unlike `data.text` which borrows the source), because normalization
+cannot be expressed as a source slice. Reference links (§4.7 + §6.6
+reference forms) produce the same `link` node as inline links — the
+definitions map is parser-internal state, not a model concept, so the
+model is unchanged by that milestone.
 
 Attributes (Textile classes/ids/styles; Markdown image/link titles) will be
 represented as an ordered attribute list on the node (`Data.attrs`), since
@@ -114,6 +121,7 @@ emit them in a fixed documented order.
 | `emphasis` / `strong` | (Textile inline markers: later) | `.emphasis` / `.strong` |
 | `` `code span` `` | (Textile `@code@`: later) | `.code_span` (arena-owned content) |
 | `[x](url "title")` | (Textile `"text":url`: later) | `.link` (arena-owned href/title) |
+| `![alt](url "title")` | (Textile `!url(alt)!`: later) | `.image` (arena-owned src/alt/title) |
 | plain text | plain text | `.text` |
 | newline in paragraph | newline in paragraph | `.soft_break` (MD) / `.hard_break` (Textile) |
 | `*x*` / `**x**` | `_x_` / `*x*` (Textile, planned) | `.emphasis` / `.strong` |

@@ -512,6 +512,92 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/ref-partial-paragraph.md"),
         .expected = @embedFile("fixtures/markdown/ref-partial-paragraph.html"),
     },
+    // --- inline images (docs/IMAGES-PARSING.md §7) ---
+    .{
+        .name = "image-simple",
+        .input = @embedFile("fixtures/markdown/image-simple.md"),
+        .expected = @embedFile("fixtures/markdown/image-simple.html"),
+    },
+    .{
+        .name = "image-no-title",
+        .input = @embedFile("fixtures/markdown/image-no-title.md"),
+        .expected = @embedFile("fixtures/markdown/image-no-title.html"),
+    },
+    .{
+        .name = "image-title",
+        .input = @embedFile("fixtures/markdown/image-title.md"),
+        .expected = @embedFile("fixtures/markdown/image-title.html"),
+    },
+    .{
+        .name = "image-angle-dest",
+        .input = @embedFile("fixtures/markdown/image-angle-dest.md"),
+        .expected = @embedFile("fixtures/markdown/image-angle-dest.html"),
+    },
+    .{
+        .name = "image-empty-alt",
+        .input = @embedFile("fixtures/markdown/image-empty-alt.md"),
+        .expected = @embedFile("fixtures/markdown/image-empty-alt.html"),
+    },
+    .{
+        .name = "image-escaped",
+        .input = @embedFile("fixtures/markdown/image-escaped.md"),
+        .expected = @embedFile("fixtures/markdown/image-escaped.html"),
+    },
+    .{
+        .name = "image-nested",
+        .input = @embedFile("fixtures/markdown/image-nested.md"),
+        .expected = @embedFile("fixtures/markdown/image-nested.html"),
+    },
+    .{
+        .name = "image-link-inside",
+        .input = @embedFile("fixtures/markdown/image-link-inside.md"),
+        .expected = @embedFile("fixtures/markdown/image-link-inside.html"),
+    },
+    .{
+        .name = "image-in-link",
+        .input = @embedFile("fixtures/markdown/image-in-link.md"),
+        .expected = @embedFile("fixtures/markdown/image-in-link.html"),
+    },
+    .{
+        .name = "image-alt-flatten",
+        .input = @embedFile("fixtures/markdown/image-alt-flatten.md"),
+        .expected = @embedFile("fixtures/markdown/image-alt-flatten.html"),
+    },
+    .{
+        .name = "image-alt-code",
+        .input = @embedFile("fixtures/markdown/image-alt-code.md"),
+        .expected = @embedFile("fixtures/markdown/image-alt-code.html"),
+    },
+    .{
+        .name = "image-alt-breaks",
+        .input = @embedFile("fixtures/markdown/image-alt-breaks.md"),
+        .expected = @embedFile("fixtures/markdown/image-alt-breaks.html"),
+    },
+    .{
+        .name = "image-inactive-bracket",
+        .input = @embedFile("fixtures/markdown/image-inactive-bracket.md"),
+        .expected = @embedFile("fixtures/markdown/image-inactive-bracket.html"),
+    },
+    .{
+        .name = "image-heading",
+        .input = @embedFile("fixtures/markdown/image-heading.md"),
+        .expected = @embedFile("fixtures/markdown/image-heading.html"),
+    },
+    .{
+        .name = "image-emphasis",
+        .input = @embedFile("fixtures/markdown/image-emphasis.md"),
+        .expected = @embedFile("fixtures/markdown/image-emphasis.html"),
+    },
+    .{
+        .name = "image-code-span",
+        .input = @embedFile("fixtures/markdown/image-code-span.md"),
+        .expected = @embedFile("fixtures/markdown/image-code-span.html"),
+    },
+    .{
+        .name = "image-unclosed",
+        .input = @embedFile("fixtures/markdown/image-unclosed.md"),
+        .expected = @embedFile("fixtures/markdown/image-unclosed.html"),
+    },
 };
 
 const TextileFixture = struct {
@@ -728,6 +814,27 @@ test "adversarial smoke: hostile input never crashes or leaks" {
     try giant_label.appendSlice(gpa, "[alpha]: /url\n[");
     for (0..200_000) |_| try giant_label.append(gpa, 'a');
     try giant_label.appendSlice(gpa, "]");
+    // Images share the link DoS guards: `![a](` repeated must not make
+    // every `]` rescan the whole paragraph (same guard as the `[a](` bomb).
+    var unbalanced_images = std.ArrayList(u8).empty;
+    defer unbalanced_images.deinit(gpa);
+    for (0..20_000) |_| try unbalanced_images.appendSlice(gpa, "![a](");
+
+    // Deep `![` openers on the bracket stack (never closed: literal), and
+    // a mixed image/link/delimiter/backtick workload.
+    var deep_images = std.ArrayList(u8).empty;
+    defer deep_images.deinit(gpa);
+    for (0..10_000) |_| try deep_images.appendSlice(gpa, "![");
+    var image_mix = std.ArrayList(u8).empty;
+    defer image_mix.deinit(gpa);
+    for (0..20_000) |_| try image_mix.appendSlice(gpa, "![a](u) *b* `c` ");
+
+    // The inactive-bracket marking shape: every `]` forms a link whose
+    // opener leaves a dead `[` below on the stack (the monotone check
+    // keeps this linear; naive re-marking would be quadratic).
+    var nested_link_marks = std.ArrayList(u8).empty;
+    defer nested_link_marks.deinit(gpa);
+    for (0..5_000) |_| try nested_link_marks.appendSlice(gpa, "[[a](u) ");
 
     const cases = [_][]const u8{
         "",
@@ -767,6 +874,10 @@ test "adversarial smoke: hostile input never crashes or leaks" {
         failed_inline_bomb.items,
         def_storm.items,
         giant_label.items,
+        unbalanced_images.items,
+        deep_images.items,
+        image_mix.items,
+        nested_link_marks.items,
     };
     for (cases) |c| {
         inline for ([_]oliver.Dialect{ .markdown, .textile }) |dialect| {
