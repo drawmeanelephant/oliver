@@ -2,8 +2,8 @@
 
 Tests are the contract. `zig build test` runs two suites:
 
-1. **Library module tests** — `test` blocks inside `src/*.zig`: unit
-   tests for `source`, `document`, `diagnostic`, `markdown` (including
+1. **Library module tests** — `test` blocks inside `src/*.zig` (74 tests):
+   unit tests for `source`, `document`, `diagnostic`, `markdown` (including
    the emphasis/strong span, mod-3, escape, nesting, code-span
    run-length/trim/opacity, link precedence/nesting/escape/span,
    reference-link label-normalization/first-wins/fall-through,
@@ -145,12 +145,13 @@ character (converted in both input and expected output), and the expected
 outputs omit the final newline block renderers emit (one trailing newline
 on the actual output is ignored). The report is deterministic and exits 0
 in report mode; `--gate` is for CI-style enforcement once a section is
-where we want it. Baseline (0.31.2, after the blockquote milestone):
-**370/655 examples pass** — inline sections are mostly green (emphasis
-96%, links 91%, code spans 90%, ATX headings 88%), block quotes went
-0/25 → 18/25 (the 7 failures are exactly the pending indented/fenced
-code, thematic-break, and list constructs), and the remaining
-block-level sections (HTML blocks 0%, lists ~7%) are the ongoing work.
+where we want it. Baseline (0.31.2, after the blockquote and
+reference-style-images milestones): **382/655 examples pass** — inline
+sections are mostly green (images 100%, emphasis 96%, links 91%, code
+spans 90%, ATX headings 88%), block quotes went 0/25 → 18/25 (the 7
+failures are exactly the pending indented/fenced code, thematic-break,
+and list constructs), and the remaining block-level sections (HTML
+blocks 0%, lists ~7%) are the ongoing work.
 
 ## Running
 
