@@ -2,7 +2,7 @@
 
 Tests are product contracts. `zig build test` runs two suites:
 
-1. **Library module tests** — 101 `test` blocks inside `src/*.zig` covering
+1. **Library module tests** — 105 `test` blocks inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
    frontends, Unicode case folding, the HTML renderer, and the public API.
    Markdown tests pin the container stack, thematic-break/list precedence,
@@ -10,12 +10,12 @@ Tests are product contracts. `zig build test` runs two suites:
    terminal-backslash behavior, every implemented inline family, exact AST
    shapes, and exact spans. Renderer tests construct documents directly so
    renderer behavior is verified without a dialect parser.
-2. **Fixture and adversarial tests** — 7 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 203 Markdown and 10 Textile fixture pairs.
+2. **Fixture and adversarial tests** — 8 tests in `tests/fixtures_test.zig`.
+   The explicit index contains 216 Markdown and 10 Textile fixture pairs.
    It also verifies shared-model convergence, hostile-input completion and
    leak freedom, NUL policy, diagnostics, and deterministic repeat rendering.
 
-The current complete result is **108/108 tests passing** with Zig 0.16.0.
+The current complete result is **113/113 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
@@ -57,16 +57,18 @@ A completed syntax feature should include, where meaningful:
 
 The current Markdown wall covers emphasis/strong, code spans, inline and
 reference links/images, definitions, autolinks, inline raw HTML, block quotes,
-thematic breaks, Setext headings, escapes, breaks, paragraphs, and ATX
+fenced code blocks, thematic breaks, Setext headings, escapes, breaks, paragraphs, and ATX
 headings. The leaf-block slice adds four thematic-break fixture groups, eight
 Setext groups, a terminal-backslash fixture, exact AST/span tests, renderer
-profile tests, and a deterministic 10,000-cycle heading/break workload.
+profile tests, and a deterministic 10,000-cycle heading/break workload. The
+fenced-code slice adds 13 fixture groups spanning the normative rule families,
+exact normalized-payload/span tests, and direct container-boundary coverage.
 
 ## Direct document-to-HTML tests
 
 `src/html.zig` builds documents with `Document.init`, `createNode`, and
 `appendChild`, then asserts rendered bytes. These tests cover escaping, breaks,
-heading clamping, list tightness, raw HTML, thematic breaks, both void-element
+heading clamping, list tightness, raw HTML, thematic breaks, code blocks, both void-element
 styles, and empty documents independently of Markdown or Textile.
 
 ## Span contract
@@ -76,6 +78,9 @@ Spans are first-class behavior. Tests assert, among other things:
 - an ATX heading covers its marker line;
 - a Setext heading covers its content lines plus underline;
 - a thematic break covers its marker line after container markers;
+- a fenced code block covers its opening through closing fence while its
+  payload contains only normalized literal content and trimmed,
+  backslash-resolved info;
 - inline children cover only emitted content bytes;
 - line-break nodes cover the actual line terminator;
 - stripped markers and consumed escape/delimiter bytes are not assigned to
@@ -97,7 +102,9 @@ under `std.testing.allocator`:
 - mixed LF, CRLF, and CR plus NUL bytes;
 - 10,000 repeated Setext/thematic transitions rendered twice and compared;
 - a 20,000-level list/thematic near-miss that exercises linear suffix
-  recognition.
+  recognition;
+- a 64-byte fence with 10,000 near closers and a 20,000-line unclosed literal
+  block, each rendered twice.
 
 The contract is completion without crash, leak, unbounded recursion, or output
 nondeterminism. A dedicated fuzz target remains planned; the public
@@ -121,14 +128,16 @@ The harness converts the spec's tab-arrow marker to a real tab and ignores one
 renderer-owned final newline. Report mode exits zero while showing failures;
 `--gate` exits nonzero on any mismatch in the selected corpus.
 
-Current canonical baseline: **513/652 examples pass**.
+Current canonical baseline: **546/652 examples pass**.
 
 - Thematic breaks: 18/19; the remaining example is indented code.
 - Setext headings: 25/27; both remaining examples are indented code.
 - ATX headings: 17/18; the remaining example is indented code.
-- Link reference definitions: 24/27.
-- Block quotes: 21/25.
-- List items: 32/48; Lists: 21/27.
+- Fenced code blocks: 28/29; the remaining example is indented code.
+- Backslash escapes: 11/13; fenced info-string escapes are implemented.
+- Link reference definitions: 25/27.
+- Block quotes: 22/25.
+- List items: 33/48; Lists: 24/27.
 - Code spans, emphasis/strong, images, autolinks, inline raw HTML, hard/soft
   breaks, and textual content: 100%.
 

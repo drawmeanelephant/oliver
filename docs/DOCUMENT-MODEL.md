@@ -23,11 +23,12 @@ Node {
 ```
 
 `Tag` in the slice: `document`, `paragraph`, `heading`, `thematic_break`,
-`block_quote`, `list`, `list_item`, `text`, `emphasis`, `strong`, `code_span`, `link`, `image`,
+`code_block`, `block_quote`, `list`, `list_item`, `text`, `emphasis`, `strong`, `code_span`, `link`, `image`,
 `autolink`, `raw_html`, `soft_break`, `hard_break`. Blocks and inlines are
 distinguished by `Tag.isBlock` / `Tag.isInline`. `Data` carries `heading`
 level (1..6), list kind/marker metadata/start/looseness, the borrowed `text`
-slice, the arena-owned `code_span` content, the arena-owned `link` href/title,
+slice, arena-owned `code_span` content, arena-owned `code_block` content/info,
+the arena-owned `link` href/title,
 the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
 `raw_html` has no data payload; its source bytes are read from `Node.span`.
 
@@ -69,33 +70,37 @@ the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
 3. `.heading` children are inlines.
 4. `.thematic_break` is a leaf block with no children or data payload. Its
    span covers the marker line after enclosing container markers are stripped.
-5. `.block_quote` children are blocks (it is a container, §5.1); its span
+5. `.code_block` is a leaf block. `data.code_block.content` is arena-owned,
+   indentation-stripped literal content with normalized `\n` endings;
+   `info` is the complete trimmed, backslash-resolved arena-owned fence info
+   string or null. Its span covers the full container-marker-stripped
+   construct, including fences.
+6. `.block_quote` children are blocks (it is a container, §5.1); its span
    covers its lines' content with markers stripped, and text inside it
    slices the stripped content (marker bytes are excluded from child
    spans).
-6. `.list` children are `.list_item` blocks; `.list_item` children are
+7. `.list` children are `.list_item` blocks; `.list_item` children are
    blocks, and list payloads record bullet/ordered type, marker metadata,
    ordered start, and tight/loose state.
-7. `emphasis`/`strong`/`link` contain inline children. The leaf inline
+8. `emphasis`/`strong`/`link` contain inline children. The leaf inline
    tags (`text`, `code_span`, `image`, `autolink`, `raw_html`, `soft_break`,
-   `hard_break`) never
-   have children.
-8. `Data.text` always slices the document's source bytes; `raw_html` also
+   `hard_break`) never have children.
+9. `Data.text` always slices the document's source bytes; `raw_html` also
    borrows its bytes through `Node.span` and carries `Data.none`; the other
-   text
-   payloads (`code_span`, `link.href`, `link.title`, `image.src`,
+   text payloads (`code_span`, `code_block.content`, `code_block.info`,
+   `link.href`, `link.title`, `image.src`,
    `image.alt`, `image.title`, `autolink.href`, `autolink.label`) are
    arena-owned copies — normalization (code-span content, escape
    resolution, alt flattening, the `mailto:` prefix) cannot be
    expressed as a source slice.
-9. `span.start <= span.end`; all spans lie within the source.
-10. Consecutive `text` children of one parent never have contiguous spans:
+10. `span.start <= span.end`; all spans lie within the source.
+11. Consecutive `text` children of one parent never have contiguous spans:
    adjacent source bytes land in one text node. Scanning artifacts (item
    boundaries, leftover delimiters, escape splits) merge at emission, so
    the normalized model has no text fragmentation (chosen behavior,
    docs/INLINE-PARSING.md §15; a consumed backslash or delimiter byte can
    still leave a gap, which is why `a\*b` stays two nodes).
-11. `link` children never contain another `link` (links cannot contain
+12. `link` children never contain another `link` (links cannot contain
    links, §6.3), but may contain `image` nodes (an image description may
    contain links and images, §6.4); each link's children are a
    self-contained inline scope. `image` is a leaf whose `alt` is the
@@ -106,12 +111,13 @@ the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
    (§6.5), so `data.autolink.label` is *not* escape-resolved — the
    payload is a verbatim arena copy (docs/AUTOLINKS.md §3).
 
-## Growth path (planned tags, not yet implemented)
+## Growth path
 
-Blocks: `code_block` (fenced /
-indented, info string), `table` (+ `table_row`, `table_cell`
+Blocks: `table` (+ `table_row`, `table_cell`
 with header flag).
 
+`.code_block` is implemented for fenced Markdown blocks and is shared by the
+planned indented-code frontend path.
 `emphasis`/`strong`/`link`/`image`/`autolink` are implemented;
 `raw_html` is implemented for Markdown inline tags; Textile keeps `<...>` as
 plain text until a dialect-specific raw-HTML decision is made.
@@ -144,6 +150,7 @@ emit them in a fixed documented order.
 | paragraph | paragraph / `p.` | `.paragraph` |
 | ATX/Setext heading | `hN.` heading | `.heading` (level) |
 | thematic break | (planned) | `.thematic_break` |
+| fenced code block | `bc.` / `pre.` (planned) | `.code_block` (owned content/info) |
 | `emphasis` / `strong` | (Textile inline markers: later) | `.emphasis` / `.strong` |
 | `` `code span` `` | (Textile `@code@`: later) | `.code_span` (arena-owned content) |
 | `[x](url "title")` | (Textile `"text":url`: later) | `.link` (arena-owned href/title) |

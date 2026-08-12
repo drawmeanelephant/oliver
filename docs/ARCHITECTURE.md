@@ -97,9 +97,13 @@ Explicit, documented policies:
   hand-built documents; frontends never produce them).
 - Thematic breaks: semantic `.thematic_break` leaves render as `<hr />` by
   default, or `<hr>` under the modern void-element option.
+- Code blocks: semantic `.code_block` leaves render as
+  `<pre><code>…</code></pre>` with escaped literal content. The first word of
+  an optional info string becomes an escaped `language-…` class; later words
+  remain available to other renderers through the model.
 - Lists: `<ul>`/`<ol>` and `<li>` are emitted from the normalized list
   nodes; tight-list direct paragraphs omit `<p>`, while loose-list
-  paragraphs retain it. Code blocks and tables remain unimplemented.
+  paragraphs retain it. Tables remain unimplemented.
 - Line endings: `\n` only. Every block-level element is followed by exactly
   one `\n`; nonempty output always ends with `\n`. Empty input → empty output.
 - Void elements: `<br />` and `<hr />` (CommonMark reference style) by
@@ -124,7 +128,8 @@ Explicit, documented policies:
   pathological rescanning of the whole document.
 - Adversarial smoke tests exercise empty input, huge delimiter runs, NUL
   bytes, mixed line endings, 100 KB single lines, and deterministic
-  10,000-cycle thematic-break/Setext workloads (see
+  10,000-cycle thematic-break/Setext workloads, long fence runs, near
+  closers, and unclosed literal-code floods (see
   `tests/fixtures_test.zig`). A real fuzz target is a later milestone; the
   API already supports it.
 

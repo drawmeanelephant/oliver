@@ -9,17 +9,19 @@
 //!
 //! Invariants:
 //! - The root node is always a `.document` whose children are blocks.
-//! - Block tags contain block or inline children as documented per tag.
+//! - Block tags contain block or inline children as documented per tag;
+//!   `thematic_break` and `code_block` are childless leaves.
 //! - `emphasis`/`strong`/`link` contain inline children; the leaf inline
 //!   tags (`text`, `code_span`, `image`, `autolink`, `raw_html`,
 //!   `soft_break`, `hard_break`) never have children.
 //! - `list` children are `list_item` blocks; `list_item` children are blocks.
 //! - `Node.data.text` always points into the document's source bytes;
 //!   `raw_html` reads its bytes by `Node.span` and carries no data payload;
-//!   `data.code_span`, `data.image` (src/alt/title),
+//!   `data.code_span`, `data.code_block` (content/info), `data.image`
+//!   (src/alt/title),
 //!   `data.autolink` (href/label), and
 //!   `data.link` (href/title) are the arena-owned (copied) payloads
-//!   (see docs/DOCUMENT-MODEL.md invariant 5).
+//!   (see docs/DOCUMENT-MODEL.md invariant 9).
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -37,6 +39,9 @@ pub const Tag = enum {
     /// A thematic break (Markdown §4.1). Leaf block with no children or
     /// payload; renderers choose their own horizontal-rule serialization.
     thematic_break,
+    /// A fenced or indented code block. Leaf block with no children;
+    /// `data.code_block` holds normalized content and optional info string.
+    code_block,
     /// A block quote (Markdown `>` markers, §5.1). Container: children are
     /// blocks. Span covers its lines' content with markers stripped.
     block_quote,
@@ -90,7 +95,7 @@ pub const Tag = enum {
 
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
-            .document, .paragraph, .heading, .thematic_break, .block_quote, .list, .list_item => true,
+            .document, .paragraph, .heading, .thematic_break, .code_block, .block_quote, .list, .list_item => true,
             .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => false,
         };
     }
@@ -98,7 +103,7 @@ pub const Tag = enum {
     pub fn isInline(self: Tag) bool {
         return switch (self) {
             .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => true,
-            .document, .paragraph, .heading, .thematic_break, .block_quote, .list, .list_item => false,
+            .document, .paragraph, .heading, .thematic_break, .code_block, .block_quote, .list, .list_item => false,
         };
     }
 };
@@ -114,6 +119,11 @@ pub const Data = union(enum) {
     /// slice) because line endings are converted to spaces; see the
     /// ownership note in the module comment and docs/DOCUMENT-MODEL.md.
     code_span: []const u8,
+    /// `.code_block`: normalized literal content and optional trimmed,
+    /// escape-resolved info string. Both are arena-owned because content
+    /// line endings/indentation and info-string escapes are normalized;
+    /// info strings will eventually share entity normalization too.
+    code_block: CodeBlock,
     /// `.link`: escape-resolved destination and optional title, both
     /// arena-owned copies (backslash escapes do not survive as source
     /// slices). The title is null when absent, not an empty string.
@@ -135,6 +145,15 @@ pub const Data = union(enum) {
     /// loose iff any item pair is separated by a blank line or any item
     /// directly contains two blocks separated by one).
     list: List,
+};
+
+/// The payload of a `.code_block` leaf. `content` uses `\n` line endings and
+/// includes one newline for every source content line. `info` is the complete
+/// trimmed, escape-resolved fence info string, or null when absent; renderers
+/// may interpret it.
+pub const CodeBlock = struct {
+    content: []const u8,
+    info: ?[]const u8,
 };
 
 /// `.autolink` payload: the raw content between `<` and `>`, verbatim

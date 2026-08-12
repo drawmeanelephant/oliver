@@ -21,7 +21,8 @@ does not study or imitate existing parser implementations. See
 ## Status
 
 Implemented so far: paragraphs, ATX and Setext headings, thematic breaks,
-backslash escapes, hard and soft
+fenced code blocks (§4.5, backtick/tilde fences, literal normalized content,
+info strings and container composition), backslash escapes, hard and soft
 line breaks, emphasis and strong emphasis (full CommonMark §6.2 rule set,
 including the mod-3 rule and `openers_bottom` pruning), code spans (§6.1,
 run-length matching with delimiter opacity), inline links (§6.3, bracket
@@ -50,6 +51,8 @@ the autolink contract is [docs/AUTOLINKS.md](docs/AUTOLINKS.md); the raw HTML
 contract is [docs/RAW-HTML.md](docs/RAW-HTML.md).
 The thematic-break/Setext precedence contract is
 [docs/LEAF-BLOCKS.md](docs/LEAF-BLOCKS.md).
+The fenced-code open-leaf/model/rendering contract is
+[docs/FENCED-CODE.md](docs/FENCED-CODE.md).
 Code spans, links, images, autolinks, and raw HTML ride the same
 scan → match → emit seam.
 
@@ -58,10 +61,10 @@ scan → match → emit seam.
 Requires Zig 0.16.0. `zig build test` runs the unit and fixture suites;
 `zig build spec-conformance -- spec.txt` scores Oliver against every
 normative example in a CommonMark spec (see docs/TESTS.md for the current
-513/652 CommonMark 0.31.2 scorecard and how to fetch the spec).
+546/652 CommonMark 0.31.2 scorecard and how to fetch the spec).
 
 ```bash
-zig build test    # run all tests (108 tests)
+zig build test    # run all tests (113 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 

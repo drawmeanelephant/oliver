@@ -512,6 +512,72 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/ref-partial-paragraph.md"),
         .expected = @embedFile("fixtures/markdown/ref-partial-paragraph.html"),
     },
+    // --- fenced code blocks (CommonMark 0.31.2 §4.5, examples 119-147) ---
+    .{
+        .name = "fence-basic",
+        .input = @embedFile("fixtures/markdown/fence-basic.md"),
+        .expected = @embedFile("fixtures/markdown/fence-basic.html"),
+    },
+    .{
+        .name = "fence-closers",
+        .input = @embedFile("fixtures/markdown/fence-closers.md"),
+        .expected = @embedFile("fixtures/markdown/fence-closers.html"),
+    },
+    .{
+        .name = "fence-unclosed",
+        .input = @embedFile("fixtures/markdown/fence-unclosed.md"),
+        .expected = @embedFile("fixtures/markdown/fence-unclosed.html"),
+    },
+    .{
+        .name = "fence-empty",
+        .input = @embedFile("fixtures/markdown/fence-empty.md"),
+        .expected = @embedFile("fixtures/markdown/fence-empty.html"),
+    },
+    .{
+        .name = "fence-indentation",
+        .input = @embedFile("fixtures/markdown/fence-indentation.md"),
+        .expected = @embedFile("fixtures/markdown/fence-indentation.html"),
+    },
+    .{
+        .name = "fence-closing-indent",
+        .input = @embedFile("fixtures/markdown/fence-closing-indent.md"),
+        .expected = @embedFile("fixtures/markdown/fence-closing-indent.html"),
+    },
+    .{
+        .name = "fence-interrupt",
+        .input = @embedFile("fixtures/markdown/fence-interrupt.md"),
+        .expected = @embedFile("fixtures/markdown/fence-interrupt.html"),
+    },
+    .{
+        .name = "fence-adjacent-blocks",
+        .input = @embedFile("fixtures/markdown/fence-adjacent-blocks.md"),
+        .expected = @embedFile("fixtures/markdown/fence-adjacent-blocks.html"),
+    },
+    .{
+        .name = "fence-info",
+        .input = @embedFile("fixtures/markdown/fence-info.md"),
+        .expected = @embedFile("fixtures/markdown/fence-info.html"),
+    },
+    .{
+        .name = "fence-info-rules",
+        .input = @embedFile("fixtures/markdown/fence-info-rules.md"),
+        .expected = @embedFile("fixtures/markdown/fence-info-rules.html"),
+    },
+    .{
+        .name = "fence-containers",
+        .input = @embedFile("fixtures/markdown/fence-containers.md"),
+        .expected = @embedFile("fixtures/markdown/fence-containers.html"),
+    },
+    .{
+        .name = "fence-internal-space",
+        .input = @embedFile("fixtures/markdown/fence-internal-space.md"),
+        .expected = @embedFile("fixtures/markdown/fence-internal-space.html"),
+    },
+    .{
+        .name = "fence-info-escape",
+        .input = @embedFile("fixtures/markdown/fence-info-escape.md"),
+        .expected = @embedFile("fixtures/markdown/fence-info-escape.html"),
+    },
     // --- thematic breaks (CommonMark 0.31.2 §4.1, examples 43-61) ---
     .{
         .name = "thematic-basic",
@@ -1439,6 +1505,39 @@ test "adversarial: thematic and Setext leaf storm is deterministic" {
     try deep_near_miss.appendSlice(gpa, "+ x\n");
     var near_miss_out = try renderHtml(deep_near_miss.items, .markdown);
     defer near_miss_out.deinit(gpa);
+}
+
+test "adversarial: fenced code scans literal content linearly and deterministically" {
+    const gpa = std.testing.allocator;
+
+    // A long opener followed by thousands of almost-long-enough closers must
+    // scan each line once; no search/backtracking over accumulated content.
+    var near_closers = std.ArrayList(u8).empty;
+    defer near_closers.deinit(gpa);
+    for (0..64) |_| try near_closers.append(gpa, '`');
+    try near_closers.append(gpa, '\n');
+    for (0..10_000) |_| {
+        for (0..63) |_| try near_closers.append(gpa, '`');
+        try near_closers.appendSlice(gpa, " x\n");
+    }
+    for (0..64) |_| try near_closers.append(gpa, '`');
+    try near_closers.append(gpa, '\n');
+
+    // An unclosed block owns all following bytes without attempting to
+    // reinterpret inline-looking content at EOF.
+    var unclosed = std.ArrayList(u8).empty;
+    defer unclosed.deinit(gpa);
+    try unclosed.appendSlice(gpa, "~~~ lang\n");
+    for (0..20_000) |_| try unclosed.appendSlice(gpa, "*x* <b> & value\n");
+
+    const cases = [_][]const u8{ near_closers.items, unclosed.items };
+    for (cases) |input| {
+        var first = try renderHtml(input, .markdown);
+        defer first.deinit(gpa);
+        var second = try renderHtml(input, .markdown);
+        defer second.deinit(gpa);
+        try std.testing.expectEqualSlices(u8, first.items, second.items);
+    }
 }
 
 test "diagnostics: fixtures parse without diagnostics" {

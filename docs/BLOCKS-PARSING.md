@@ -159,9 +159,10 @@ leaf:       the open paragraph/heading inside the last container, if any
 per line:
   A.  Match: walk containers top-down; each block quote consumes one
       marker (≤3 leading spaces + '>' + optional following space); a list
-      item (future) consumes its content indentation. Stop at the first
-      container whose condition fails. Markers consumed so far are
-      stripped from the line cursor.
+      item consumes its content indentation. On a blank line the item
+      consumes up to that indentation, preserving only excess spaces for an
+      open literal leaf. Stop at the first container whose condition fails.
+      Markers consumed so far are stripped from the line cursor.
   B.  Blank line (cursor empty): close the leaf paragraph; close every
       container below the last matched one (a blank line without its
       marker closes a container — rule 3, consecutiveness); keep matched
@@ -186,9 +187,9 @@ per line:
 **Paragraph-continuation-text hook.** Step C depends on knowing which
 lines would *start an interruptible block*. Oliver keeps a small predicate
 `startsInterruptingBlock(cursor)` that grows with each block milestone.
-It recognizes `>` (block quote), `#`-ATX headings, thematic breaks, and list
-markers (`- `, `+ `, `* `, and `1. `, with the §5.2 exceptions) as
-interrupting starts; everything else is continuation text. Setext underlines
+It recognizes `>` (block quote), `#`-ATX headings, fenced-code openers,
+thematic breaks, and list markers (`- `, `+ `, `* `, and `1. `, with the
+§5.2 exceptions) as interrupting starts; everything else is continuation text. Setext underlines
 transform only a paragraph at the same matched container depth and therefore
 never act through a lazy/missing container marker (docs/LEAF-BLOCKS.md).
 
@@ -200,7 +201,7 @@ never act through a lazy/missing container marker (docs/LEAF-BLOCKS.md).
 | ATX heading `#` | yes |
 | thematic break | yes |
 | list item | yes, with §5.2 exceptions |
-| fenced code | yes (pending) |
+| fenced code | yes |
 | indented code | no (pending) |
 | setext underline | transforms the open paragraph at matched depth |
 | link reference definition | no (§4.7, landed) |
@@ -231,8 +232,10 @@ uses.)
 3. **Leaf-block precedence rung** — implemented: thematic breaks (§4.1) and
    Setext headings (§4.3), including their precedence over list markers and
    lazy-container interaction (docs/LEAF-BLOCKS.md).
-4. **Code leaves** — next: fenced code (§4.5), then indented code (§4.4)
-   together with the tab/virtual-column design it requires. HTML blocks
+4. **Code leaves** — fenced code (§4.5) is implemented as an open leaf that
+   ends at its closer or containing-block boundary (docs/FENCED-CODE.md).
+   Indented code (§4.4) follows together with the tab/virtual-column design it
+   requires. HTML blocks
    (§4.6) follow an explicit block-HTML policy decision.
 
 ## 7. Chosen behaviors and divergences
