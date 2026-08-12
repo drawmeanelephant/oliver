@@ -59,6 +59,23 @@ pub fn build(b: *std.Build) void {
     const spec_step = b.step("spec-conformance", "Run the CommonMark spec-conformance scorecard");
     spec_step.dependOn(&spec_run.step);
 
+    // Synthetic unit tests for corpus parsing, identity checks, the complete
+    // expectation partition, and outcome classification. These do not need a
+    // downloaded spec.txt and therefore run as part of the ordinary test gate.
+    const spec_tool_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/spec_conformance.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "oliver", .module = oliver_mod },
+            },
+        }),
+    });
+    const run_spec_tool_tests = b.addRunArtifact(spec_tool_tests);
+    const spec_test_step = b.step("spec-conformance-test", "Test the CommonMark conformance harness");
+    spec_test_step.dependOn(&run_spec_tool_tests.step);
+
     // Unit tests embedded in the library modules.
     const lib_tests = b.addTest(.{
         .root_module = oliver_mod,
@@ -81,4 +98,5 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_fixture_tests.step);
+    test_step.dependOn(&run_spec_tool_tests.step);
 }
