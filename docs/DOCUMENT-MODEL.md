@@ -24,11 +24,12 @@ Node {
 
 `Tag` in the slice: `document`, `paragraph`, `heading`, `block_quote`,
 `text`, `emphasis`, `strong`, `code_span`, `link`, `image`, `autolink`,
-`soft_break`, `hard_break`. Blocks and inlines are distinguished by
-`Tag.isBlock` / `Tag.isInline`. `Data` carries `heading` level (1..6),
-the borrowed `text` slice, the arena-owned `code_span` content, the
-arena-owned `link` href/title, the arena-owned `image` src/alt/title, or the
-arena-owned `autolink` href/label.
+`raw_html`, `soft_break`, `hard_break`. Blocks and inlines are distinguished by
+`Tag.isBlock` / `Tag.isInline`. `Data` carries `heading` level (1..6), the
+borrowed `text` slice, the arena-owned `code_span` content, the arena-owned
+`link` href/title, the arena-owned `image` src/alt/title, or the arena-owned
+`autolink` href/label. `raw_html` has no data payload; its source bytes are
+read from `Node.span`.
 
 ## Design decisions
 
@@ -71,10 +72,11 @@ arena-owned `autolink` href/label.
    slices the stripped content (marker bytes are excluded from child
    spans).
 5. `emphasis`/`strong`/`link` contain inline children. The leaf inline
-   tags (`text`, `code_span`, `image`, `autolink`, `soft_break`,
+   tags (`text`, `code_span`, `image`, `autolink`, `raw_html`, `soft_break`,
    `hard_break`) never
    have children.
-6. `Data.text` always slices the document's source bytes; the other text
+6. `Data.text` always slices the document's source bytes; `raw_html` also
+   borrows its bytes through `Node.span` and carries `Data.none`; the other text
    payloads (`code_span`, `link.href`, `link.title`, `image.src`,
    `image.alt`, `image.title`, `autolink.href`, `autolink.label`) are
    arena-owned copies — normalization (code-span content, escape
@@ -103,10 +105,11 @@ arena-owned `autolink` href/label.
 Blocks: `list`, `list_item` (ordered/unordered is a `Data`
 field, e.g. `list: { ordered: bool, start: ?u32 }`), `code_block` (fenced /
 indented, info string), `thematic_break`, `table` (+ `table_row`, `table_cell`
-with header flag), `raw_html` (under policy).
+with header flag).
 
-Inlines: `raw_inline` (under policy).
 `emphasis`/`strong`/`link`/`image`/`autolink` are implemented;
+`raw_html` is implemented for Markdown inline tags; Textile keeps `<...>` as
+plain text until a dialect-specific raw-HTML decision is made.
 `emphasis`/`strong`
 carry no special data — nesting already expresses it. `code_span`,
 `link`, `image`, and `autolink` are the implemented inlines whose
@@ -140,6 +143,7 @@ emit them in a fixed documented order.
 | `[x](url "title")` | (Textile `"text":url`: later) | `.link` (arena-owned href/title) |
 | `![alt](url "title")` | (Textile `!url(alt)!`: later) | `.image` (arena-owned src/alt/title) |
 | `<scheme:...>` / `<a@b.c>` | (Textile has no autolink; literal) | `.autolink` (arena-owned href/label) |
+| raw HTML tag (`<tag>`, comment, PI, declaration, CDATA) | literal text | `.raw_html` in Markdown; `.text` in Textile |
 | plain text | plain text | `.text` |
 | newline in paragraph | newline in paragraph | `.soft_break` (MD) / `.hard_break` (Textile) |
 | `*x*` / `**x**` | `_x_` / `*x*` (Textile, planned) | `.emphasis` / `.strong` |

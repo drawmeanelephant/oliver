@@ -68,9 +68,11 @@ Same input + same options → same document → same output, every time.
   Future attributes (Textile classes/ids/styles) will join in a documented
   fixed order.
 - No hash-map iteration order is ever part of output.
-- Output line endings are always `\n`, regardless of input line endings
-  (`\r\n`, `\r`, `\n` are all recognized and normalized away by the line
-  scanner; the renderer emits its own `\n`).
+- Generated output line endings are always `\n`, regardless of input line
+  endings (`\r\n`, `\r`, `\n` are all recognized and normalized away by
+  the line scanner; the renderer emits its own `\n`). Raw HTML leaves are
+  the deliberate exception: their source spans, including embedded line
+  endings, are written verbatim.
 
 ## HTML output policy (`src/html.zig`)
 
@@ -87,8 +89,10 @@ Explicit, documented policies:
   characters, and all non-ASCII bytes — is percent-encoded as `%XX`
   (uppercase hex). The encoded href is then HTML-escaped (`&` → `&amp;`).
   Titles are HTML-escaped without percent-encoding.
-- Raw HTML: none exists in the slice — every text node is escaped. A raw-HTML
-  policy (allowed / escaped / rejected) is a later milestone.
+- Raw HTML: Markdown raw-HTML leaves are allowed and written verbatim from
+  their source spans; they are not reparsed or escaped. This is the chosen
+  policy for the inline §6.6 slice. HTML blocks (§4.6) and a configurable
+  escaped/rejected mode remain future work.
 - Headings: `<h1>`..`<h6>`; levels outside 1..6 are clamped (defensive for
   hand-built documents; frontends never produce them).
 - Lists, code, tables: no model tags yet, so nothing to emit.

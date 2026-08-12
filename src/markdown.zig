@@ -1,8 +1,9 @@
 //! Markdown frontend.
 //!
 //! Implemented: paragraphs, ATX headings, backslash escapes, hard and soft
-//! line breaks, emphasis and strong emphasis, code spans (§6.1), inline
-//! links (§6.6), inline images (§6.7), and autolinks (§6.8). Behavior is
+//! line breaks, emphasis and strong emphasis, code spans (§6.1), raw HTML
+//! tags (§6.6), inline links (§6.6), inline images (§6.7), and autolinks
+//! (§6.8). Behavior is
 //! taken from the CommonMark specification (0.31.2) where the slice
 //! implements it; divergences and chosen behaviors are documented in
 //! docs/FEATURE-MATRIX.md, and the emphasis/strong algorithm is derived
@@ -50,17 +51,26 @@
 //! walk: a backtick run before the `<` is skipped as a code span, a `<`
 //! before the backticks consumes them as ordinary URI content.
 //!
+//! Raw HTML tags (§6.6) are discovered over the whole paragraph before the
+//! line scan, because open/closing tags, comments, processing instructions,
+//! declarations, and CDATA sections may span line endings. The discovered
+//! tags merge with code spans into one first-come opaque-construct list;
+//! recognized tags become leaf `raw_html` items whose source spans are
+//! rendered verbatim (docs/RAW-HTML.md).
+//!
 //! The parser runs in two passes, matching the spec's precedence model:
 //! block structure first, then inline structure. The block pass recognizes
 //! paragraphs and ATX headings; everything else is a paragraph.
 //!
-//! The inline pass is three phases (see docs/INLINE-PARSING.md §8):
+//! The inline pass is discovery plus three phases (see
+//! docs/INLINE-PARSING.md §8):
 //!   scan  — one pass over each line's raw content span, producing a flat
-//!           item list (text runs, delimiter runs, line breaks). Flanking is
-//!           computed against the raw span, so trailing whitespace and line
-//!           boundaries classify runs exactly as the spec's "beginning and
-//!           end of the line count as Unicode whitespace" requires; the
-//!           leading/trailing whitespace trimming happens at emission.
+//!           item list (text runs, delimiter runs, opaque constructs, line
+//!           breaks). Flanking is computed against the raw span, so trailing
+//!           whitespace and line boundaries classify runs exactly as the
+//!           spec's "beginning and end of the line count as Unicode
+//!           whitespace" requires; the leading/trailing whitespace trimming
+//!           happens at emission.
 //!   match — a delimiter stack processes the items left to right, matching
 //!           openers to closers under rules 1-12 (§6.2), with an
 //!           `openers_bottom` table so matching is amortized linear.
@@ -672,24 +682,37 @@ fn parseParagraphInlines(
     var items = std.ArrayList(InlineItem).empty;
     defer items.deinit(doc.allocator());
 
-    // Discovery runs before scanning: code spans may span lines, and their
-    // content is opaque to the delimiter/escape/break processing.
+    // Discovery runs before scanning: code spans and raw HTML tags may span
+    // lines, and their content is opaque to the delimiter/escape/break
+    // processing. Both are discovered over the whole paragraph, then merged
+    // into one resolved construct list (first-come precedence).
     var contents = try doc.allocator().alloc(source.Span, lines.len);
     defer doc.allocator().free(contents);
     for (lines, 0..) |ref, i| contents[i] = ref.content;
     var spans = std.ArrayList(CodeSpan).empty;
     defer spans.deinit(doc.allocator());
     try discoverCodeSpans(doc, contents, &spans);
+    var tags = std.ArrayList(HtmlTag).empty;
+    defer tags.deinit(doc.allocator());
+    try discoverHtmlTags(doc, contents, &tags);
+    var constructs = std.ArrayList(Construct).empty;
+    defer constructs.deinit(doc.allocator());
+    try mergeConstructs(doc, spans.items, tags.items, &constructs);
 
+    // A construct consumed by an autolink (first-come at the `<`) is dead
+    // for the whole paragraph, including lines scanned later; `exclude` is
+    // the shared floor for the per-line scans.
+    var exclude: u32 = 0;
     for (lines, 0..) |ref, i| {
         const end = analyzeLineEnd(doc.src.bytes, ref.content);
         const start = skipLeadingWhitespace(doc.src.bytes, ref.content);
-        try scanLine(doc, &items, ref.content, .{ .start = start, .end = end.content_end }, spans.items);
+        try scanLine(doc, &items, ref.content, .{ .start = start, .end = end.content_end }, constructs.items, &exclude);
         if (i + 1 < lines.len) {
-            // A line ending inside a code span is span content (§6.1: "line
-            // endings are converted to spaces"), never a break — hard line
-            // breaks do not occur inside code spans (§6.7).
-            if (!terminatorInsideCodeSpan(ref.terminator, spans.items)) {
+            // A line ending inside a construct (code span content — §6.1
+            // "line endings are converted to spaces" — or a raw HTML tag)
+            // is construct content, never a break: hard line breaks do not
+            // occur inside code spans or HTML tags (§6.6/§6.7).
+            if (!terminatorInsideConstruct(ref.terminator, constructs.items)) {
                 try items.append(doc.allocator(), .{ .brk = .{ .kind = end.kind, .span = ref.terminator } });
             }
         }
@@ -816,7 +839,14 @@ fn parseHeadingInlines(
     var spans = std.ArrayList(CodeSpan).empty;
     defer spans.deinit(doc.allocator());
     try discoverCodeSpans(doc, &[_]source.Span{scan}, &spans);
-    try scanLine(doc, &items, scan, scan, spans.items);
+    var tags = std.ArrayList(HtmlTag).empty;
+    defer tags.deinit(doc.allocator());
+    try discoverHtmlTags(doc, &[_]source.Span{scan}, &tags);
+    var constructs = std.ArrayList(Construct).empty;
+    defer constructs.deinit(doc.allocator());
+    try mergeConstructs(doc, spans.items, tags.items, &constructs);
+    var exclude: u32 = 0;
+    try scanLine(doc, &items, scan, scan, constructs.items, &exclude);
     try discoverLinksAndImages(doc, &items, scan.end, defs);
     try matchInlines(doc, node, items.items);
 
@@ -919,6 +949,17 @@ const InlineItem = union(enum) {
     /// prefix. Opaque to the delimiter stack and link discovery, like
     /// `code_span` (docs/AUTOLINKS.md §2).
     autolink: AutolinkScan,
+    /// A recognized raw HTML tag (§6.6): `span` covers the whole construct
+    /// (`<` .. `>`), which may span lines. Opaque to the delimiter stack,
+    /// link discovery, and break processing (docs/RAW-HTML.md §2); the
+    /// renderer writes the source bytes verbatim.
+    raw_html: RawHtmlItem,
+};
+
+/// A raw HTML tag item (§6.6): the whole construct span. The tag's bytes
+/// are rendered verbatim from the source, so no payload is needed.
+const RawHtmlItem = struct {
+    span: source.Span,
 };
 
 /// A discovered inline link (§6.6). See `InlineItem.link`.
@@ -949,6 +990,7 @@ fn itemSpan(item: InlineItem) source.Span {
         .link => |l| l.span,
         .image => |im| im.span,
         .autolink => |a| a.span,
+        .raw_html => |h| h.span,
     };
 }
 
@@ -963,6 +1005,7 @@ fn setItemSpan(item: *InlineItem, span: source.Span) void {
         .link => |*l| l.span = span,
         .image => |*im| im.span = span,
         .autolink => |*a| a.span = span,
+        .raw_html => |*h| h.span = span,
     }
 }
 
@@ -973,6 +1016,28 @@ const CodeSpan = struct {
     span: source.Span,
     /// Raw bytes between the backtick strings (the content before §6.1
     /// normalization; may include line endings).
+    content: source.Span,
+};
+
+/// A raw HTML tag discovered by `discoverHtmlTags` (§6.6). Spans are
+/// disjoint (each match consumes its whole construct) and sorted by
+/// `span.start`.
+const HtmlTag = struct {
+    /// `<` .. `>` of the whole construct, including any line endings.
+    span: source.Span,
+};
+
+/// A paragraph-level opaque inline construct: a code span or a raw HTML
+/// tag, resolved for first-come precedence. `mergeConstructs` drops any
+/// construct that starts inside an already-accepted one, so the list is
+/// disjoint and sorted by `span.start`. The scan consumes constructs in
+/// order; everything inside them is opaque to the delimiter stack, link
+/// discovery, and break processing.
+const Construct = struct {
+    kind: enum { code_span, html_tag },
+    span: source.Span,
+    /// Code spans: the raw content bounds (see `CodeSpan.content`).
+    /// Unused for HTML tags.
     content: source.Span,
 };
 
@@ -1036,16 +1101,265 @@ fn discoverCodeSpans(doc: *document.Document, contents: []const source.Span, spa
     }
 }
 
-/// True if the line terminator `[term.start, term.end)` lies inside a code
-/// span's content (i.e. the line ends inside a span that closes on a later
-/// line). Used to suppress break items: the line ending is then span
-/// content, not a soft/hard break.
-fn terminatorInsideCodeSpan(term: source.Span, spans: []const CodeSpan) bool {
-    for (spans) |s| {
-        if (s.content.start > term.start) return false; // sorted; later spans are past it
-        if (term.start < s.content.end) return true;
+/// True if the line terminator `[term.start, term.end)` lies inside a
+/// resolved construct (code span content or raw HTML tag) that continues on
+/// a later line. Used to suppress break items: the line ending is then
+/// construct content, not a soft/hard break. The resolved list already
+/// dropped first-come losers, so a terminator inside a dead span is a
+/// normal break.
+fn terminatorInsideConstruct(term: source.Span, constructs: []const Construct) bool {
+    for (constructs) |c| {
+        if (c.span.start > term.start) return false; // sorted; later constructs are past it
+        if (term.start < c.span.end) return true;
     }
     return false;
+}
+
+/// Merges the discovered code spans and HTML tags into one resolved,
+/// overlap-free list ordered by start. First-come wins: a construct whose
+/// start lies inside an already-accepted construct's span is dropped (the
+/// earlier construct's opener precedes it, so per §6.1 the earlier
+/// construct is parsed and the later one never starts). Both input lists
+/// are sorted and internally disjoint, so a linear walk suffices
+/// (docs/RAW-HTML.md §2).
+fn mergeConstructs(
+    doc: *document.Document,
+    spans: []const CodeSpan,
+    tags: []const HtmlTag,
+    out: *std.ArrayList(Construct),
+) ParseError!void {
+    var si: usize = 0;
+    var ti: usize = 0;
+    var last_end: u32 = 0;
+    while (si < spans.len or ti < tags.len) {
+        const span_next = si < spans.len;
+        const tag_next = ti < tags.len;
+        const from_tag = if (!span_next) true else if (!tag_next) false else tags[ti].span.start < spans[si].span.start;
+        if (from_tag) {
+            if (tags[ti].span.start >= last_end) {
+                try out.append(doc.allocator(), .{
+                    .kind = .html_tag,
+                    .span = tags[ti].span,
+                    .content = .{ .start = 0, .end = 0 },
+                });
+                last_end = tags[ti].span.end;
+            }
+            ti += 1;
+        } else {
+            if (spans[si].span.start >= last_end) {
+                try out.append(doc.allocator(), .{
+                    .kind = .code_span,
+                    .span = spans[si].span,
+                    .content = spans[si].content,
+                });
+                last_end = spans[si].span.end;
+            }
+            si += 1;
+        }
+    }
+}
+
+/// Discovers raw HTML tags (§6.6) over the concatenated raw content of the
+/// given spans (one entry per line of the block). The scan is escape-aware
+/// at the `<` only: `\<` is literal, and backslash escapes are inert
+/// *inside* tags, so a matched construct is consumed wholesale. A construct
+/// that fails leaves its `<` alone — it may still be an autolink (§6.8) or
+/// literal text, resolved later in the scan.
+fn discoverHtmlTags(doc: *document.Document, contents: []const source.Span, tags: *std.ArrayList(HtmlTag)) ParseError!void {
+    const bytes = doc.src.bytes;
+    const para_start = contents[0].start;
+    const para_end = contents[contents.len - 1].end;
+    var i = para_start;
+    while (i < para_end) {
+        if (bytes[i] == '<' and !isEscaped(bytes, i)) {
+            if (scanHtmlTag(bytes, i, para_end)) |span| {
+                try tags.append(doc.allocator(), .{ .span = span });
+                i = span.end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+}
+
+/// Scans a raw HTML construct (§6.6) starting at the `<` at `pos`, bounded
+/// by `end` (the paragraph end — tags may span lines). Tries the six
+/// construct forms in spec order; returns the construct span or null.
+fn scanHtmlTag(bytes: []const u8, pos: usize, end: usize) ?source.Span {
+    if (pos + 2 > end or bytes[pos] != '<') return null;
+    // `<!--` comment (`<!-->`, `<!--->`, or `<!--` ... `-->`).
+    if (pos + 4 <= end and bytes[pos + 1] == '!' and bytes[pos + 2] == '-' and bytes[pos + 3] == '-') {
+        return scanComment(bytes, pos, end);
+    }
+    if (bytes[pos + 1] == '?') return scanProcessingInstruction(bytes, pos, end);
+    if (bytes[pos + 1] == '!') {
+        // CDATA before the declaration form: `<![CDATA[` does not match
+        // `<!` + letter, so the order is a matter of clarity, not behavior.
+        if (pos + 9 <= end and std.mem.startsWith(u8, bytes[pos..end], "<![CDATA[")) {
+            return scanCdata(bytes, pos, end);
+        }
+        return scanDeclaration(bytes, pos, end);
+    }
+    if (bytes[pos + 1] == '/') return scanClosingTag(bytes, pos, end);
+    return scanOpenTag(bytes, pos, end);
+}
+
+/// §6.6 whitespace chunk: spaces/tabs, at most one line ending, then
+/// spaces/tabs again ("optional spaces, tabs, and up to one line ending").
+/// Returns the position after, or null when a second consecutive line
+/// ending appears (which fails the containing tag).
+fn skipTagWhitespace(bytes: []const u8, i: usize, end: usize) ?usize {
+    var p = i;
+    while (p < end and (bytes[p] == ' ' or bytes[p] == '\t')) : (p += 1) {}
+    if (p < end and lineEndingLen(bytes, p) > 0) {
+        p += lineEndingLen(bytes, p);
+        while (p < end and (bytes[p] == ' ' or bytes[p] == '\t')) : (p += 1) {}
+        if (p < end and lineEndingLen(bytes, p) > 0) return null;
+    }
+    return p;
+}
+
+/// `<!-->` (5 bytes) or `<!--->` (6 bytes), or the general form
+/// `<!--` + (no `-->`) + `-->`.
+fn scanComment(bytes: []const u8, pos: usize, end: usize) ?source.Span {
+    if (pos + 5 <= end and bytes[pos + 4] == '>') {
+        return .{ .start = @intCast(pos), .end = @intCast(pos + 5) }; // <!-->
+    }
+    if (pos + 6 <= end and bytes[pos + 4] == '-' and bytes[pos + 5] == '>') {
+        return .{ .start = @intCast(pos), .end = @intCast(pos + 6) }; // <!--->
+    }
+    var j = pos + 4;
+    while (j + 2 < end) : (j += 1) {
+        if (bytes[j] == '-' and bytes[j + 1] == '-' and bytes[j + 2] == '>') {
+            return .{ .start = @intCast(pos), .end = @intCast(j + 3) };
+        }
+    }
+    return null;
+}
+
+/// `<?` + (no `?>`) + `?>`.
+fn scanProcessingInstruction(bytes: []const u8, pos: usize, end: usize) ?source.Span {
+    var j = pos + 2;
+    while (j + 1 < end) : (j += 1) {
+        if (bytes[j] == '?' and bytes[j + 1] == '>') {
+            return .{ .start = @intCast(pos), .end = @intCast(j + 2) };
+        }
+    }
+    return null;
+}
+
+/// `<!` + ASCII letter + (no `>`) + `>`.
+fn scanDeclaration(bytes: []const u8, pos: usize, end: usize) ?source.Span {
+    if (pos + 3 > end or !isAsciiLetter(bytes[pos + 2])) return null;
+    var j = pos + 3;
+    while (j < end) : (j += 1) {
+        if (bytes[j] == '>') return .{ .start = @intCast(pos), .end = @intCast(j + 1) };
+    }
+    return null;
+}
+
+/// `<![CDATA[` + (no `]]>`) + `]]>`.
+fn scanCdata(bytes: []const u8, pos: usize, end: usize) ?source.Span {
+    var j = pos + 9;
+    while (j + 2 < end) : (j += 1) {
+        if (bytes[j] == ']' and bytes[j + 1] == ']' and bytes[j + 2] == '>') {
+            return .{ .start = @intCast(pos), .end = @intCast(j + 3) };
+        }
+    }
+    return null;
+}
+
+/// `</` + tag name + whitespace chunk + `>` (no attributes, no `/`).
+fn scanClosingTag(bytes: []const u8, pos: usize, end: usize) ?source.Span {
+    var p = pos + 2;
+    if (p >= end or !isAsciiLetter(bytes[p])) return null;
+    p += 1;
+    while (p < end and isTagNameChar(bytes[p])) : (p += 1) {}
+    const w = skipTagWhitespace(bytes, p, end) orelse return null;
+    if (w < end and bytes[w] == '>') return .{ .start = @intCast(pos), .end = @intCast(w + 1) };
+    return null;
+}
+
+/// §6.6 unquoted attribute value terminator set: whitespace, `"`, `'`, `=`,
+/// `<`, `>`, or `` ` ``.
+fn isUnquotedValueStop(b: u8) bool {
+    return b == ' ' or b == '\t' or b == '\n' or b == '\r' or
+        b == '"' or b == '\'' or b == '=' or b == '<' or b == '>' or b == '`';
+}
+
+/// `<` + tag name + zero or more attributes + whitespace chunk + optional
+/// `/` + `>`. Each attribute is a whitespace chunk, an attribute name, and
+/// an optional value specification (whitespace chunk + `=` + whitespace
+/// chunk + value), where a value is unquoted (nonempty), single-quoted, or
+/// double-quoted.
+fn scanOpenTag(bytes: []const u8, pos: usize, end: usize) ?source.Span {
+    var p = pos + 1;
+    if (p >= end or !isAsciiLetter(bytes[p])) return null;
+    p += 1;
+    while (p < end and isTagNameChar(bytes[p])) : (p += 1) {}
+    // Attributes and tail. Each component boundary is a whitespace chunk
+    // (spaces/tabs and at most one line ending) followed by `>`, `/`+`>`,
+    // or an attribute name. An attribute name must be preceded by at least
+    // one whitespace byte: the spec attaches the chunk to the attribute,
+    // spec example 622 (`<a href='bar'title=title>`) fails without it, and
+    // `<a:b>` must fall through to the autolink attempt. The chunk probed
+    // after an attribute name doubles as the next component's boundary
+    // chunk when no `=` follows, so the scan tracks whether a boundary was
+    // already consumed and whether it was nonempty.
+    var boundary_done = false;
+    var boundary_nonempty = false;
+    while (true) {
+        var chunk: usize = undefined;
+        var nonempty: bool = undefined;
+        if (boundary_done) {
+            chunk = p;
+            nonempty = boundary_nonempty;
+            boundary_done = false;
+        } else {
+            chunk = skipTagWhitespace(bytes, p, end) orelse return null;
+            nonempty = chunk != p;
+        }
+        if (chunk >= end) return null;
+        const b = bytes[chunk];
+        if (b == '>') return .{ .start = @intCast(pos), .end = @intCast(chunk + 1) };
+        if (b == '/') {
+            // The optional `/` must be immediately before `>` (`<a/ >` fails).
+            if (chunk + 1 < end and bytes[chunk + 1] == '>') return .{ .start = @intCast(pos), .end = @intCast(chunk + 2) };
+            return null;
+        }
+        // Attribute name: letter/`_`/`:` first, then name chars.
+        if (!(isAsciiLetter(b) or b == '_' or b == ':')) return null;
+        if (!nonempty) return null; // attributes require preceding whitespace
+        var q = chunk + 1;
+        while (q < end and isAttrNameChar(bytes[q])) : (q += 1) {}
+        // Optional value specification: a whitespace chunk, then `=`.
+        const eq = skipTagWhitespace(bytes, q, end) orelse return null;
+        if (eq < end and bytes[eq] == '=') {
+            const vstart = skipTagWhitespace(bytes, eq + 1, end) orelse return null;
+            if (vstart >= end) return null;
+            const v = bytes[vstart];
+            if (v == '"' or v == '\'') {
+                // Quoted value: scan to the closing quote (may contain line
+                // endings and any other bytes; backslash is not special).
+                var r = vstart + 1;
+                while (r < end and bytes[r] != v) : (r += 1) {}
+                if (r >= end) return null; // unterminated
+                p = r + 1;
+            } else {
+                // Unquoted value: a nonempty run of non-terminator chars.
+                var r = vstart;
+                while (r < end and !isUnquotedValueStop(bytes[r])) : (r += 1) {}
+                if (r == vstart) return null; // empty unquoted value
+                p = r;
+            }
+        } else {
+            // No value spec: the probe chunk is the next component's
+            // boundary chunk, already consumed.
+            p = eq;
+            boundary_done = true;
+            boundary_nonempty = eq != q;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1589,6 +1903,28 @@ fn isEmailDomainChar(b: u8) bool {
     return isAsciiLetter(b) or (b >= '0' and b <= '9') or b == '-';
 }
 
+/// §6.6 tag-name character: an ASCII letter, digit, or `-`.
+fn isTagNameChar(b: u8) bool {
+    return isAsciiLetter(b) or (b >= '0' and b <= '9') or b == '-';
+}
+
+/// §6.6 attribute-name character: an ASCII letter, digit, `_`, `.`, `:`,
+/// or `-` (the first character is restricted to letter/`_`/`:`).
+fn isAttrNameChar(b: u8) bool {
+    return isAsciiLetter(b) or (b >= '0' and b <= '9') or b == '_' or b == '.' or b == ':' or b == '-';
+}
+
+/// The length of a CommonMark line ending at `i` (`\n`, `\r\n`, or `\r`),
+/// or 0 when `bytes[i]` does not start one. Same definition as
+/// `source.Line`.
+fn lineEndingLen(bytes: []const u8, i: usize) usize {
+    return switch (bytes[i]) {
+        '\n' => 1,
+        '\r' => if (i + 1 < bytes.len and bytes[i + 1] == '\n') 2 else 1,
+        else => 0,
+    };
+}
+
 /// §6.8 URI autolink: `<` + scheme (2–32 chars) + `:` + content (no ASCII
 /// control, space, `<`, `>`) + `>`. `pos` is at the `<`; `end` bounds the
 /// scan (a line end, since content cannot contain line endings). Returns
@@ -1684,32 +2020,45 @@ fn scanLine(
     items: *std.ArrayList(InlineItem),
     raw: source.Span,
     emit: source.Span,
-    spans: []const CodeSpan,
+    constructs: []const Construct,
+    exclude: *u32,
 ) ParseError!void {
     const bytes = doc.src.bytes;
     var i = raw.start;
     var run_start = raw.start;
-    var si: usize = 0;
-    while (si < spans.len and spans[si].span.end <= raw.start) si += 1;
+    var ci: usize = 0;
+    // Skip constructs that closed before this line, or that an autolink
+    // consumed on an earlier line (first-come: they are dead for the rest
+    // of the paragraph — docs/RAW-HTML.md §2).
+    while (ci < constructs.len and
+        (constructs[ci].span.end <= raw.start or constructs[ci].span.start < exclude.*))
+    {
+        ci += 1;
+    }
     while (i < raw.end) : (i += 1) {
-        // Inside a span that opened on an earlier line: skip to its end;
-        // the code_span item was appended when the span opened.
-        if (si < spans.len and i > spans[si].span.start and i < spans[si].span.end) {
-            i = spans[si].span.end - 1;
-            run_start = spans[si].span.end;
-            si += 1;
+        // Inside a construct that opened on an earlier line: skip to its
+        // end; the item was appended when the construct opened.
+        if (ci < constructs.len and i > constructs[ci].span.start and i < constructs[ci].span.end) {
+            i = constructs[ci].span.end - 1;
+            run_start = constructs[ci].span.end;
+            ci += 1;
             continue;
         }
-        // At a span opening: flush the preceding text, append the span
-        // item, skip the whole construct.
-        if (si < spans.len and i == spans[si].span.start) {
+        // At a construct opening: flush the preceding text, append the
+        // construct item, skip the whole construct.
+        if (ci < constructs.len and i == constructs[ci].span.start) {
             try appendTextItem(doc, items, .{ .start = run_start, .end = i }, emit);
-            try items.append(doc.allocator(), .{
-                .code_span = .{ .span = spans[si].span, .content = spans[si].content },
-            });
-            i = spans[si].span.end - 1;
-            run_start = spans[si].span.end;
-            si += 1;
+            switch (constructs[ci].kind) {
+                .code_span => try items.append(doc.allocator(), .{
+                    .code_span = .{ .span = constructs[ci].span, .content = constructs[ci].content },
+                }),
+                .html_tag => try items.append(doc.allocator(), .{
+                    .raw_html = .{ .span = constructs[ci].span },
+                }),
+            }
+            i = constructs[ci].span.end - 1;
+            run_start = constructs[ci].span.end;
+            ci += 1;
             continue;
         }
         const b = bytes[i];
@@ -1758,9 +2107,12 @@ fn scanLine(
                 i = al.span.end - 1; // loop increments past the `>`
                 run_start = al.span.end;
                 // An autolink that started before a backtick run wins the
-                // first-come race with code spans: skip any span whose
-                // opening lies inside the consumed `<...>`.
-                while (si < spans.len and spans[si].span.start < al.span.end) si += 1;
+                // first-come race: skip any construct whose opening lies
+                // inside the consumed `<...>`, and record the exclusion so
+                // later lines keep them dead (their closers cannot revive
+                // them — docs/RAW-HTML.md §2).
+                while (ci < constructs.len and constructs[ci].span.start < al.span.end) ci += 1;
+                if (al.span.end > exclude.*) exclude.* = al.span.end;
             }
             // No match: fall through; the `<` is literal text.
         }
@@ -2095,6 +2447,12 @@ fn emitInlines(
                 });
                 try doc.appendChild(current, node);
             },
+            .raw_html => |h| {
+                // Leaf node: the whole tag construct, rendered verbatim
+                // from the source span (no payload; docs/RAW-HTML.md §3).
+                const node = try doc.createNode(.raw_html, h.span, .none);
+                try doc.appendChild(current, node);
+            },
             .autolink => |al| {
                 // Leaf node: the raw content between `<` and `>` becomes
                 // both the label (verbatim, escapes inert) and the href
@@ -2373,6 +2731,7 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
                 try work.append(doc.allocator(), .{ .items = im.children.items, .i = 0 });
             },
             .autolink => |al| try buf.appendSlice(doc.allocator(), doc.src.bytes[al.content.start..al.content.end]),
+            .raw_html => |h| try buf.appendSlice(doc.allocator(), doc.src.bytes[h.span.start..h.span.end]),
         }
     }
     return buf.toOwnedSlice(doc.allocator());
@@ -3560,6 +3919,76 @@ test "markdown: autolink in an image description flattens into alt" {
     const img = result.document.root.children.items[0].children.items[0];
     try testing.expectEqual(document.Tag.image, img.tag);
     try testing.expectEqualStrings("http://x", img.data.image.alt);
+}
+
+test "markdown: raw HTML leaves preserve spans and first-come opacity" {
+    const oliver = @import("oliver.zig");
+
+    // A tag is opaque to brackets and emphasis, but its source bytes remain
+    // available through the leaf span. The backtick pair inside the quoted
+    // attribute must not become a code span because the tag starts first.
+    const input = "*<b data=\"`x`\">[x]</b>*";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+    const em = result.document.root.children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.emphasis, em.tag);
+    try testing.expectEqual(@as(usize, 3), em.children.items.len);
+    try testing.expectEqual(document.Tag.raw_html, em.children.items[0].tag);
+    try testing.expectEqual(source.Span{ .start = 1, .end = 15 }, em.children.items[0].span);
+    try testing.expectEqualStrings("<b data=\"`x`\">", input[1..15]);
+    try testing.expectEqual(document.Tag.text, em.children.items[1].tag);
+    try testing.expectEqual(document.Tag.raw_html, em.children.items[2].tag);
+    try testing.expectEqual(source.Span{ .start = 18, .end = 22 }, em.children.items[2].span);
+
+    // Conversely, a code span that starts first keeps a tag-looking string
+    // opaque and emits one code_span leaf.
+    var code_result = try oliver.parse(testing.allocator, "`<b>`", .markdown, .{});
+    defer code_result.deinit();
+    const code_p = code_result.document.root.children.items[0];
+    try testing.expectEqual(@as(usize, 1), code_p.children.items.len);
+    try testing.expectEqual(document.Tag.code_span, code_p.children.items[0].tag);
+
+    // A tag that starts first also wins when its attribute contains a
+    // complete backtick pair.
+    var tag_result = try oliver.parse(testing.allocator, "<b title=\"`x`\">", .markdown, .{});
+    defer tag_result.deinit();
+    const tag_p = tag_result.document.root.children.items[0];
+    try testing.expectEqual(@as(usize, 1), tag_p.children.items.len);
+    try testing.expectEqual(document.Tag.raw_html, tag_p.children.items[0].tag);
+}
+
+test "markdown: raw HTML preserves multiline bytes and flattens image alt" {
+    const oliver = @import("oliver.zig");
+
+    // The two spaces before the newline are inside the quoted attribute, so
+    // this line ending is raw HTML content, not a hard break.
+    {
+        const input = "before <a href=\"foo  \nbar\"> after";
+        var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try testing.expectEqual(@as(usize, 3), p.children.items.len);
+        try testing.expectEqual(document.Tag.raw_html, p.children.items[1].tag);
+        const raw = p.children.items[1];
+        try testing.expectEqualStrings("<a href=\"foo  \nbar\">", input[raw.span.start..raw.span.end]);
+
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>before <a href=\"foo  \nbar\"> after</p>\n", out.items);
+    }
+
+    // Raw HTML contributes its source bytes to the deliberately chosen
+    // image-alt flattening policy; the image renderer then escapes them.
+    {
+        var result = try oliver.parse(testing.allocator, "![<b>x</b>](u)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("<b>x</b>", img.data.image.alt);
+    }
 }
 
 /// Counts `.autolink` nodes in a document (structural assertions).

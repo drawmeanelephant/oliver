@@ -18,13 +18,15 @@
 //!   when present. Attribute order is fixed: `src`, `alt`, `title`.
 //! - Headings use the level 1..6 (clamped for hand-built documents).
 //! - Code spans render `<code>...</code>` with the same escaping as text.
+//! - Raw HTML leaves write their source spans verbatim, without escaping;
+//!   this is the one inline form whose bytes can include source line endings.
 //! - Lists/code blocks/tables: not yet implemented (no tags exist).
-//! - Line endings in output are always `\n`.
+//! - Generated line endings in output are always `\n`; raw HTML source spans
+//!   retain their original line-ending bytes by design.
 //! - Every block-level element is followed by exactly one `\n`, so nonempty
 //!   output always ends with `\n`.
 //! - Void elements are emitted as `<br />` by default (CommonMark reference
 //!   style), toggleable via `RenderOptions`.
-//! - Raw HTML: none exists in the slice; every text node is escaped.
 //!
 //! Traversal uses an explicit stack rather than recursion, so rendering a
 //! hostile, deeply nested document cannot overflow the call stack.
@@ -53,7 +55,7 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
     while (stack.pop()) |frame| {
         switch (frame) {
             .enter => |node| {
-                try writeOpen(gpa, writer, &stack, node, options);
+                try writeOpen(gpa, writer, &stack, node, options, doc.src.bytes);
                 try pushChildren(gpa, &stack, node);
             },
             .exit => |node| try writeClose(writer, node, options),
@@ -84,6 +86,7 @@ fn writeOpen(
     stack: *std.ArrayList(Frame),
     node: *const document.Node,
     options: RenderOptions,
+    src: []const u8,
 ) !void {
     switch (node.tag) {
         .document => {
@@ -160,6 +163,12 @@ fn writeOpen(
             try writer.writeAll(if (options.void_trailing_slash) " />" else ">");
         },
         .text => try writeEscaped(writer, node.data.text),
+        .raw_html => {
+            // Leaf tag: the raw source bytes of the construct, verbatim —
+            // no escaping (docs/RAW-HTML.md §3). The span may include line
+            // endings inside a multi-line tag.
+            try writer.writeAll(src[node.span.start..node.span.end]);
+        },
         .soft_break => try writer.writeAll("\n"),
         .hard_break => {
             try writer.writeAll(if (options.void_trailing_slash) "<br />" else "<br>");
@@ -185,7 +194,7 @@ fn writeClose(writer: anytype, node: *const document.Node, options: RenderOption
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .text, .image, .autolink, .soft_break, .hard_break => unreachable,
+        .text, .image, .autolink, .raw_html, .soft_break, .hard_break => unreachable,
     }
 }
 
@@ -383,6 +392,21 @@ test "html: code span content is escaped, not re-parsed" {
     var out = try renderDoc(&doc);
     defer out.deinit(testing.allocator);
     try testing.expectEqualStrings("<p><code>a &lt;b&gt;&amp; &quot;c&quot;`</code></p>\n", out.items);
+}
+
+test "html: raw HTML leaves write source spans verbatim" {
+    const input = "<b>&</b>";
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = input });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = @intCast(input.len) }, .none);
+    try doc.appendChild(doc.root, p);
+    try doc.appendChild(p, try doc.createNode(.raw_html, .{ .start = 0, .end = 3 }, .none));
+    try doc.appendChild(p, try doc.createNode(.text, .{ .start = 3, .end = 4 }, .{ .text = doc.text(.{ .start = 3, .end = 4 }) }));
+    try doc.appendChild(p, try doc.createNode(.raw_html, .{ .start = 4, .end = 8 }, .none));
+
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p><b>&amp;</b></p>\n", out.items);
 }
 
 test "html: link renders href and title with escaping policy" {

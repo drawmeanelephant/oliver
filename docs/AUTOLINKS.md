@@ -120,10 +120,12 @@ content").
 2. **The HTML5 email regex is implemented mechanically** (local-part
    character set, `@`, and the domain-label shape with the 61-hyphen
    bound), not approximated.
-3. **Raw HTML (`<tag>` without a scheme/colon) is untouched**: such `<`
-   stays literal text (raw HTML is a separate deferred feature). The
-   `[foo <bar attr="](baz)">` shape therefore stays as today until raw
-   HTML lands.
+3. **Raw HTML is handled by the neighboring recognizer**: a whole-paragraph
+   `discoverHtmlTags` pass claims valid tags before this `<` recognizer runs.
+   Such tags are opaque to link brackets and delimiters; this document's
+   autolink rules apply only when the raw-HTML scan fails. The
+   `[foo <bar attr="](baz)">` shape therefore keeps the tag's brackets and
+   parentheses opaque rather than accidentally forming a link.
 4. **`&...;` entities stay literal** inside autolinks (entities
    deferred) — consistent with links/images.
 5. **`<`/`>` inside an autolink's content** are impossible by

@@ -564,10 +564,10 @@ only reading consistent with the spec text; it is pinned with a fixture.
   *before* emphasis matching; delimiters inside them are inert (e.g.
   `` `*` `` is a code span, not an opener). Code spans (backtick discovery
   in scan) and links (bracket discovery between scan and match) are
-  implemented; autolinks now land as a `<` recognizer in the same scan
-  (docs/AUTOLINKS.md), and raw HTML remains a future recognizer inserted
-  the same way, which is why the scan must remain a real tokenizer rather
-  than a tower of regexes.
+  implemented; autolinks land as a `<` recognizer in the same scan
+  (docs/AUTOLINKS.md), and raw HTML is discovered over the whole paragraph
+  and merged with code spans before that scan (docs/RAW-HTML.md). This is why
+  the scan must remain a real tokenizer rather than a tower of regexes.
 - **Textile:** the roadmap maps Textile `_`/`*`/`**`/`__` onto the same
   document nodes. The scan → match → emit pipeline and the stack are
   dialect-agnostic; the *classification rules* (flanking, intraword policy)

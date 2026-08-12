@@ -2,22 +2,24 @@
 
 Tests are the contract. `zig build test` runs two suites:
 
-1. **Library module tests** — `test` blocks inside `src/*.zig` (75 tests):
-   unit tests for `source`, `document`, `diagnostic`, `markdown` (including
-   the emphasis/strong span, mod-3, escape, nesting, code-span
+1. **Library module tests** — `test` blocks inside `src/*.zig` (84 tests):
+   unit tests for `source`, `document`, `diagnostic`, `markdown`
+   (including the emphasis/strong span, mod-3, escape, nesting, code-span
    run-length/trim/opacity, link precedence/nesting/escape/span,
    reference-link label-normalization/first-wins/fall-through,
    reference-image full/collapsed/shortcut resolution and alt
-   flattening, image structure/alt-flattening/nesting/escape/precedence,
-   and blockquote structure/span/laziness/interruption/blank-separation
-   assertions; autolink URI/email structure, spans, mailto hrefs,
-   inert-escape payloads, literal negatives, nesting inside emphasis/link
-   text, and alt flattening), `unicode` (case-fold), `textile`, `html`
-   (including hand-built emphasis/strong/code-span/link/image rendering),
-   and the public API. (The html.zig tests also run standalone via
-   `zig test src/html.zig`; see the build wiring note below.)
+   flattening, image
+   structure/alt-flattening/nesting/escape/precedence assertions, and
+   autolink URI/email structure, spans, mailto hrefs, inert-escape
+   payloads, literal negatives, nesting inside emphasis/link text, and
+   alt flattening, raw HTML grammar/spans/precedence/multiline suppression,
+   and raw HTML image-alt flattening),
+   `unicode` (case-fold), `textile`, `html` (including hand-built
+   emphasis/strong/code-span/raw-HTML/link/image rendering), and the public API.
+   (The html.zig tests also run standalone via `zig test src/html.zig`;
+   see the build wiring note below.)
 2. **Fixture tests** — `tests/fixtures_test.zig` (6 tests): byte-exact
-   fixture rendering for both dialects (171 Markdown fixtures, of which
+   fixture rendering for both dialects (172 Markdown fixtures, of which
    19 cover emphasis/strong per docs/INLINE-PARSING.md §15, 12 cover
    code spans per §6.6, 22 cover inline links per §6.6, 17 cover inline
    images per docs/IMAGES-PARSING.md §7, 18 cover block quotes per
@@ -38,7 +40,9 @@ Tests are the contract. `zig build test` runs two suites:
    backslashes in content, emails with `+` and hyphenated domains,
    `mailto:` hrefs, and the five literal negatives), plus autolinks in
    sentences, emphasis, adjacent pairs, link text (spec example 526's
-   precedence), and image alt flattening), the
+   precedence), and image alt flattening), and 19 raw-HTML fixture cases
+   covering all 20 §6.6 spec examples (the paired comment and
+   backslash-attribute examples share fixtures), the
    shared-model convergence proof, NUL policy, adversarial smoke (100 KB
    delimiter/backtick/bracket runs, 10k-deep open chains, 50k
    alternating `*`/`_` runs, 50k alternating `` ` ``/`*` runs, 20k
@@ -67,7 +71,8 @@ tests/fixtures/<dialect>/<name>.html    # expected output
 
 - `<ext>` is `.md` for Markdown, `.textile` for Textile.
 - Expected outputs are **exact bytes**: trailing newlines matter (the
-  renderer always ends nonempty output with `\n`).
+  renderer always ends nonempty output with `\n`; raw HTML may additionally
+  preserve source line endings inside a tag).
 - Markdown and Textile fixtures live in **separate directories** even when
   they produce the same normalized structure.
 - Fixtures are embedded at compile time (`@embedFile`), so tests run
@@ -145,12 +150,13 @@ outputs omit the final newline block renderers emit (one trailing newline
 on the actual output is ignored). The report is deterministic and exits 0
 in report mode; `--gate` is for CI-style enforcement once a section is
 where we want it. Baseline (0.31.2, after the blockquote and
-reference-style-images milestones): **382/655 examples pass** — inline
-sections are mostly green (images 100%, emphasis 96%, links 91%, code
-spans 90%, ATX headings 88%), block quotes went 0/25 → 18/25 (the 7
-failures are exactly the pending indented/fenced code, thematic-break,
-and list constructs), and the remaining block-level sections (HTML
-blocks 0%, lists ~7%) are the ongoing work.
+reference-style-images milestones and before raw HTML): **382/655 examples
+pass** — inline sections are mostly green (images 100%, emphasis 96%, links
+91%, code spans 90%, ATX headings 88%), block quotes went 0/25 → 18/25 (the
+7 failures are exactly the pending indented/fenced code, thematic-break, and
+list constructs), and the remaining block-level sections (HTML blocks 0%,
+lists ~7%) are the ongoing work. Refresh this scorecard after each
+conformance milestone.
 
 ## Running
 
