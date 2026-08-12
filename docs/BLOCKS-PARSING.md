@@ -1,6 +1,7 @@
 # Oliver Block Parsing: Container Blocks (Block Quotes, Lists)
 
-**Status: design contract, written before container-block code exists.**
+**Status: implementation contract. Block quotes and lists now share the
+container stack; leaf-block companions remain pending.**
 This document derives Oliver's container-block algorithm from the
 CommonMark spec (§5 "Container blocks and leaf blocks", §5.1 "Block
 quotes", §5.2 "List items", §5.3 "Lists", and the appendix "A parsing
@@ -8,9 +9,10 @@ strategy"), quoted and paraphrased. Implementation follows this document
 block quote first (§5.1), then list items and lists (§5.2/§5.3); the
 architecture is designed up front so both fit the same seam.
 
-**Baseline at the time of writing:** `zig build spec-conformance -- spec.txt`
-scores Block quotes 0/25, List items 5/48, Lists 2/27 (those stray passes
-are coincidental paragraph rendering). Every number below is the target.
+The container milestones are verified with the sectioned scorecard. The list
+sections currently score 31/48 (List items) and 21/27 (Lists); remaining
+failures are examples whose expected output also requires the not-yet-
+implemented code, thematic-break, setext, or raw-HTML leaf blocks.
 
 ---
 
@@ -183,11 +185,10 @@ per line:
 **Paragraph-continuation-text hook.** Step C depends on knowing which
 lines would *start an interruptible block*. Oliver keeps a small predicate
 `startsInterruptingBlock(cursor)` that grows with each block milestone.
-Today it recognizes `>` (block quote) and `#`-ATX headings as
-interrupting starts; everything else is continuation text. When thematic
-breaks and lists land, `---`/`***`/`___`, `- `, `+ `, `* `, and `1. ` are
-added, and the blockquote examples that depend on them flip from "blocked"
-to "passing" on the scorecard.
+Today it recognizes `>` (block quote), `#`-ATX headings, and list markers
+(`- `, `+ `, `* `, and `1. `, with the §5.2 exceptions) as interrupting
+starts; everything else is continuation text. Thematic breaks
+(`---`/`***`/`___`) remain a separate pending leaf-block milestone.
 
 **Interruption rule summary** (implemented vs pending):
 
@@ -196,7 +197,7 @@ to "passing" on the scorecard.
 | block quote `>` | yes |
 | ATX heading `#` | yes |
 | thematic break | yes (pending) |
-| list item | yes, with §5.2 exceptions (pending) |
+| list item | yes, with §5.2 exceptions |
 | fenced code | yes (pending) |
 | indented code | no (pending) |
 | setext underline | transforms the open paragraph (pending) |
@@ -221,11 +222,11 @@ uses.)
    `<blockquote>`/`</blockquote>` to the renderer; definitions and inline
    parsing inside quotes work unchanged (phase-2 jobs carry the node, and
    definitions are document-global per §4.7).
-2. **List items and lists (§5.2/§5.3)** — next. Extends the same stack
+2. **List items and lists (§5.2/§5.3)** — implemented. Extends the same stack
    with item content-indentation matching, same-type merging, tight/loose
    tracking, and `<ul>`/`<ol>` rendering. This also unlocks the
    quote-in-list and list-in-quote examples.
-3. **Leaf-block companions** — thematic breaks (§4.1) and setext headings
+3. **Leaf-block companions** — next: thematic breaks (§4.1) and setext headings
    (§4.3) close the lazy-continuation loop; indented/fenced code (§4.4/
    §4.5) and HTML blocks (§4.6) complete the block grammar.
 
@@ -259,8 +260,9 @@ uses.)
 - Unit tests: span assertions (quote span = union of stripped lines,
   nested quote spans, paragraph spans inside quotes), and the container
   stack's marker consumption.
-- Renderer: hand-built `block_quote` document renders `<blockquote>`/
-  `</blockquote>\n`; nested quotes indent naturally via nesting.
+- Renderer: hand-built `block_quote` documents render `<blockquote>`/
+  `</blockquote>\n`; list documents render `<ul>`/`<ol>` and use the
+  tight/loose paragraph framing rules; nested containers compose naturally.
 - Regression: the full suite (68 tests) stays green — paragraphs,
   headings, definitions, and all inline behavior unchanged outside
   quotes.

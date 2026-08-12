@@ -1,10 +1,10 @@
 //! Markdown frontend.
 //!
-//! Implemented: paragraphs, ATX headings, backslash escapes, hard and soft
-//! line breaks, emphasis and strong emphasis, code spans (§6.1), raw HTML
-//! tags (§6.6), inline links (§6.6), inline images (§6.7), and autolinks
-//! (§6.8). Behavior is
-//! taken from the CommonMark specification (0.31.2) where the slice
+//! Implemented: paragraphs, ATX headings, block quotes (§5.1), list items
+//! and lists (§5.2/§5.3), backslash escapes, hard and soft line breaks,
+//! emphasis and strong emphasis, code spans (§6.1), raw HTML tags (§6.6),
+//! inline links (§6.6), inline images (§6.7), and autolinks (§6.8). Behavior
+//! is taken from the CommonMark specification (0.31.2) where the slice
 //! implements it; divergences and chosen behaviors are documented in
 //! docs/FEATURE-MATRIX.md, and the emphasis/strong algorithm is derived
 //! in docs/INLINE-PARSING.md (images: docs/IMAGES-PARSING.md;
@@ -60,7 +60,8 @@
 //!
 //! The parser runs in two passes, matching the spec's precedence model:
 //! block structure first, then inline structure. The block pass recognizes
-//! paragraphs and ATX headings; everything else is a paragraph.
+//! paragraphs, ATX headings, block quotes, list items, and lists; unsupported
+//! leaf-block forms currently fall back to paragraphs.
 //!
 //! The inline pass is discovery plus three phases (see
 //! docs/INLINE-PARSING.md §8):
@@ -107,70 +108,155 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     // reference link may precede the definition it uses. `pending` records
     // each block's raw content for the second pass.
     //
-    // Phase 1 keeps a stack of open *container* blocks (block quotes; lists
-    // join later) plus one open leaf (a paragraph). Each line is matched
-    // against the containers top-down, consuming markers; unmatched
-    // containers stay open only for a lazy paragraph continuation, and are
-    // otherwise closed (see docs/BLOCKS-PARSING.md §5). The document root
-    // is implicit below the stack, so `leafParent` is the deepest container
-    // or `doc.root`.
+    // Phase 1 keeps a stack of open *container* blocks (block quotes, lists,
+    // list items) plus one open leaf (a paragraph). Each line is matched
+    // against the containers top-down, consuming markers and indentation;
+    // unmatched containers stay open only for a lazy paragraph continuation,
+    // and are otherwise closed (see docs/BLOCKS-PARSING.md §5). The document
+    // root is implicit below the stack, so `leafParent` is the deepest
+    // container or `doc.root`.
     var defs = Definitions.init(doc.allocator());
     defer defs.deinit();
     var pending = std.ArrayList(PendingInline).empty;
     defer pending.deinit(doc.allocator());
-    var containers = std.ArrayList(*document.Node).empty;
+    var containers = std.ArrayList(ContainerState).empty;
     defer containers.deinit(doc.allocator());
     var paragraph: ?Paragraph = null;
 
     var lines = source.Lines.init(doc.src.bytes);
     while (lines.next()) |line| {
-        // A. Match open containers top-down, consuming one marker each.
+        // A. Match open containers top-down, consuming one marker each. A
+        // block quote consumes `> `; a list item consumes its content
+        // indentation; a list consumes nothing (its fate is decided by its
+        // item and by whether a new same-type item starts).
         var view = line;
         var matched: usize = 0;
         while (matched < containers.items.len) {
-            const stripped = tryStripBlockQuoteMarker(view) orelse break;
-            view = stripped;
+            const c = &containers.items[matched];
+            switch (c.node.tag) {
+                .block_quote => {
+                    const stripped = tryStripBlockQuoteMarker(view) orelse break;
+                    view = stripped;
+                },
+                .list => {
+                    // With no item on the stack below it the list is dead
+                    // (its blank-start item was already popped).
+                    if (matched + 1 >= containers.items.len) break;
+                },
+                .list_item => {
+                    if (c.inert) break;
+                    if (isBlank(view.text)) {
+                        // Blank lines keep items open; a blank-start item
+                        // tolerates at most one following blank (§5.2 rule
+                        // 3), after which it is inert.
+                        if (c.blank_start) c.inert = true;
+                    } else {
+                        const indent = countIndent(view.text);
+                        if (indent < c.content_indent) break;
+                        view = advance(view, c.content_indent);
+                    }
+                },
+                else => unreachable,
+            }
             matched += 1;
         }
 
         // B. Blank line: close the leaf and any container whose marker was
-        // absent (consecutiveness — a blank line separates block quotes).
-        // Marker-blank lines keep their container open.
+        // absent. Blank lines keep block quotes (marker-blank) and list
+        // items open; a blank line may make a list loose, but the decision
+        // is deferred until the next line shows whether the blank separated
+        // blocks inside an item or two items (§5.3).
         if (isBlank(view.text)) {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            noteListBlankLines(&containers, matched);
             containers.shrinkRetainingCapacity(matched);
+            // A blank line with only a dead item on the stack (an inert
+            // blank-start item failed to match) closes its list too.
+            if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
+                containers.shrinkRetainingCapacity(containers.items.len - 1);
+            }
             extendContainerSpans(&containers, view);
             continue;
         }
 
-        // C. Lazy continuation (§5.1 rule 2): a line that fails a container's
-        // marker can still continue the paragraph inside it, if the remainder
-        // is paragraph continuation text. Otherwise the unmatched containers
-        // close and the line is reprocessed as a fresh start.
+        // C. Lazy continuation (§5.1 rule 2, §5.2 rule 5): a line that
+        // fails a container's condition can still continue the paragraph
+        // inside it, if the remainder is paragraph continuation text.
+        // Otherwise the unmatched containers close and the line is
+        // reprocessed as a fresh start. A list whose item failed without a
+        // replacement item closes too.
         if (matched < containers.items.len) {
-            if (paragraph != null and isParagraphContinuationText(view)) {
+            const list_sibling = startsListSibling(&containers, matched, view);
+            resolveListBlankPending(&containers, matched, view);
+            if (paragraph != null and !list_sibling and isParagraphContinuationText(view)) {
                 try appendParagraphLine(doc, &paragraph, view);
                 extendContainerSpans(&containers, view);
                 continue;
             }
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
             containers.shrinkRetainingCapacity(matched);
+            if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
+                const top_list = containers.items[containers.items.len - 1].node;
+                const m = tryListMarker(view);
+                if (m == null or !sameListType(top_list, m.?)) {
+                    containers.shrinkRetainingCapacity(containers.items.len - 1);
+                }
+            }
+        } else {
+            resolveListBlankPending(&containers, matched, view);
         }
 
-        // D. New block starts on the remainder. A block quote interrupts a
-        // paragraph (so close it here — the phase C path above only runs
-        // when containers already exist), and markers may nest, so strip
-        // them all and open one container per marker.
-        while (tryStripBlockQuoteMarker(view)) |stripped| {
-            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
-            const node = try doc.createNode(.block_quote, stripped.contentSpan(), .none);
-            try doc.appendChild(leafParent(doc, &containers), node);
-            try containers.append(doc.allocator(), node);
-            view = stripped;
+        // D. New block starts on the remainder. Block quotes and list
+        // markers may nest (each consumes its marker and the remainder is
+        // re-examined); an ATX heading ends the loop (its content is inline
+        // text). A list item interrupts an open paragraph only when it can
+        // (§5.2 rule 1 exceptions); otherwise the line is paragraph text.
+        while (true) {
+            if (tryStripBlockQuoteMarker(view)) |stripped| {
+                try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+                const node = try doc.createNode(.block_quote, stripped.contentSpan(), .none);
+                try doc.appendChild(leafParent(doc, &containers), node);
+                try containers.append(doc.allocator(), .{ .node = node });
+                view = stripped;
+                continue;
+            }
+            if (tryListMarker(view)) |m| {
+                if (paragraph != null and !m.can_interrupt) break;
+                try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+                // Reuse an open same-type list, or close a different-type
+                // list, or open a new list under the current parent.
+                var list_node: *document.Node = undefined;
+                if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
+                    const top_state = &containers.items[containers.items.len - 1];
+                    const top = top_state.node;
+                    if (sameListType(top, m)) {
+                        list_node = top;
+                    } else {
+                        containers.shrinkRetainingCapacity(containers.items.len - 1);
+                        list_node = try doc.createNode(.list, m.rest.contentSpan(), .{ .list = m.listData() });
+                        try doc.appendChild(leafParent(doc, &containers), list_node);
+                        try containers.append(doc.allocator(), .{ .node = list_node });
+                    }
+                } else {
+                    list_node = try doc.createNode(.list, m.rest.contentSpan(), .{ .list = m.listData() });
+                    try doc.appendChild(leafParent(doc, &containers), list_node);
+                    try containers.append(doc.allocator(), .{ .node = list_node });
+                }
+                const item = try doc.createNode(.list_item, m.rest.contentSpan(), .none);
+                try doc.appendChild(list_node, item);
+                try containers.append(doc.allocator(), .{
+                    .node = item,
+                    .content_indent = m.content_indent,
+                    .blank_start = m.blank_start,
+                });
+                view = m.rest;
+                continue;
+            }
+            break;
         }
         // A marker-only line (`>` alone, or a line whose markers are all
-        // consumed) is a blank line inside the quote, not an empty
-        // paragraph.
+        // consumed, or a blank-start list item) is a blank line inside the
+        // container, not an empty paragraph.
         if (isBlank(view.text)) {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
             extendContainerSpans(&containers, view);
@@ -198,22 +284,42 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     }
 }
 
+/// Per-container state on the phase-1 stack.
+const ContainerState = struct {
+    node: *document.Node,
+    /// For `.list_item`: the content indentation (marker indentation + W +
+    /// N, §5.2 rules 1–3), in spaces — how far a continuation line must be
+    /// indented to stay in the item.
+    content_indent: u32 = 0,
+    /// For `.list_item`: the item began with a blank line (rule 3); its
+    /// required content indentation is W+1 regardless of the marker's
+    /// trailing spaces.
+    blank_start: bool = false,
+    /// For `.list_item`: dead after its second blank line ("A list item can
+    /// begin with at most one blank line"); matches nothing.
+    inert: bool = false,
+    /// For `.list`: a blank line was seen while this list was open. The
+    /// loose decision is deferred (docs/BLOCKS-PARSING.md §4) until the next
+    /// line shows whether it separates direct blocks/items in this list.
+    blank_pending: bool = false,
+};
+
 /// The node under which a new leaf or container is created: the deepest
 /// open container, or the document root when the stack is empty.
-fn leafParent(doc: *document.Document, containers: *const std.ArrayList(*document.Node)) *document.Node {
+fn leafParent(doc: *document.Document, containers: *const std.ArrayList(ContainerState)) *document.Node {
     if (containers.items.len == 0) return doc.root;
-    return containers.items[containers.items.len - 1];
+    return containers.items[containers.items.len - 1].node;
 }
 
 /// Extends every open container's span end to cover the current line, so a
-/// block quote's span is the union of its (marker-stripped) content lines.
-/// `line.content_end` is the full line's content end; stripping only moves
-/// the start, so this is correct for matched, lazy, and blank-marker lines
-/// alike.
-fn extendContainerSpans(containers: *const std.ArrayList(*document.Node), line: source.Line) void {
+/// block quote's or list item's span is the union of its (marker-stripped)
+/// content lines. `line.content_end` is the full line's content end;
+/// stripping only moves the start, so this is correct for matched, lazy,
+/// and blank-marker lines alike.
+fn extendContainerSpans(containers: *const std.ArrayList(ContainerState), line: source.Line) void {
     const end: u32 = @intCast(line.content_end);
     for (containers.items) |c| {
-        if (c.span.end < end) c.span.end = end;
+        if (c.node.span.end < end) c.node.span.end = end;
     }
 }
 
@@ -237,13 +343,268 @@ fn tryStripBlockQuoteMarker(line: source.Line) ?source.Line {
     };
 }
 
+/// A list marker recognized on a line (§5.2): a bullet character (`-`,
+/// `+`, `*`) or 1–9 digits followed by `.` or `)`, optionally preceded by
+/// up to three spaces.
+const ListMarker = struct {
+    const Kind = enum { bullet, ordered };
+
+    kind: Kind,
+    /// Bullet marker character, for same-type merging (§5.3).
+    bullet: u8 = 0,
+    /// Ordered delimiter (`.` or `)`), for same-type merging.
+    delimiter: u8 = 0,
+    /// Ordered start number (the marker's number; 1 for bullets).
+    start: u32 = 1,
+    /// Marker width W (1 for bullets; digits + 1 for ordered).
+    width: u32,
+    /// Content indentation of the item being opened: marker indentation
+    /// plus W plus N (§5.2 rules 1–3; N=1 for blank-start and
+    /// indented-code-first items).
+    content_indent: u32,
+    /// The item's first line begins with a blank line (rule 3).
+    blank_start: bool,
+    /// The line after the marker and its indentation.
+    rest: source.Line,
+    /// Whether the item may interrupt an open paragraph: not when it
+    /// begins with a blank line, and for ordered items not when the start
+    /// number is not 1 (§5.2 rule 1 exceptions).
+    can_interrupt: bool,
+
+    fn listData(self: ListMarker) document.List {
+        return switch (self.kind) {
+            .bullet => .{ .kind = .bullet, .bullet = self.bullet },
+            .ordered => .{ .kind = .ordered, .delimiter = self.delimiter, .start = self.start },
+        };
+    }
+};
+
+/// Recognizes a list marker at the start of `line` (§5.2). The marker may
+/// be preceded by up to three spaces (measured in the current view — a
+/// quote's content — so nested lists compose); a tab disqualifies the line
+/// (full tab handling deferred). The content indentation is the marker's
+/// own indentation plus W plus N (rules 1–3): the spec's "let the width and
+/// indentation of the list marker determine the indentation necessary for
+/// blocks to fall under the list item" (docs/BLOCKS-PARSING.md §3).
+fn tryListMarker(line: source.Line) ?ListMarker {
+    const t = line.text;
+    var i: usize = 0;
+    var marker_indent: u32 = 0;
+    while (i < t.len and t[i] == ' ' and marker_indent < 3) : (i += 1) marker_indent += 1;
+    if (i >= t.len or t[i] == '\t') return null;
+
+    var kind: ListMarker.Kind = undefined;
+    var bullet: u8 = 0;
+    var delimiter: u8 = 0;
+    var start: u32 = 1;
+    var width: u32 = 0;
+    if (t[i] == '-' or t[i] == '+' or t[i] == '*') {
+        kind = .bullet;
+        bullet = t[i];
+        width = 1;
+        i += 1;
+    } else if (t[i] >= '0' and t[i] <= '9') {
+        const digit_start = i;
+        while (i < t.len and t[i] >= '0' and t[i] <= '9') : (i += 1) {}
+        const digits = i - digit_start;
+        if (digits > 9) return null; // §5.2: at most nine digits
+        if (i >= t.len or (t[i] != '.' and t[i] != ')')) return null;
+        kind = .ordered;
+        delimiter = t[i];
+        var n: u32 = 0;
+        for (t[digit_start..i]) |b| n = n * 10 + (b - '0');
+        start = n;
+        width = @intCast(digits + 1);
+        i += 1;
+    } else {
+        return null;
+    }
+
+    // Spaces after the marker (tabs deferred).
+    const space_start = i;
+    while (i < t.len and t[i] == ' ') : (i += 1) {}
+    if (i < t.len and t[i] == '\t') return null;
+    const n: u32 = @intCast(i - space_start);
+
+    var blank_start = false;
+    var content_indent: u32 = 0;
+    var rest: source.Line = undefined;
+    if (i >= t.len) {
+        // Nothing after the marker: the item starts with a blank line
+        // (rule 3); required indentation is W+1.
+        blank_start = true;
+        content_indent = marker_indent + width + 1;
+        rest = .{ .text = t[i..], .start = line.start + i, .content_end = line.content_end, .end = line.end };
+    } else if (n == 0) {
+        return null; // the marker must be followed by 1–4 spaces
+    } else if (n <= 4) {
+        // Rule 1: the first block is ordinary content; indentation W+N.
+        content_indent = marker_indent + width + n;
+        rest = .{ .text = t[i..], .start = line.start + i, .content_end = line.content_end, .end = line.end };
+    } else {
+        // 5+ spaces: the first block is an indented code block (rule 2);
+        // content indentation is W+1 and the code's own four spaces follow.
+        content_indent = marker_indent + width + 1;
+        const after_one = i - (n - 1);
+        rest = .{ .text = t[after_one..], .start = line.start + after_one, .content_end = line.content_end, .end = line.end };
+    }
+
+    return .{
+        .kind = kind,
+        .bullet = bullet,
+        .delimiter = delimiter,
+        .start = start,
+        .width = width,
+        .content_indent = content_indent,
+        .blank_start = blank_start,
+        .rest = rest,
+        .can_interrupt = !blank_start and (kind == .bullet or start == 1),
+    };
+}
+
+/// Are `m`'s items of the same list type as `list_node` (§5.3): same
+/// bullet character, or same ordered delimiter?
+fn sameListType(list_node: *document.Node, m: ListMarker) bool {
+    const list = list_node.data.list;
+    return switch (m.kind) {
+        .bullet => list.kind == .bullet and list.bullet == m.bullet,
+        .ordered => list.kind == .ordered and list.delimiter == m.delimiter,
+    };
+}
+
+/// Leading spaces of a line (tabs deferred: a tab stops the count).
+fn countIndent(text: []const u8) u32 {
+    var i: usize = 0;
+    while (i < text.len and text[i] == ' ') : (i += 1) {}
+    return @intCast(i);
+}
+
+/// Advances a line view by `n` bytes (a matched container's consumed
+/// indentation). `content_end`/`end` are absolute, so they are unchanged.
+fn advance(line: source.Line, n: u32) source.Line {
+    const k: usize = n;
+    return .{
+        .text = line.text[k..],
+        .start = line.start + k,
+        .content_end = line.content_end,
+        .end = line.end,
+    };
+}
+
+/// Records a blank line for each open list whose direct item is matched by
+/// this line. A blank line in a nested list must not make an enclosing list
+/// loose; a blank line with no intervening blockquote marker, however, can
+/// separate an outer item's nested block from its next block, so all list
+/// levels are recorded here and resolved when the next nonblank line shows
+/// which level the blank belonged to.
+fn noteListBlankLines(containers: *std.ArrayList(ContainerState), matched: usize) void {
+    for (containers.items, 0..) |*state, i| {
+        if (i >= matched or state.node.tag != .list) continue;
+        if (i + 1 >= matched or containers.items[i + 1].node.tag != .list_item) continue;
+
+        var inside_quote = false;
+        var j = i + 2;
+        while (j < matched) : (j += 1) {
+            if (containers.items[j].node.tag == .block_quote) {
+                inside_quote = true;
+                break;
+            }
+        }
+        if (!inside_quote) state.blank_pending = true;
+    }
+}
+
+/// A marker at the point where an open list's direct item failed is a
+/// sibling item, even when the marker would not be allowed to interrupt a
+/// paragraph at the document level (for example `2.` or a blank item). The
+/// active list makes the block boundary unambiguous.
+fn startsListSibling(
+    containers: *const std.ArrayList(ContainerState),
+    matched: usize,
+    line: source.Line,
+) bool {
+    if (matched == 0 or matched > containers.items.len) return false;
+    if (containers.items[matched - 1].node.tag != .list) return false;
+    return tryListMarker(line) != null;
+}
+
+/// Resolves pending blank lines once a nonblank line arrives. A list is loose
+/// when the line resumes its direct item after the blank, or starts a sibling
+/// item in that list. If a nested list is still the active destination, the
+/// blank belongs to that nested list and the enclosing list stays tight.
+fn resolveListBlankPending(
+    containers: *std.ArrayList(ContainerState),
+    matched: usize,
+    line: source.Line,
+) void {
+    const old_len = containers.items.len;
+    const marker = tryListMarker(line);
+
+    var i = old_len;
+    while (i > 0) {
+        i -= 1;
+        const state = &containers.items[i];
+        if (state.node.tag != .list or !state.blank_pending) continue;
+
+        // The list is closing before this line. A pending blank at the end of
+        // a list does not make that list loose.
+        if (i >= matched) {
+            state.blank_pending = false;
+            continue;
+        }
+
+        // A direct sibling marker follows the list itself when its item did
+        // not match. This is a blank-separated item pair.
+        if (i + 1 >= matched or containers.items[i + 1].node.tag != .list_item) {
+            if (i + 1 == matched and marker != null and sameListType(state.node, marker.?)) {
+                state.node.data.list.loose = true;
+            }
+            state.blank_pending = false;
+            continue;
+        }
+
+        // The direct item matched and there is no nested container left on
+        // the old stack: this line is a new direct block after the blank.
+        if (matched == i + 2) {
+            state.node.data.list.loose = true;
+            state.blank_pending = false;
+            continue;
+        }
+
+        // All nested containers matched, so the line remains inside the
+        // nested structure and the blank belongs there.
+        if (matched == old_len) {
+            state.blank_pending = false;
+            continue;
+        }
+
+        // A nested list remains matched while its item failed. A list marker
+        // at the cursor is a sibling in that nested list; otherwise the
+        // nested list is ending and the line resumes the outer item.
+        if (matched > i + 2 and
+            containers.items[matched - 1].node.tag == .list and
+            marker != null)
+        {
+            state.blank_pending = false;
+            continue;
+        }
+
+        state.node.data.list.loose = true;
+        state.blank_pending = false;
+    }
+}
+
 /// Is the remainder of a line paragraph continuation text (§5.1 laziness)?
-/// That is, it does not start a block that can interrupt a paragraph.
-/// Currently those are a block quote marker and an ATX heading; thematic
-/// breaks and list markers join this check when those milestones land
-/// (docs/BLOCKS-PARSING.md §5).
+/// That is, it does not start a block that can interrupt a paragraph:
+/// currently a block quote marker, an ATX heading, or a list item that can
+/// interrupt (a blank-start item or an ordered item not starting at 1
+/// cannot, §5.2 rule 1 exceptions). Thematic breaks join this check when
+/// that milestone lands (docs/BLOCKS-PARSING.md §5).
 fn isParagraphContinuationText(line: source.Line) bool {
-    return tryStripBlockQuoteMarker(line) == null and tryAtxHeading(line) == null;
+    if (tryStripBlockQuoteMarker(line) != null) return false;
+    if (tryAtxHeading(line) != null) return false;
+    if (tryListMarker(line)) |m| return !m.can_interrupt;
+    return true;
 }
 
 /// A block whose inlines are parsed in phase 2, once every link reference
@@ -2929,13 +3290,15 @@ test "markdown: emphasis structure, spans, and literal fallback" {
         try testing.expectEqualStrings("foo", t.data.text);
         try testing.expectEqual(source.Span{ .start = 1, .end = 4 }, t.span);
     }
-    // A bare run with no opener is literal text.
+    // A bare run with no opener is literal text (spec example 357:
+    // `*foo bar *` — note the opener is not followed by a space, so the
+    // line is not a list item).
     {
-        var result = try oliver.parse(testing.allocator, "* a *", .markdown, .{});
+        var result = try oliver.parse(testing.allocator, "*foo bar *", .markdown, .{});
         defer result.deinit();
         const p = result.document.root.children.items[0];
         try testing.expectEqual(@as(usize, 1), p.children.items.len);
-        try testing.expectEqualStrings("* a *", p.children.items[0].data.text);
+        try testing.expectEqualStrings("*foo bar *", p.children.items[0].data.text);
     }
 }
 
@@ -4231,4 +4594,83 @@ test "markdown: definitions inside a block quote register document-wide" {
     try testing.expectEqual(@as(usize, 1), p.children.items.len);
     try testing.expectEqual(document.Tag.link, p.children.items[0].tag);
     try testing.expectEqualStrings("/url", p.children.items[0].data.link.href);
+}
+
+test "markdown: lists merge by bullet or ordered delimiter" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "- one\n- two\n+ three\n10) ten\n20) twenty\n",
+        .markdown,
+        .{},
+    );
+    defer result.deinit();
+
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 3), root.children.items.len);
+
+    const dash = root.children.items[0];
+    try testing.expectEqual(document.Tag.list, dash.tag);
+    try testing.expectEqual(document.ListKind.bullet, dash.data.list.kind);
+    try testing.expectEqual(@as(u8, '-'), dash.data.list.bullet);
+    try testing.expectEqual(@as(usize, 2), dash.children.items.len);
+
+    const plus = root.children.items[1];
+    try testing.expectEqual(document.Tag.list, plus.tag);
+    try testing.expectEqual(document.ListKind.bullet, plus.data.list.kind);
+    try testing.expectEqual(@as(u8, '+'), plus.data.list.bullet);
+
+    const ordered = root.children.items[2];
+    try testing.expectEqual(document.Tag.list, ordered.tag);
+    try testing.expectEqual(document.ListKind.ordered, ordered.data.list.kind);
+    try testing.expectEqual(@as(u8, ')'), ordered.data.list.delimiter);
+    try testing.expectEqual(@as(u32, 10), ordered.data.list.start);
+    try testing.expectEqual(@as(usize, 2), ordered.children.items.len);
+
+    var separated = try oliver.parse(testing.allocator, "- a\n\n+ b\n", .markdown, .{});
+    defer separated.deinit();
+    try testing.expectEqual(@as(usize, 2), separated.document.root.children.items.len);
+    try testing.expect(!separated.document.root.children.items[0].data.list.loose);
+    try testing.expect(!separated.document.root.children.items[1].data.list.loose);
+}
+
+test "markdown: nested lists use content indentation and loose state" {
+    const oliver = @import("oliver.zig");
+    var nested = try oliver.parse(testing.allocator, "- parent\n  - child\n    - grandchild\n", .markdown, .{});
+    defer nested.deinit();
+
+    const outer = nested.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.list, outer.tag);
+    try testing.expect(!outer.data.list.loose);
+    const outer_item = outer.children.items[0];
+    try testing.expectEqual(document.Tag.list_item, outer_item.tag);
+    try testing.expectEqual(document.Tag.paragraph, outer_item.children.items[0].tag);
+    const middle = outer_item.children.items[1];
+    try testing.expectEqual(document.Tag.list, middle.tag);
+    const middle_item = middle.children.items[0];
+    const inner = middle_item.children.items[1];
+    try testing.expectEqual(document.Tag.list, inner.tag);
+    try testing.expectEqualStrings("grandchild", inner.children.items[0].children.items[0].children.items[0].data.text);
+
+    var loose = try oliver.parse(testing.allocator, "- a\n- b\n\n  c\n- d\n", .markdown, .{});
+    defer loose.deinit();
+    const list = loose.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.list, list.tag);
+    try testing.expect(list.data.list.loose);
+    const second = list.children.items[1];
+    try testing.expectEqual(@as(usize, 2), second.children.items.len);
+    try testing.expectEqual(document.Tag.paragraph, second.children.items[0].tag);
+    try testing.expectEqual(document.Tag.paragraph, second.children.items[1].tag);
+}
+
+test "markdown: blank-start and empty items stay distinct" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "-\n  first\n-\n- last\n", .markdown, .{});
+    defer result.deinit();
+    const list = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.list, list.tag);
+    try testing.expectEqual(@as(usize, 3), list.children.items.len);
+    try testing.expectEqual(@as(usize, 1), list.children.items[0].children.items.len);
+    try testing.expectEqual(@as(usize, 0), list.children.items[1].children.items.len);
+    try testing.expectEqual(@as(usize, 1), list.children.items[2].children.items.len);
 }
