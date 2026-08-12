@@ -1,8 +1,9 @@
 # Oliver Inline Parsing: Emphasis and Strong Emphasis
 
 **Status: implemented (Markdown), with code spans (§6.6), inline links
-(§6.6), inline images (§6.7), and reference links (§4.7 + §6.6
-reference forms) landed on the same scan → match → emit seam.** This
+(§6.6), inline images (§6.7), reference links, and reference-style
+images (§4.7 + §6.6 reference forms) landed on the same
+scan → match → emit seam.** This
 document waswritten *before* any delimiter code existed, as the design contract; the
 implementation in `src/markdown.zig` (scan → match → emit,
 `openers_bottom` pruning) follows it, and the §15 fixture corpus plus the
