@@ -22,6 +22,8 @@
 //!   this is the one inline form whose bytes can include source line endings.
 //! - Lists render as `<ul>`/`<ol>` with `<li>` children; tight-list direct
 //!   paragraphs omit `<p>`, while loose-list paragraphs retain it.
+//! - Thematic breaks render as `<hr />` by default (or `<hr>` when the void
+//!   trailing-slash option is disabled).
 //! - Code blocks/tables: not yet implemented (no tags exist).
 //! - Generated line endings in output are always `\n`; raw HTML source spans
 //!   retain their original line-ending bytes by design.
@@ -182,6 +184,9 @@ fn writeOpen(
             try writer.writeAll(tag);
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
+        .thematic_break => {
+            try writer.writeAll(if (options.void_trailing_slash) "<hr />\n" else "<hr>\n");
+        },
         .emphasis => {
             try writer.writeAll("<em>");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
@@ -283,7 +288,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .text, .image, .autolink, .raw_html, .soft_break, .hard_break => unreachable,
+        .thematic_break, .text, .image, .autolink, .raw_html, .soft_break, .hard_break => unreachable,
     }
 }
 
@@ -684,4 +689,21 @@ test "html: mixed blocks render independently of dialect" {
     var out = try renderDoc(&doc);
     defer out.deinit(testing.allocator);
     try testing.expectEqualStrings("<h2></h2>\n<p></p>\n", out.items);
+}
+
+test "html: thematic break follows the void-element profile" {
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "***" });
+    defer doc.deinit();
+    try doc.appendChild(doc.root, try doc.createNode(.thematic_break, .{ .start = 0, .end = 3 }, .none));
+
+    var default_out = try renderDoc(&doc);
+    defer default_out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<hr />\n", default_out.items);
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try render(testing.allocator, &aw.writer, &doc, .{ .void_trailing_slash = false });
+    var modern_out = aw.toArrayList();
+    defer modern_out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<hr>\n", modern_out.items);
 }

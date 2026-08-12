@@ -22,8 +22,8 @@ Node {
 }
 ```
 
-`Tag` in the slice: `document`, `paragraph`, `heading`, `block_quote`,
-`list`, `list_item`, `text`, `emphasis`, `strong`, `code_span`, `link`, `image`,
+`Tag` in the slice: `document`, `paragraph`, `heading`, `thematic_break`,
+`block_quote`, `list`, `list_item`, `text`, `emphasis`, `strong`, `code_span`, `link`, `image`,
 `autolink`, `raw_html`, `soft_break`, `hard_break`. Blocks and inlines are
 distinguished by `Tag.isBlock` / `Tag.isInline`. `Data` carries `heading`
 level (1..6), list kind/marker metadata/start/looseness, the borrowed `text`
@@ -67,18 +67,20 @@ the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
 1. Root is `.document`; its children are blocks.
 2. `.paragraph` children are inlines.
 3. `.heading` children are inlines.
-4. `.block_quote` children are blocks (it is a container, §5.1); its span
+4. `.thematic_break` is a leaf block with no children or data payload. Its
+   span covers the marker line after enclosing container markers are stripped.
+5. `.block_quote` children are blocks (it is a container, §5.1); its span
    covers its lines' content with markers stripped, and text inside it
    slices the stripped content (marker bytes are excluded from child
    spans).
-5. `.list` children are `.list_item` blocks; `.list_item` children are
+6. `.list` children are `.list_item` blocks; `.list_item` children are
    blocks, and list payloads record bullet/ordered type, marker metadata,
    ordered start, and tight/loose state.
-6. `emphasis`/`strong`/`link` contain inline children. The leaf inline
+7. `emphasis`/`strong`/`link` contain inline children. The leaf inline
    tags (`text`, `code_span`, `image`, `autolink`, `raw_html`, `soft_break`,
    `hard_break`) never
    have children.
-7. `Data.text` always slices the document's source bytes; `raw_html` also
+8. `Data.text` always slices the document's source bytes; `raw_html` also
    borrows its bytes through `Node.span` and carries `Data.none`; the other
    text
    payloads (`code_span`, `link.href`, `link.title`, `image.src`,
@@ -86,28 +88,28 @@ the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
    arena-owned copies — normalization (code-span content, escape
    resolution, alt flattening, the `mailto:` prefix) cannot be
    expressed as a source slice.
-8. `span.start <= span.end`; all spans lie within the source.
-9. Consecutive `text` children of one parent never have contiguous spans:
+9. `span.start <= span.end`; all spans lie within the source.
+10. Consecutive `text` children of one parent never have contiguous spans:
    adjacent source bytes land in one text node. Scanning artifacts (item
    boundaries, leftover delimiters, escape splits) merge at emission, so
    the normalized model has no text fragmentation (chosen behavior,
    docs/INLINE-PARSING.md §15; a consumed backslash or delimiter byte can
    still leave a gap, which is why `a\*b` stays two nodes).
-10. `link` children never contain another `link` (links cannot contain
-   links, §6.6), but may contain `image` nodes (an image description may
-   contain links and images, §6.7); each link's children are a
+11. `link` children never contain another `link` (links cannot contain
+   links, §6.3), but may contain `image` nodes (an image description may
+   contain links and images, §6.4); each link's children are a
    self-contained inline scope. `image` is a leaf whose `alt` is the
    description's inlines flattened to a string at parse time
    (docs/IMAGES-PARSING.md §3) — the image node carries no subtree.
    `autolink` is likewise a leaf (no children): its label is the raw
    content verbatim, and backslash escapes are inert inside autolinks
-   (§6.8), so `data.autolink.label` is *not* escape-resolved — the
+   (§6.5), so `data.autolink.label` is *not* escape-resolved — the
    payload is a verbatim arena copy (docs/AUTOLINKS.md §3).
 
 ## Growth path (planned tags, not yet implemented)
 
 Blocks: `code_block` (fenced /
-indented, info string), `thematic_break`, `table` (+ `table_row`, `table_cell`
+indented, info string), `table` (+ `table_row`, `table_cell`
 with header flag).
 
 `emphasis`/`strong`/`link`/`image`/`autolink` are implemented;
@@ -125,7 +127,7 @@ escape-resolved, unlike `data.link`; the `mailto:` prefix is a copy)
 (copies,
 unlike `data.text` which borrows the source), because normalization
 cannot be expressed as a source slice. Reference links and
-reference-style images (§4.7 + §6.6 reference forms) produce the same
+reference-style images (§4.7 + §6.3 reference forms) produce the same
 `link` / `image` nodes as their inline forms — the definitions map is
 parser-internal state, not a model concept, so the model is unchanged
 by those milestones.
@@ -140,7 +142,8 @@ emit them in a fixed documented order.
 | Markdown | Textile | shared node |
 | --- | --- | --- |
 | paragraph | paragraph / `p.` | `.paragraph` |
-| ATX `#` heading | `hN.` heading | `.heading` (level) |
+| ATX/Setext heading | `hN.` heading | `.heading` (level) |
+| thematic break | (planned) | `.thematic_break` |
 | `emphasis` / `strong` | (Textile inline markers: later) | `.emphasis` / `.strong` |
 | `` `code span` `` | (Textile `@code@`: later) | `.code_span` (arena-owned content) |
 | `[x](url "title")` | (Textile `"text":url`: later) | `.link` (arena-owned href/title) |

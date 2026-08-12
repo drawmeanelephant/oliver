@@ -1,7 +1,8 @@
 # Oliver Block Parsing: Container Blocks (Block Quotes, Lists)
 
-**Status: implementation contract. Block quotes and lists now share the
-container stack; leaf-block companions remain pending.**
+**Status: implementation contract. Block quotes and lists share the
+container stack; thematic breaks and Setext headings now close the first
+leaf-block precedence rung.**
 This document derives Oliver's container-block algorithm from the
 CommonMark spec (§5 "Container blocks and leaf blocks", §5.1 "Block
 quotes", §5.2 "List items", §5.3 "Lists", and the appendix "A parsing
@@ -9,10 +10,10 @@ strategy"), quoted and paraphrased. Implementation follows this document
 block quote first (§5.1), then list items and lists (§5.2/§5.3); the
 architecture is designed up front so both fit the same seam.
 
-The container milestones are verified with the sectioned scorecard. The list
-sections currently score 31/48 (List items) and 21/27 (Lists); remaining
-failures are examples whose expected output also requires the not-yet-
-implemented code, thematic-break, setext, or raw-HTML leaf blocks.
+The container milestones are verified with the sectioned scorecard. After the
+thematic-break/Setext rung, the canonical 0.31.2 corpus scores 21/25 for block
+quotes, 32/48 for List items, and 21/27 for Lists; remaining failures require
+the not-yet-implemented code or HTML block families.
 
 ---
 
@@ -185,10 +186,11 @@ per line:
 **Paragraph-continuation-text hook.** Step C depends on knowing which
 lines would *start an interruptible block*. Oliver keeps a small predicate
 `startsInterruptingBlock(cursor)` that grows with each block milestone.
-Today it recognizes `>` (block quote), `#`-ATX headings, and list markers
-(`- `, `+ `, `* `, and `1. `, with the §5.2 exceptions) as interrupting
-starts; everything else is continuation text. Thematic breaks
-(`---`/`***`/`___`) remain a separate pending leaf-block milestone.
+It recognizes `>` (block quote), `#`-ATX headings, thematic breaks, and list
+markers (`- `, `+ `, `* `, and `1. `, with the §5.2 exceptions) as
+interrupting starts; everything else is continuation text. Setext underlines
+transform only a paragraph at the same matched container depth and therefore
+never act through a lazy/missing container marker (docs/LEAF-BLOCKS.md).
 
 **Interruption rule summary** (implemented vs pending):
 
@@ -196,11 +198,11 @@ starts; everything else is continuation text. Thematic breaks
 | --- | --- |
 | block quote `>` | yes |
 | ATX heading `#` | yes |
-| thematic break | yes (pending) |
+| thematic break | yes |
 | list item | yes, with §5.2 exceptions |
 | fenced code | yes (pending) |
 | indented code | no (pending) |
-| setext underline | transforms the open paragraph (pending) |
+| setext underline | transforms the open paragraph at matched depth |
 | link reference definition | no (§4.7, landed) |
 
 **Nesting and spans.** Each block quote node's span is the union of its
@@ -226,9 +228,12 @@ uses.)
    with item content-indentation matching, same-type merging, tight/loose
    tracking, and `<ul>`/`<ol>` rendering. This also unlocks the
    quote-in-list and list-in-quote examples.
-3. **Leaf-block companions** — next: thematic breaks (§4.1) and setext headings
-   (§4.3) close the lazy-continuation loop; indented/fenced code (§4.4/
-   §4.5) and HTML blocks (§4.6) complete the block grammar.
+3. **Leaf-block precedence rung** — implemented: thematic breaks (§4.1) and
+   Setext headings (§4.3), including their precedence over list markers and
+   lazy-container interaction (docs/LEAF-BLOCKS.md).
+4. **Code leaves** — next: fenced code (§4.5), then indented code (§4.4)
+   together with the tab/virtual-column design it requires. HTML blocks
+   (§4.6) follow an explicit block-HTML policy decision.
 
 ## 7. Chosen behaviors and divergences
 

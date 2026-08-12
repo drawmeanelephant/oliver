@@ -512,6 +512,75 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/ref-partial-paragraph.md"),
         .expected = @embedFile("fixtures/markdown/ref-partial-paragraph.html"),
     },
+    // --- thematic breaks (CommonMark 0.31.2 §4.1, examples 43-61) ---
+    .{
+        .name = "thematic-basic",
+        .input = @embedFile("fixtures/markdown/thematic-basic.md"),
+        .expected = @embedFile("fixtures/markdown/thematic-basic.html"),
+    },
+    .{
+        .name = "thematic-spacing",
+        .input = @embedFile("fixtures/markdown/thematic-spacing.md"),
+        .expected = @embedFile("fixtures/markdown/thematic-spacing.html"),
+    },
+    .{
+        .name = "thematic-precedence",
+        .input = @embedFile("fixtures/markdown/thematic-precedence.md"),
+        .expected = @embedFile("fixtures/markdown/thematic-precedence.html"),
+    },
+    .{
+        .name = "thematic-malformed",
+        .input = @embedFile("fixtures/markdown/thematic-malformed.md"),
+        .expected = @embedFile("fixtures/markdown/thematic-malformed.html"),
+    },
+    // --- Setext headings (CommonMark 0.31.2 §4.3, examples 80-106) ---
+    .{
+        .name = "setext-basic",
+        .input = @embedFile("fixtures/markdown/setext-basic.md"),
+        .expected = @embedFile("fixtures/markdown/setext-basic.html"),
+    },
+    .{
+        .name = "setext-multiline",
+        .input = @embedFile("fixtures/markdown/setext-multiline.md"),
+        .expected = @embedFile("fixtures/markdown/setext-multiline.html"),
+    },
+    .{
+        .name = "setext-continuation-indent",
+        .input = @embedFile("fixtures/markdown/setext-continuation-indent.md"),
+        .expected = @embedFile("fixtures/markdown/setext-continuation-indent.html"),
+    },
+    .{
+        .name = "setext-indent",
+        .input = @embedFile("fixtures/markdown/setext-indent.md"),
+        .expected = @embedFile("fixtures/markdown/setext-indent.html"),
+    },
+    .{
+        .name = "setext-malformed",
+        .input = @embedFile("fixtures/markdown/setext-malformed.md"),
+        .expected = @embedFile("fixtures/markdown/setext-malformed.html"),
+    },
+    .{
+        .name = "setext-final-literals",
+        .input = @embedFile("fixtures/markdown/setext-final-literals.md"),
+        .expected = @embedFile("fixtures/markdown/setext-final-literals.html"),
+    },
+    .{
+        .name = "setext-containers",
+        .input = @embedFile("fixtures/markdown/setext-containers.md"),
+        .expected = @embedFile("fixtures/markdown/setext-containers.html"),
+    },
+    .{
+        .name = "setext-reference",
+        .input = @embedFile("fixtures/markdown/setext-reference.md"),
+        .expected = @embedFile("fixtures/markdown/setext-reference.html"),
+    },
+    // CommonMark 0.31.2 hard-line-break example 644: a terminal backslash
+    // has no following content line and therefore remains literal.
+    .{
+        .name = "paragraph-terminal-backslash",
+        .input = @embedFile("fixtures/markdown/paragraph-terminal-backslash.md"),
+        .expected = @embedFile("fixtures/markdown/paragraph-terminal-backslash.html"),
+    },
     // --- block quotes (docs/BLOCKS-PARSING.md §5.1) ---
     .{
         .name = "quote-basic",
@@ -1346,6 +1415,30 @@ test "adversarial: NUL bytes render as U+FFFD" {
     var out = aw.toArrayList();
     defer out.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("<p>a\u{FFFD}b</p>\n", out.items);
+}
+
+test "adversarial: thematic and Setext leaf storm is deterministic" {
+    const gpa = std.testing.allocator;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(gpa);
+    for (0..10_000) |_| try input.appendSlice(gpa, "Heading\n---\n* * *\n");
+
+    var first = try renderHtml(input.items, .markdown);
+    defer first.deinit(gpa);
+    var second = try renderHtml(input.items, .markdown);
+    defer second.deinit(gpa);
+    try std.testing.expectEqualSlices(u8, first.items, second.items);
+
+    // Every `- ` opens a nested list view, while the final `+ x` makes every
+    // suffix a thematic-break near miss. This exercises the path that used to
+    // rescan the shrinking suffix at every nesting depth (quadratic); the
+    // once-per-line suffix facts make that path linear.
+    var deep_near_miss = std.ArrayList(u8).empty;
+    defer deep_near_miss.deinit(gpa);
+    for (0..20_000) |_| try deep_near_miss.appendSlice(gpa, "- ");
+    try deep_near_miss.appendSlice(gpa, "+ x\n");
+    var near_miss_out = try renderHtml(deep_near_miss.items, .markdown);
+    defer near_miss_out.deinit(gpa);
 }
 
 test "diagnostics: fixtures parse without diagnostics" {

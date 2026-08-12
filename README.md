@@ -20,19 +20,20 @@ does not study or imitate existing parser implementations. See
 
 ## Status
 
-Implemented so far: paragraphs, headings, backslash escapes, hard and soft
+Implemented so far: paragraphs, ATX and Setext headings, thematic breaks,
+backslash escapes, hard and soft
 line breaks, emphasis and strong emphasis (full CommonMark §6.2 rule set,
-including the mod-3 rule and `openers_bottom` pruning), code spans (§6.6,
-run-length matching with delimiter opacity), inline links (§6.6, bracket
+including the mod-3 rule and `openers_bottom` pruning), code spans (§6.1,
+run-length matching with delimiter opacity), inline links (§6.3, bracket
 opacity, destination/title syntax, href percent-encoding), inline images
-(§6.7, `![alt](src "title")` with alt flattening and `<img>` rendering),
+(§6.4, `![alt](src "title")` with alt flattening and `<img>` rendering),
 reference links and reference-style images (§4.7 link reference
 definitions collected in the block pass; full, collapsed, and shortcut
 forms resolved against a Unicode case-folded label map — for `[text]`
 links and `![alt]` images alike), block quotes (§5.1) and list items/lists
 (§5.2/§5.3) on the container-block stack with nesting, content indentation,
 same-type merging, tight/loose tracking, and deterministic `<ul>`/`<ol>`
-rendering, autolinks (§6.8, URI and email forms with `mailto:` hrefs,
+rendering, autolinks (§6.5, URI and email forms with `mailto:` hrefs,
 escapes inert, linear recognition), raw HTML (§6.6,
 tags/comments/instructions/declarations/CDATA rendered verbatim), plain
 inline text, a shared document model, a deterministic HTML renderer,
@@ -47,6 +48,8 @@ CommonMark spec's flanking rules (§6.2); the image algorithm contract is
 image contract is [docs/REFERENCE-IMAGES.md](docs/REFERENCE-IMAGES.md);
 the autolink contract is [docs/AUTOLINKS.md](docs/AUTOLINKS.md); the raw HTML
 contract is [docs/RAW-HTML.md](docs/RAW-HTML.md).
+The thematic-break/Setext precedence contract is
+[docs/LEAF-BLOCKS.md](docs/LEAF-BLOCKS.md).
 Code spans, links, images, autolinks, and raw HTML ride the same
 scan → match → emit seam.
 
@@ -54,11 +57,11 @@ scan → match → emit seam.
 
 Requires Zig 0.16.0. `zig build test` runs the unit and fixture suites;
 `zig build spec-conformance -- spec.txt` scores Oliver against every
-normative example in a CommonMark spec (see docs/TESTS.md for the
-historical 348/655 baseline and how to fetch the spec).
+normative example in a CommonMark spec (see docs/TESTS.md for the current
+513/652 CommonMark 0.31.2 scorecard and how to fetch the spec).
 
 ```bash
-zig build test    # run all tests (90 tests)
+zig build test    # run all tests (108 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 

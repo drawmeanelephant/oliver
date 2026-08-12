@@ -541,13 +541,11 @@ only reading consistent with the spec text; it is pinned with a fixture.
 - ATX heading content is parsed by the same inline pass (spec §4.2: heading
   contents "parsed as inline content"). `# foo *bar*` must produce
   `<h1>foo <em>bar</em></h1>`.
-- The existing chosen behavior that a trailing unescaped backslash in ATX
-  content is a hard break inside the heading (matrix ambiguity #10) means
-  the heading content span ends before that backslash; the delimiter scan
-  sees the same span. No special-casing needed.
-- Setext headings are not implemented yet; when they land, their content is
-  the concatenation of preceding paragraph lines and the same inline pass
-  applies unchanged.
+- A terminal backslash in ATX content remains literal: hard breaks separate
+  inline content and cannot occur at the end of a block (example 646).
+- Setext headings use the same inline pipeline over their content-line spans;
+  the excluded underline is not a following content line, so a final
+  backslash remains literal there too (example 90).
 
 ---
 

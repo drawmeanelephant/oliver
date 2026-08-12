@@ -34,6 +34,9 @@ pub const Tag = enum {
     paragraph,
     /// Heading. Children: inlines. `data.heading` is the level 1..6.
     heading,
+    /// A thematic break (Markdown §4.1). Leaf block with no children or
+    /// payload; renderers choose their own horizontal-rule serialization.
+    thematic_break,
     /// A block quote (Markdown `>` markers, §5.1). Container: children are
     /// blocks. Span covers its lines' content with markers stripped.
     block_quote,
@@ -67,7 +70,7 @@ pub const Tag = enum {
     /// flattened to a string at parse time; the image node carries no
     /// subtree).
     image,
-    /// An autolink (Markdown `<scheme:...>` or `<user@host>`, §6.8). Leaf:
+    /// An autolink (Markdown `<scheme:...>` or `<user@host>`, §6.5). Leaf:
     /// no children. `data.autolink` holds the arena-owned href (the raw
     /// URI, or `mailto:` + the email) and the label (the raw content
     /// verbatim — backslash escapes are inert inside autolinks, so unlike
@@ -87,7 +90,7 @@ pub const Tag = enum {
 
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
-            .document, .paragraph, .heading, .block_quote, .list, .list_item => true,
+            .document, .paragraph, .heading, .thematic_break, .block_quote, .list, .list_item => true,
             .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => false,
         };
     }
@@ -95,7 +98,7 @@ pub const Tag = enum {
     pub fn isInline(self: Tag) bool {
         return switch (self) {
             .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => true,
-            .document, .paragraph, .heading, .block_quote, .list, .list_item => false,
+            .document, .paragraph, .heading, .thematic_break, .block_quote, .list, .list_item => false,
         };
     }
 };
@@ -117,13 +120,13 @@ pub const Data = union(enum) {
     link: Link,
     /// `.image`: escape-resolved src and optional title (like `link`),
     /// plus the flattened plain-string alt. All arena-owned copies; the
-    /// alt is the description's inlines flattened per §6.7 (see
+    /// alt is the description's inlines flattened per §6.4 (see
     /// docs/IMAGES-PARSING.md §3), so it cannot be a source slice. The
     /// title is null when absent, not an empty string.
     image: Image,
     /// `.autolink`: the href and label, both arena-owned copies of the
     /// raw autolink content. Unlike `link`, backslash escapes are inert
-    /// inside autolinks (§6.8), so the content is copied verbatim — never
+    /// inside autolinks (§6.5), so the content is copied verbatim — never
     /// passed through escape resolution (docs/AUTOLINKS.md §3).
     autolink: Autolink,
     /// `.list`: the list's type, its bullet character or ordered delimiter,
@@ -179,7 +182,7 @@ pub const Image = struct {
 
 /// The payload of a `.link` node: the resolved href and optional title.
 /// Both are arena-owned copies of source ranges with backslash escapes
-/// applied (§6.6: "with backslash-escapes in effect as described above").
+/// applied (§6.3: "with backslash-escapes in effect as described above").
 /// Percent-encoding of the href is a renderer policy (spec: "Renderers may
 /// make different decisions about how to escape or normalize URLs"), so the
 /// model stores the plain resolved URI.
