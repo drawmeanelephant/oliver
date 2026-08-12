@@ -11,9 +11,10 @@
 //! - The root node is always a `.document` whose children are blocks.
 //! - Block tags contain block or inline children as documented per tag.
 //! - `emphasis`/`strong`/`link` contain inline children; the leaf inline
-//!   tags (`text`, `code_span`, `image`, `autolink`, `soft_break`,
-//!   `hard_break`) never have children.
+//!   tags (`text`, `code_span`, `image`, `autolink`, `raw_html`,
+//!   `soft_break`, `hard_break`) never have children.
 //! - `Node.data.text` always points into the document's source bytes;
+//!   `raw_html` reads its bytes by `Node.span` and carries no data payload;
 //!   `data.code_span`, `data.image` (src/alt/title),
 //!   `data.autolink` (href/label), and
 //!   `data.link` (href/title) are the arena-owned (copied) payloads
@@ -65,6 +66,11 @@ pub const Tag = enum {
     /// `data.link` this payload is *not* escape-resolved;
     /// docs/AUTOLINKS.md §3).
     autolink,
+    /// A raw HTML tag (Markdown §6.6): an open/closing tag, comment,
+    /// processing instruction, declaration, or CDATA section. Leaf: no
+    /// children. No data payload — the renderer writes the source bytes
+    /// of `node.span` verbatim, without escaping (docs/RAW-HTML.md §3).
+    raw_html,
     /// A line break that renders as a newline in HTML (Markdown soft break).
     soft_break,
     /// A line break that renders as `<br />` in HTML (Markdown hard break,
@@ -74,14 +80,14 @@ pub const Tag = enum {
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading, .block_quote => true,
-            .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .soft_break, .hard_break => false,
+            .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .soft_break, .hard_break => true,
-            .document, .paragraph, .heading, .block_quote => false,
+            .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => true,
+            .document, .paragraph, .heading => false,
         };
     }
 };

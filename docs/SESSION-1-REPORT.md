@@ -510,6 +510,24 @@ and degrades malformed input to null).
   stack, then thematic breaks (§4.1) and setext headings (§4.3) to close
   the lazy-continuation loop.
 
+## Addendum: raw HTML (session 9)
+
+- **Implemented CommonMark §6.6 raw HTML inline constructs** behind the `<`
+  recognizer's natural extension: open/closing tags, comments, processing
+  instructions, declarations, and CDATA sections are discovered across
+  paragraph lines, merged with code spans for first-come precedence, and
+  emitted as `.raw_html` leaves rendered verbatim from their source spans.
+  HTML blocks remain a separate future milestone.
+- The design contract in `docs/RAW-HTML.md` was committed first as
+  `76b1c30`; the implementation followed in the next commit. Invalid tag
+  shapes remain escaped text, custom names are accepted, and image-alt
+  flattening uses the documented raw-source choice.
+- 19 new Markdown fixture cases cover all 20 Raw HTML spec examples, with
+  focused unit coverage for spans, code/tag precedence, multiline break
+  suppression, image alt, and renderer verbatim output. Final local gate:
+  84 library tests + 6 fixture tests = 90/90, with clean formatting, build,
+  and diff checks.
+
 ## Architectural concerns discovered
 
 1. **Zig 0.16's I/O redesign.** `std.io.AnyWriter` is gone; writers are

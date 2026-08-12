@@ -234,7 +234,9 @@ full→collapsed→shortcut ordering and alt flattening as their inline
 counterparts (docs/REFERENCE-IMAGES.md); the §6.4 reference-image spec
 examples 582–591 verify byte-for-byte.
 
-Out of scope, untouched: entities, autolinks, raw HTML, Textile.
+Entities and Textile remain out of scope. Autolinks and raw HTML now
+participate in image-description flattening: autolinks contribute their raw
+label, while raw HTML contributes its source bytes per docs/RAW-HTML.md.
 
 ## 7. Verification and test plan
 

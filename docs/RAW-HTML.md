@@ -1,7 +1,8 @@
 # Oliver Inline Parsing: Raw HTML (§6.6)
 
-**Status: design note (written before any code).** This document is the
-contract for the raw HTML slice of Oliver's Markdown frontend: inline
+**Status: implemented.** This document was written and committed before any
+raw HTML code; it remains the contract for the raw HTML slice of Oliver's
+Markdown frontend: inline
 raw HTML tags (`<tag ...>`, `</tag>`, comments, processing
 instructions, declarations, CDATA sections). It is derived entirely
 from the CommonMark specification (0.31.2, §6.6 "Raw HTML" and §6.1's
@@ -105,8 +106,8 @@ order is moot by the grammars' mutual exclusion.
 - **Breaks**: a line ending *inside* a tag is tag content, not a
   soft/hard break (spec hard-line-break example: `<a href="foo  \nbar">`
   keeps the newline and produces no `<br />`). Mirrors the existing
-  `terminatorInsideCodeSpan` suppression with an analogous
-  `terminatorInsideHtmlTag`.
+  `terminatorInsideConstruct` check suppresses breaks for both code spans and
+  raw HTML tags.
 
 ## 4. Scanner design
 
@@ -131,20 +132,21 @@ already used by `source.Line`). A successful match consumes the whole
 tag (quoted values and comment/PI/CDATA content may run to the
 paragraph end); a failure leaves everything from the `<` alone.
 
-`scanLine` gains a parallel `tags` pointer next to the code-span
-pointer, with the cross-advance rule: when a code span is consumed, drop
-tags starting inside it; when a tag is consumed, drop code spans
-starting inside it; a tag that opened on an earlier line is skipped like
-a multi-line code span. The `<` branch tries the tag (position already
-covered by the tag pointer) and, when no tag matched, falls through to
-the existing autolink attempt.
+`scanLine` consumes the merged construct list. The cross-advance rule is:
+when a code span is consumed, tags starting inside it are dropped; when a tag
+is consumed, code spans starting inside it are dropped; a tag that opened on
+an earlier line is skipped like a multi-line code span. The `<` branch sees a
+pre-discovered tag first and, when no tag matched, falls through to the
+existing autolink attempt.
 
 ## 5. Verification and test plan
 
 1. Verify the §6.6 spec examples (Raw HTML section) byte-for-byte via
    the spec-conformance harness (`zig build spec-conformance -- spec.txt
-   --section "Raw HTML"`). Current baseline: 7/20 (the negatives). All
-   20 should pass, and no other section may regress.
+   --section "Raw HTML"`). The fixture corpus below mirrors all 20 examples
+   (the paired comment and backslash-attribute examples share fixtures), and
+   the local fixture suite is green; the standalone scorecard still requires
+   a locally fetched `spec.txt`.
 2. Fixtures: `raw-*.md`/`.html` — open tags (simple, empty-element,
    whitespace incl. a line ending, attributes with quoted/unquoted
    values, custom tag names), closing tags, comments (`<!-->`,
@@ -163,5 +165,17 @@ the existing autolink attempt.
    mixed with the existing bracket/delimiter/backtick workload — all
    linear (every scan is bounded and forward-only).
 5. Quality gate: `zig fmt --check`, `zig build`, `zig build test`
-   green; the whole pre-existing suite must pass unchanged; the spec
-   scorecard's Raw HTML row must go 7/20 → 20/20.
+   green; the whole pre-existing suite must pass unchanged; the Raw HTML
+   fixture corpus must remain byte-exact.
+
+## 6. Completion
+
+The slice is implemented on the existing scan → match → emit seam. It adds
+the `.raw_html` leaf to the document model, discovers all six CommonMark
+construct forms across paragraph lines, resolves first-come precedence with
+code spans, autolinks, and link brackets, renders source spans verbatim, and
+uses the documented raw-source policy for image-alt flattening. Nineteen
+fixture cases cover the 20 §6.6 examples, with focused unit tests for spans,
+precedence, multiline break suppression, alt flattening, and renderer output.
+The final local quality gate is 90/90 tests passing (84 library + 6 fixture
+tests), plus clean formatting, build, and diff checks.

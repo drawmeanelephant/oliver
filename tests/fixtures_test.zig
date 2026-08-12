@@ -881,6 +881,102 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/autolink-image-alt.md"),
         .expected = @embedFile("fixtures/markdown/autolink-image-alt.html"),
     },
+    // --- raw HTML (docs/RAW-HTML.md §6.6) ---
+    .{
+        .name = "raw-open-basic",
+        .input = @embedFile("fixtures/markdown/raw-open-basic.md"),
+        .expected = @embedFile("fixtures/markdown/raw-open-basic.html"),
+    },
+    .{
+        .name = "raw-empty",
+        .input = @embedFile("fixtures/markdown/raw-empty.md"),
+        .expected = @embedFile("fixtures/markdown/raw-empty.html"),
+    },
+    .{
+        .name = "raw-attrs",
+        .input = @embedFile("fixtures/markdown/raw-attrs.md"),
+        .expected = @embedFile("fixtures/markdown/raw-attrs.html"),
+    },
+    .{
+        .name = "raw-ws-multiline",
+        .input = @embedFile("fixtures/markdown/raw-ws-multiline.md"),
+        .expected = @embedFile("fixtures/markdown/raw-ws-multiline.html"),
+    },
+    .{
+        .name = "raw-custom",
+        .input = @embedFile("fixtures/markdown/raw-custom.md"),
+        .expected = @embedFile("fixtures/markdown/raw-custom.html"),
+    },
+    .{
+        .name = "raw-closing",
+        .input = @embedFile("fixtures/markdown/raw-closing.md"),
+        .expected = @embedFile("fixtures/markdown/raw-closing.html"),
+    },
+    .{
+        .name = "raw-comment-forms",
+        .input = @embedFile("fixtures/markdown/raw-comment-forms.md"),
+        .expected = @embedFile("fixtures/markdown/raw-comment-forms.html"),
+    },
+    .{
+        .name = "raw-comment-multiline",
+        .input = @embedFile("fixtures/markdown/raw-comment-multiline.md"),
+        .expected = @embedFile("fixtures/markdown/raw-comment-multiline.html"),
+    },
+    .{
+        .name = "raw-pi",
+        .input = @embedFile("fixtures/markdown/raw-pi.md"),
+        .expected = @embedFile("fixtures/markdown/raw-pi.html"),
+    },
+    .{
+        .name = "raw-declaration",
+        .input = @embedFile("fixtures/markdown/raw-declaration.md"),
+        .expected = @embedFile("fixtures/markdown/raw-declaration.html"),
+    },
+    .{
+        .name = "raw-cdata",
+        .input = @embedFile("fixtures/markdown/raw-cdata.md"),
+        .expected = @embedFile("fixtures/markdown/raw-cdata.html"),
+    },
+    .{
+        .name = "raw-entity-in-attr",
+        .input = @embedFile("fixtures/markdown/raw-entity-in-attr.md"),
+        .expected = @embedFile("fixtures/markdown/raw-entity-in-attr.html"),
+    },
+    .{
+        .name = "raw-backslash-in-attr",
+        .input = @embedFile("fixtures/markdown/raw-backslash-in-attr.md"),
+        .expected = @embedFile("fixtures/markdown/raw-backslash-in-attr.html"),
+    },
+    .{
+        .name = "raw-illegal-name",
+        .input = @embedFile("fixtures/markdown/raw-illegal-name.md"),
+        .expected = @embedFile("fixtures/markdown/raw-illegal-name.html"),
+    },
+    .{
+        .name = "raw-illegal-attr-name",
+        .input = @embedFile("fixtures/markdown/raw-illegal-attr-name.md"),
+        .expected = @embedFile("fixtures/markdown/raw-illegal-attr-name.html"),
+    },
+    .{
+        .name = "raw-illegal-attr-value",
+        .input = @embedFile("fixtures/markdown/raw-illegal-attr-value.md"),
+        .expected = @embedFile("fixtures/markdown/raw-illegal-attr-value.html"),
+    },
+    .{
+        .name = "raw-illegal-ws",
+        .input = @embedFile("fixtures/markdown/raw-illegal-ws.md"),
+        .expected = @embedFile("fixtures/markdown/raw-illegal-ws.html"),
+    },
+    .{
+        .name = "raw-missing-ws",
+        .input = @embedFile("fixtures/markdown/raw-missing-ws.md"),
+        .expected = @embedFile("fixtures/markdown/raw-missing-ws.html"),
+    },
+    .{
+        .name = "raw-closing-attr",
+        .input = @embedFile("fixtures/markdown/raw-closing-attr.md"),
+        .expected = @embedFile("fixtures/markdown/raw-closing-attr.html"),
+    },
 };
 
 const TextileFixture = struct {
