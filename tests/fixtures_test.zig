@@ -1006,6 +1006,13 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/p-prefix.textile"),
         .expected = @embedFile("fixtures/textile/p-prefix.html"),
     },
+    // Oliver policy: recognized block signatures interrupt without a blank
+    // line; the historical references do not define every adjacency.
+    .{
+        .name = "p-interrupt",
+        .input = @embedFile("fixtures/textile/p-interrupt.textile"),
+        .expected = @embedFile("fixtures/textile/p-interrupt.html"),
+    },
     .{
         .name = "heading",
         .input = @embedFile("fixtures/textile/heading.textile"),
@@ -1025,6 +1032,47 @@ const textile_fixtures = [_]TextileFixture{
         .name = "interrupt",
         .input = @embedFile("fixtures/textile/interrupt.textile"),
         .expected = @embedFile("fixtures/textile/interrupt.html"),
+    },
+    // Single-period blockquote structure/continuation comes from Hobix,
+    // Movable Type Textile 2, and the current Textile documentation.
+    .{
+        .name = "bq-basic",
+        .input = @embedFile("fixtures/textile/bq-basic.textile"),
+        .expected = @embedFile("fixtures/textile/bq-basic.html"),
+    },
+    .{
+        .name = "bq-multiline",
+        .input = @embedFile("fixtures/textile/bq-multiline.textile"),
+        .expected = @embedFile("fixtures/textile/bq-multiline.html"),
+    },
+    .{
+        .name = "bq-surrounded",
+        .input = @embedFile("fixtures/textile/bq-surrounded.textile"),
+        .expected = @embedFile("fixtures/textile/bq-surrounded.html"),
+    },
+    .{
+        .name = "bq-interrupt",
+        .input = @embedFile("fixtures/textile/bq-interrupt.textile"),
+        .expected = @embedFile("fixtures/textile/bq-interrupt.html"),
+    },
+    // This fixture includes malformed signatures plus valid Textile forms
+    // deliberately deferred by this slice (`bq..` and citation `bq.:URL`);
+    // all remain literal under the recorded Oliver contract.
+    .{
+        .name = "bq-malformed",
+        .input = @embedFile("fixtures/textile/bq-malformed.textile"),
+        .expected = @embedFile("fixtures/textile/bq-malformed.html"),
+    },
+    .{
+        .name = "bq-unicode",
+        .input = @embedFile("fixtures/textile/bq-unicode.textile"),
+        .expected = @embedFile("fixtures/textile/bq-unicode.html"),
+    },
+    // Oliver consistently accepts tabs as block-signature separators.
+    .{
+        .name = "bq-tab",
+        .input = @embedFile("fixtures/textile/bq-tab.textile"),
+        .expected = @embedFile("fixtures/textile/bq-tab.html"),
     },
     .{
         .name = "special-chars",
@@ -1089,6 +1137,11 @@ test "shared model: equivalent inputs render identically through one renderer" {
             .markdown = "## Two\n\nSecond.",
             .textile = "h2. Two\n\nSecond.",
             .expected = "<h2>Two</h2>\n<p>Second.</p>\n",
+        },
+        .{
+            .markdown = "> quote",
+            .textile = "bq. quote",
+            .expected = "<blockquote>\n<p>quote</p>\n</blockquote>\n",
         },
     };
     for (pairs) |p| {

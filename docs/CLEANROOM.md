@@ -76,12 +76,18 @@ allowed; source code of parsers is not.**
   headings (§4.3), paragraphs, precedence of block vs inline structure.
 - Hobix "Textile Reference" (Dean Allen)
   <https://hobix.com/textile> — user-facing Textile syntax: paragraphs,
-  `hN.` headings, line breaks, phrase modifiers, attributes, lists, links,
-  images, tables.
+  `hN.` headings, `bq.` block quotations, line breaks, phrase modifiers,
+  attributes, lists, links, images, tables.
 - Movable Type "Textile 2 Syntax" documentation (Brad Choate)
   <https://movabletype.org/documentation/author/textile-2-syntax.html> —
-  block signatures, `p.`/`hN.` marker rules, `<br />` line-break policy,
-  `==` escaping, inline modifiers, tables, character replacements.
+  block signatures, `p.`/`hN.`/`bq.` marker rules, block-quote structure,
+  `<br />` line-break policy, `==` escaping, inline modifiers, tables,
+  character replacements.
+- Textile Markup Language Documentation, "Block quotations"
+  <https://textile-lang.com/doc/block-quotations> — current user-facing
+  documentation for blank-line termination of single-period `bq.`, the
+  separate extended `bq..` form, and citation URLs. Only the single-period,
+  non-citation form is implemented in this slice.
 - Zig 0.16 standard library source (local toolchain, `/opt/homebrew/.../std/`)
   — official library documentation: `std.Io.Writer`, `std.process.Init`,
   `std.ArrayList`, `std.heap.ArenaAllocator`, build API.

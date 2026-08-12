@@ -81,11 +81,13 @@ source position wins.
 # Textile
 
 Sources: Hobix "Textile Reference" (Dean Allen,
-<https://hobix.com/textile>) and Movable Type "Textile 2 Syntax" (Brad
-Choate, <https://movabletype.org/documentation/author/textile-2-syntax.html>).
-These are user-facing syntax documents, not parser code.
+<https://hobix.com/textile>), Movable Type "Textile 2 Syntax" (Brad
+Choate, <https://movabletype.org/documentation/author/textile-2-syntax.html>),
+and the Textile Markup Language Documentation
+(<https://textile-lang.com/doc/block-quotations>). These are user-facing
+syntax documents, not parser code.
 
-Textile is a first-class dialect. Where the two references disagree, Oliver
+Textile is a first-class dialect. Where the references disagree, Oliver
 records the disagreement and chooses one behavior (see "Recorded ambiguities"
 below).
 
@@ -93,10 +95,10 @@ below).
 
 | feature | status | Oliver behavior / notes |
 | --- | --- | --- |
-| paragraphs | implemented | Blank-line separated (`p.` default signature, both references). Bare text or `p.`-prefixed; a `p.` marker must be followed by a space/tab to count. Content is preserved verbatim (only the marker's separator whitespace is consumed). |
+| paragraphs | implemented | Blank-line separated (`p.` default signature, both references). Bare text or `p.`-prefixed; a `p.` marker must be followed by a space/tab to count and interrupts an open block even without a preceding blank line. Content is preserved verbatim (only the marker's separator whitespace is consumed). |
 | headings | implemented | `h1.`–`h6.` markers, each followed by a space/tab. `h0.`/`h7.`+ are not headings (paragraph text). `hN.` at end of line (no space) is not a heading. Content after the marker is verbatim. |
 | line breaks | implemented | Newline inside a paragraph → hard break → `<br />`. Textile 2 is explicit ("newlines for XHTML content receive a `<br />` tag at the end of the line, with the exception of the last line in the paragraph"); Hobix prose agrees ("Line breaks are converted to HTML breaks") though its rendered example shows a plain newline — recorded below. |
-| block quotes | planned | `bq.` signature; Textile 2: enclosed in `<blockquote>` with `<p>` inside. |
+| block quotes | implemented | Single-period `bq.` from the Hobix Textile Reference, Movable Type Textile 2 Syntax, and the current Textile Markup Language Documentation. The signature must be followed by space/tab; all separator whitespace is consumed. Unmarked following lines continue one paragraph inside `.block_quote` with Textile hard breaks until a blank line or a recognized `p.`, `hN.`, or `bq.` signature; signatures interrupt an open block. The quote and child paragraph spans exclude the marker/separator and cover their content. An empty `bq. ` stays literal because the sources do not specify empty quote behavior. Extended `bq..` and citation `bq.:URL` remain literal/deferred. |
 | pre/code | planned | `pre.` and `bc.` (block code, which also escapes `<`/`>`). |
 | lists | planned | `*` unordered, `#` ordered; nesting by repeating the marker (`**` = nested). Styling markers (`(class#id)* one` vs `*(class#id) one`) from Textile 2. |
 | tables | planned | `|a|b|c|` rows; `|_. header|`; cell modifiers (`{style}`, `(class)`, alignment, `\2` colspan, `/3` rowspan); table/row attributes. |
@@ -134,14 +136,15 @@ below).
    rendered example shows a plain newline; Textile 2 explicitly says `<br />`
    (except the last line). **Oliver: `<br />` for every internal newline.**
 2. **Block interruption without a blank line.** CommonMark explicitly allows
-   ATX headings to interrupt paragraphs; neither Textile reference addresses
-   marker lines directly after text. **Oliver: Textile marker lines (`hN.`,
-   `p.`) always start a new block, even without a preceding blank line.**
+   ATX headings to interrupt paragraphs; the historical Textile references do
+   not define every adjacency between marker lines and open blocks. **Oliver:
+   recognized Textile marker lines (`hN.`, `p.`, `bq.`) always start a new
+   block, even without a preceding blank line.**
 3. **Marker whitespace.** Textile 2: signatures "end with a period and be
    followed with a space"; a third-party note (Mylyn/WikiText docs) says a
    line is only a heading if `hN.` is immediately followed by a space.
-   **Oliver: the marker must be followed by a space or tab; all following
-   whitespace is consumed as separator.**
+   **Oliver: a recognized `hN.`, `p.`, or `bq.` marker must be followed by a
+   space or tab; all following separator whitespace is consumed.**
 4. **Paragraph whitespace.** **Oliver: Textile paragraph content is preserved
    verbatim (only marker separator whitespace is consumed).** Markdown
    paragraphs are trimmed per line. The dialects genuinely differ; the model
@@ -201,3 +204,10 @@ below).
     is on the raw bracket text (normalized), not the parsed description
     (`![*foo*][]` matches a definition labeled `*foo*` while the alt
     flattens to `foo`).
+16. **Textile single-period block-quote termination.** The current Textile
+    Markup Language Documentation says a block quotation ends with a blank
+    line and distinguishes the multi-paragraph `bq..` form. The compact Hobix
+    example does not spell out continuation-line termination. **Oliver:
+    unmarked lines after `bq.` remain in its one quoted paragraph until a
+    blank line or another recognized block signature.** `bq..` is a later,
+    separately documented feature rather than an accidental synonym.
