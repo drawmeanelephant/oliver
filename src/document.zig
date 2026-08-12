@@ -31,6 +31,9 @@ pub const Tag = enum {
     paragraph,
     /// Heading. Children: inlines. `data.heading` is the level 1..6.
     heading,
+    /// A block quote (Markdown `>` markers, §5.1). Container: children are
+    /// blocks. Span covers its lines' content with markers stripped.
+    block_quote,
     /// Plain text. `data.text` is a slice of the source.
     text,
     /// Emphasized inline content (Markdown `*x*`, `_x_`). Children: inlines.
@@ -62,7 +65,7 @@ pub const Tag = enum {
 
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
-            .document, .paragraph, .heading => true,
+            .document, .paragraph, .heading, .block_quote => true,
             .text, .emphasis, .strong, .code_span, .link, .image, .soft_break, .hard_break => false,
         };
     }
@@ -70,7 +73,7 @@ pub const Tag = enum {
     pub fn isInline(self: Tag) bool {
         return switch (self) {
             .text, .emphasis, .strong, .code_span, .link, .image, .soft_break, .hard_break => true,
-            .document, .paragraph, .heading => false,
+            .document, .paragraph, .heading, .block_quote => false,
         };
     }
 };

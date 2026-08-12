@@ -22,12 +22,12 @@ Node {
 }
 ```
 
-`Tag` in the slice: `document`, `paragraph`, `heading`, `text`,
-`emphasis`, `strong`, `code_span`, `link`, `image`, `soft_break`,
-`hard_break`. Blocks and inlines are distinguished by `Tag.isBlock` /
-`Tag.isInline`. `Data` carries `heading` level (1..6), the borrowed
-`text` slice, the arena-owned `code_span` content, the arena-owned `link`
-href/title, or the arena-owned `image` src/alt/title.
+`Tag` in the slice: `document`, `paragraph`, `heading`, `block_quote`,
+`text`, `emphasis`, `strong`, `code_span`, `link`, `image`,
+`soft_break`, `hard_break`. Blocks and inlines are distinguished by
+`Tag.isBlock` / `Tag.isInline`. `Data` carries `heading` level (1..6),
+the borrowed `text` slice, the arena-owned `code_span` content, the
+arena-owned `link` href/title, or the arena-owned `image` src/alt/title.
 
 ## Design decisions
 
@@ -65,22 +65,26 @@ href/title, or the arena-owned `image` src/alt/title.
 1. Root is `.document`; its children are blocks.
 2. `.paragraph` children are inlines.
 3. `.heading` children are inlines.
-4. `emphasis`/`strong`/`link` contain inline children. The leaf inline
+4. `.block_quote` children are blocks (it is a container, §5.1); its span
+   covers its lines' content with markers stripped, and text inside it
+   slices the stripped content (marker bytes are excluded from child
+   spans).
+5. `emphasis`/`strong`/`link` contain inline children. The leaf inline
    tags (`text`, `code_span`, `image`, `soft_break`, `hard_break`) never
    have children.
-5. `Data.text` always slices the document's source bytes; the other text
+6. `Data.text` always slices the document's source bytes; the other text
    payloads (`code_span`, `link.href`, `link.title`, `image.src`,
    `image.alt`, `image.title`) are arena-owned copies — normalization
    (code-span content, escape resolution, alt flattening) cannot be
    expressed as a source slice.
-6. `span.start <= span.end`; all spans lie within the source.
-7. Consecutive `text` children of one parent never have contiguous spans:
+7. `span.start <= span.end`; all spans lie within the source.
+8. Consecutive `text` children of one parent never have contiguous spans:
    adjacent source bytes land in one text node. Scanning artifacts (item
    boundaries, leftover delimiters, escape splits) merge at emission, so
    the normalized model has no text fragmentation (chosen behavior,
    docs/INLINE-PARSING.md §15; a consumed backslash or delimiter byte can
    still leave a gap, which is why `a\*b` stays two nodes).
-8. `link` children never contain another `link` (links cannot contain
+9. `link` children never contain another `link` (links cannot contain
    links, §6.6), but may contain `image` nodes (an image description may
    contain links and images, §6.7); each link's children are a
    self-contained inline scope. `image` is a leaf whose `alt` is the
@@ -89,7 +93,7 @@ href/title, or the arena-owned `image` src/alt/title.
 
 ## Growth path (planned tags, not yet implemented)
 
-Blocks: `block_quote`, `list`, `list_item` (ordered/unordered is a `Data`
+Blocks: `list`, `list_item` (ordered/unordered is a `Data`
 field, e.g. `list: { ordered: bool, start: ?u32 }`), `code_block` (fenced /
 indented, info string), `thematic_break`, `table` (+ `table_row`, `table_cell`
 with header flag), `raw_html` (under policy).

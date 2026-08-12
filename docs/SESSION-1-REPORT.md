@@ -386,6 +386,40 @@ and degrades malformed input to null).
   images) or Textile inline mapping onto the same seam.
 
 
+## Addendum: container blocks — block quotes (session 7)
+
+- **Design-first.** docs/BLOCKS-PARSING.md was written from the spec
+  (§5.1–5.3 plus the appendix's parsing strategy) before any container
+  code: the full container architecture (block quotes, list items,
+  lists, tight/loose) is specified, but only §5.1 ships here.
+- **The container stack.** Phase 1 now keeps a stack of open containers
+  plus one open leaf, replacing the flat single-paragraph loop: each line
+  matches containers top-down consuming one `>` marker each (≤3 leading
+  spaces, one following space), a blank line closes the leaf and any
+  container whose marker was absent, a lazy continuation keeps unmatched
+  containers open when the remainder is paragraph continuation text,
+  and new block starts (block quote, ATX heading) interrupt the open
+  paragraph. Definitions and deferred inlines are unchanged — phase-2
+  jobs already carry their node, and definitions stay document-global.
+- **Block quote semantics landed:** nesting (`> > foo`), laziness
+  (including omitting any number of initial `>`s on nested continuation
+  lines — spec example `>>> foo\n> bar\n>>baz`), marker-blank lines
+  keeping one quote open vs a truly blank line separating two quotes,
+  interruption (`foo\n> bar`), empty quotes (`>`), and definitions
+  inside quotes registering document-wide. `block_quote` joined the
+  model as a container (children: blocks; span covers stripped content)
+  and the renderer gained `<blockquote>`/`</blockquote>\n`.
+- **Verified:** `--section "Block quotes"` went 0/25 → 18/25; the 7
+  remaining failures are exactly the pending constructs (indented code
+  ×3, fenced code ×1, thematic breaks ×2, lists ×1), each with its
+  milestone named in the design note. Full scorecard 348 → 370/655
+  (the extra +4 are blockquotes inside §5.2 list-item examples). 18 new
+  fixtures (17 byte-verified against spec examples), 7 new unit tests.
+  Tests: 75/75; fmt clean; build clean.
+- Next slices per the note: list items and lists (§5.2/§5.3) on the same
+  stack, then thematic breaks (§4.1) and setext headings (§4.3) to close
+  the lazy-continuation loop.
+
 ## Architectural concerns discovered
 
 1. **Zig 0.16's I/O redesign.** `std.io.AnyWriter` is gone; writers are

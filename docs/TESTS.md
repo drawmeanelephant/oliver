@@ -2,22 +2,26 @@
 
 Tests are the contract. `zig build test` runs two suites:
 
-1. **Library module tests** — `test` blocks inside `src/*.zig` (62 tests):
+1. **Library module tests** — `test` blocks inside `src/*.zig` (69 tests):
    unit tests for `source`, `document`, `diagnostic`, `markdown`
    (including the emphasis/strong span, mod-3, escape, nesting, code-span
    run-length/trim/opacity, link precedence/nesting/escape/span,
-   reference-link label-normalization/first-wins/fall-through, and image
-   structure/alt-flattening/nesting/escape/precedence assertions),
+   reference-link label-normalization/first-wins/fall-through, image
+   structure/alt-flattening/nesting/escape/precedence, and blockquote
+   structure/span/laziness/interruption/blank-separation assertions),
    `unicode` (case-fold), `textile`, `html` (including hand-built
    emphasis/strong/code-span/link/image rendering), and the public API.
    (The html.zig tests also run standalone via `zig test src/html.zig`;
    see the build wiring note below.)
 2. **Fixture tests** — `tests/fixtures_test.zig` (6 tests): byte-exact
-   fixture rendering for both dialects (115 Markdown fixtures, of which
+   fixture rendering for both dialects (133 Markdown fixtures, of which
    19 cover emphasis/strong per docs/INLINE-PARSING.md §15, 12 cover
    code spans per §6.6, 22 cover inline links per §6.6, 17 cover inline
-   images per docs/IMAGES-PARSING.md §7, and 24 cover reference links
-   per §4.7/§6.6 — full/collapsed/shortcut forms, Unicode label folding,
+   images per docs/IMAGES-PARSING.md §7, 18 cover block quotes per
+   docs/BLOCKS-PARSING.md §5.1 (basic/nesting/laziness/blank-marker
+   separation/interruption/empty/definitions-in-quote), and 24 cover
+   reference links per §4.7/§6.6 — full/collapsed/shortcut forms,
+   Unicode label folding,
    whitespace normalization, first-definition-wins, definitions after
    use, definitions in headings/paragraphs, escaped labels,
    cannot-interrupt behavior, and the failed-inline fall-through), the
@@ -28,10 +32,11 @@ Tests are the contract. `zig build test` runs two suites:
    bombs, deep `![` openers, the dead-bracket marking shape, 50k
    shortcut and near-miss label bombs, 30k collapsed forms, 20k
    failed-inline fall-throughs, a 20k-definition storm with interleaved
-   uses, and a 200 KB label against the definitions map — completion in
-   well under a second, no crash/leak; the link/image bombs are what
-   forced the §6.6 paren-depth and scan-length DoS guards), and
-   diagnostics.
+   uses, a 200 KB label against the definitions map, a 100k-deep nested
+   block-quote stack, a 50k-line lazy-continuation flood, and 50k
+   quote/blank alternations — completion in ~2s, no crash/leak; the
+   link/image bombs are what forced the §6.6 paren-depth and scan-length
+   DoS guards), and diagnostics.
 
 ## Fixture convention
 
@@ -121,11 +126,12 @@ character (converted in both input and expected output), and the expected
 outputs omit the final newline block renderers emit (one trailing newline
 on the actual output is ignored). The report is deterministic and exits 0
 in report mode; `--gate` is for CI-style enforcement once a section is
-where we want it. Baseline (0.31.2, after the images/reference-links
-merge): **348/655 examples pass** — inline sections are mostly green
-(emphasis 96%, links 91%, code spans 90%, ATX headings 88%), while the
-block-level sections are the remaining work (block quotes 0%, HTML blocks
-0%, lists ~7%).
+where we want it. Baseline (0.31.2, after the blockquote milestone):
+**370/655 examples pass** — inline sections are mostly green (emphasis
+96%, links 91%, code spans 90%, ATX headings 88%), block quotes went
+0/25 → 18/25 (the 7 failures are exactly the pending indented/fenced
+code, thematic-break, and list constructs), and the remaining
+block-level sections (HTML blocks 0%, lists ~7%) are the ongoing work.
 
 ## Running
 

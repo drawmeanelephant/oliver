@@ -512,6 +512,97 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/ref-partial-paragraph.md"),
         .expected = @embedFile("fixtures/markdown/ref-partial-paragraph.html"),
     },
+    // --- block quotes (docs/BLOCKS-PARSING.md §5.1) ---
+    .{
+        .name = "quote-basic",
+        .input = @embedFile("fixtures/markdown/quote-basic.md"),
+        .expected = @embedFile("fixtures/markdown/quote-basic.html"),
+    },
+    .{
+        .name = "quote-no-space",
+        .input = @embedFile("fixtures/markdown/quote-no-space.md"),
+        .expected = @embedFile("fixtures/markdown/quote-no-space.html"),
+    },
+    .{
+        .name = "quote-indent-3",
+        .input = @embedFile("fixtures/markdown/quote-indent-3.md"),
+        .expected = @embedFile("fixtures/markdown/quote-indent-3.html"),
+    },
+    .{
+        .name = "quote-lazy",
+        .input = @embedFile("fixtures/markdown/quote-lazy.md"),
+        .expected = @embedFile("fixtures/markdown/quote-lazy.html"),
+    },
+    .{
+        .name = "quote-lazy-mixed",
+        .input = @embedFile("fixtures/markdown/quote-lazy-mixed.md"),
+        .expected = @embedFile("fixtures/markdown/quote-lazy-mixed.html"),
+    },
+    .{
+        .name = "quote-lazy-indented",
+        .input = @embedFile("fixtures/markdown/quote-lazy-indented.md"),
+        .expected = @embedFile("fixtures/markdown/quote-lazy-indented.html"),
+    },
+    .{
+        .name = "quote-empty",
+        .input = @embedFile("fixtures/markdown/quote-empty.md"),
+        .expected = @embedFile("fixtures/markdown/quote-empty.html"),
+    },
+    .{
+        .name = "quote-empty-blanks",
+        .input = @embedFile("fixtures/markdown/quote-empty-blanks.md"),
+        .expected = @embedFile("fixtures/markdown/quote-empty-blanks.html"),
+    },
+    .{
+        .name = "quote-initial-blank",
+        .input = @embedFile("fixtures/markdown/quote-initial-blank.md"),
+        .expected = @embedFile("fixtures/markdown/quote-initial-blank.html"),
+    },
+    .{
+        .name = "quote-two",
+        .input = @embedFile("fixtures/markdown/quote-two.md"),
+        .expected = @embedFile("fixtures/markdown/quote-two.html"),
+    },
+    .{
+        .name = "quote-one",
+        .input = @embedFile("fixtures/markdown/quote-one.md"),
+        .expected = @embedFile("fixtures/markdown/quote-one.html"),
+    },
+    .{
+        .name = "quote-two-paragraphs",
+        .input = @embedFile("fixtures/markdown/quote-two-paragraphs.md"),
+        .expected = @embedFile("fixtures/markdown/quote-two-paragraphs.html"),
+    },
+    .{
+        .name = "quote-interrupt",
+        .input = @embedFile("fixtures/markdown/quote-interrupt.md"),
+        .expected = @embedFile("fixtures/markdown/quote-interrupt.html"),
+    },
+    .{
+        .name = "quote-nested",
+        .input = @embedFile("fixtures/markdown/quote-nested.md"),
+        .expected = @embedFile("fixtures/markdown/quote-nested.html"),
+    },
+    .{
+        .name = "quote-nested-lazy",
+        .input = @embedFile("fixtures/markdown/quote-nested-lazy.md"),
+        .expected = @embedFile("fixtures/markdown/quote-nested-lazy.html"),
+    },
+    .{
+        .name = "quote-blank-after",
+        .input = @embedFile("fixtures/markdown/quote-blank-after.md"),
+        .expected = @embedFile("fixtures/markdown/quote-blank-after.html"),
+    },
+    .{
+        .name = "quote-marker-blank-then",
+        .input = @embedFile("fixtures/markdown/quote-marker-blank-then.md"),
+        .expected = @embedFile("fixtures/markdown/quote-marker-blank-then.html"),
+    },
+    .{
+        .name = "quote-definition",
+        .input = @embedFile("fixtures/markdown/quote-definition.md"),
+        .expected = @embedFile("fixtures/markdown/quote-definition.html"),
+    },
     // --- inline images (docs/IMAGES-PARSING.md §7) ---
     .{
         .name = "image-simple",
@@ -814,6 +905,21 @@ test "adversarial smoke: hostile input never crashes or leaks" {
     try giant_label.appendSlice(gpa, "[alpha]: /url\n[");
     for (0..200_000) |_| try giant_label.append(gpa, 'a');
     try giant_label.appendSlice(gpa, "]");
+
+    // Block-quote bombs: 100k nested `>` markers (container stack must stay
+    // iterative), a lazy-continuation flood inside a quote, and quotes that
+    // open and close across blank lines.
+    var deep_quotes = std.ArrayList(u8).empty;
+    defer deep_quotes.deinit(gpa);
+    for (0..100_000) |_| try deep_quotes.append(gpa, '>');
+    try deep_quotes.appendSlice(gpa, " x");
+    var lazy_flood = std.ArrayList(u8).empty;
+    defer lazy_flood.deinit(gpa);
+    try lazy_flood.appendSlice(gpa, "> a\n");
+    for (0..50_000) |_| try lazy_flood.appendSlice(gpa, "b\n");
+    var quote_blanks = std.ArrayList(u8).empty;
+    defer quote_blanks.deinit(gpa);
+    for (0..50_000) |_| try quote_blanks.appendSlice(gpa, "> a\n\n");
     // Images share the link DoS guards: `![a](` repeated must not make
     // every `]` rescan the whole paragraph (same guard as the `[a](` bomb).
     var unbalanced_images = std.ArrayList(u8).empty;
@@ -878,6 +984,9 @@ test "adversarial smoke: hostile input never crashes or leaks" {
         deep_images.items,
         image_mix.items,
         nested_link_marks.items,
+        deep_quotes.items,
+        lazy_flood.items,
+        quote_blanks.items,
     };
     for (cases) |c| {
         inline for ([_]oliver.Dialect{ .markdown, .textile }) |dialect| {

@@ -86,24 +86,88 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     // into `defs`; inline parsing is deferred to phase 2, because a
     // reference link may precede the definition it uses. `pending` records
     // each block's raw content for the second pass.
+    //
+    // Phase 1 keeps a stack of open *container* blocks (block quotes; lists
+    // join later) plus one open leaf (a paragraph). Each line is matched
+    // against the containers top-down, consuming markers; unmatched
+    // containers stay open only for a lazy paragraph continuation, and are
+    // otherwise closed (see docs/BLOCKS-PARSING.md §5). The document root
+    // is implicit below the stack, so `leafParent` is the deepest container
+    // or `doc.root`.
     var defs = Definitions.init(doc.allocator());
     defer defs.deinit();
     var pending = std.ArrayList(PendingInline).empty;
     defer pending.deinit(doc.allocator());
+    var containers = std.ArrayList(*document.Node).empty;
+    defer containers.deinit(doc.allocator());
+    var paragraph: ?Paragraph = null;
 
     var lines = source.Lines.init(doc.src.bytes);
-    var paragraph: ?Paragraph = null;
     while (lines.next()) |line| {
-        if (isBlank(line.text)) {
-            try closeParagraph(doc, &paragraph, &defs, &pending);
-        } else if (tryAtxHeading(line)) |heading| {
-            try closeParagraph(doc, &paragraph, &defs, &pending);
-            try emitHeading(doc, line, heading, &pending);
-        } else {
-            try appendParagraphLine(doc, &paragraph, line);
+        // A. Match open containers top-down, consuming one marker each.
+        var view = line;
+        var matched: usize = 0;
+        while (matched < containers.items.len) {
+            const stripped = tryStripBlockQuoteMarker(view) orelse break;
+            view = stripped;
+            matched += 1;
         }
+
+        // B. Blank line: close the leaf and any container whose marker was
+        // absent (consecutiveness — a blank line separates block quotes).
+        // Marker-blank lines keep their container open.
+        if (isBlank(view.text)) {
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            containers.shrinkRetainingCapacity(matched);
+            extendContainerSpans(&containers, view);
+            continue;
+        }
+
+        // C. Lazy continuation (§5.1 rule 2): a line that fails a container's
+        // marker can still continue the paragraph inside it, if the remainder
+        // is paragraph continuation text. Otherwise the unmatched containers
+        // close and the line is reprocessed as a fresh start.
+        if (matched < containers.items.len) {
+            if (paragraph != null and isParagraphContinuationText(view)) {
+                try appendParagraphLine(doc, &paragraph, view);
+                extendContainerSpans(&containers, view);
+                continue;
+            }
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            containers.shrinkRetainingCapacity(matched);
+        }
+
+        // D. New block starts on the remainder. A block quote interrupts a
+        // paragraph (so close it here — the phase C path above only runs
+        // when containers already exist), and markers may nest, so strip
+        // them all and open one container per marker.
+        while (tryStripBlockQuoteMarker(view)) |stripped| {
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            const node = try doc.createNode(.block_quote, stripped.contentSpan(), .none);
+            try doc.appendChild(leafParent(doc, &containers), node);
+            try containers.append(doc.allocator(), node);
+            view = stripped;
+        }
+        // A marker-only line (`>` alone, or a line whose markers are all
+        // consumed) is a blank line inside the quote, not an empty
+        // paragraph.
+        if (isBlank(view.text)) {
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            extendContainerSpans(&containers, view);
+            continue;
+        }
+        if (tryAtxHeading(view)) |heading| {
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            try emitHeading(doc, view, heading, leafParent(doc, &containers), &pending);
+            extendContainerSpans(&containers, view);
+            continue;
+        }
+
+        // E. Paragraph text.
+        try appendParagraphLine(doc, &paragraph, view);
+        extendContainerSpans(&containers, view);
     }
-    try closeParagraph(doc, &paragraph, &defs, &pending);
+    try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
 
     // Phase 2: inline pass, with the full definitions map available.
     for (pending.items) |job| {
@@ -112,6 +176,54 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             .heading => |hh| try parseHeadingInlines(doc, hh.node, hh.span, &defs),
         }
     }
+}
+
+/// The node under which a new leaf or container is created: the deepest
+/// open container, or the document root when the stack is empty.
+fn leafParent(doc: *document.Document, containers: *const std.ArrayList(*document.Node)) *document.Node {
+    if (containers.items.len == 0) return doc.root;
+    return containers.items[containers.items.len - 1];
+}
+
+/// Extends every open container's span end to cover the current line, so a
+/// block quote's span is the union of its (marker-stripped) content lines.
+/// `line.content_end` is the full line's content end; stripping only moves
+/// the start, so this is correct for matched, lazy, and blank-marker lines
+/// alike.
+fn extendContainerSpans(containers: *const std.ArrayList(*document.Node), line: source.Line) void {
+    const end: u32 = @intCast(line.content_end);
+    for (containers.items) |c| {
+        if (c.span.end < end) c.span.end = end;
+    }
+}
+
+/// Strips one block quote marker (§5.1): up to three leading spaces, `>`,
+/// then one following space of indentation. Returns the stripped view or
+/// null. A tab anywhere in the leading indentation disqualifies the marker
+/// (full tab handling is deferred, see docs/BLOCKS-PARSING.md §7).
+fn tryStripBlockQuoteMarker(line: source.Line) ?source.Line {
+    const t = line.text;
+    var i: usize = 0;
+    var indent: usize = 0;
+    while (i < t.len and t[i] == ' ' and indent < 3) : (i += 1) indent += 1;
+    if (i >= t.len or t[i] != '>') return null;
+    i += 1;
+    if (i < t.len and t[i] == ' ') i += 1;
+    return .{
+        .text = t[i..],
+        .start = line.start + i,
+        .content_end = line.content_end,
+        .end = line.end,
+    };
+}
+
+/// Is the remainder of a line paragraph continuation text (§5.1 laziness)?
+/// That is, it does not start a block that can interrupt a paragraph.
+/// Currently those are a block quote marker and an ATX heading; thematic
+/// breaks and list markers join this check when those milestones land
+/// (docs/BLOCKS-PARSING.md §5).
+fn isParagraphContinuationText(line: source.Line) bool {
+    return tryStripBlockQuoteMarker(line) == null and tryAtxHeading(line) == null;
 }
 
 /// A block whose inlines are parsed in phase 2, once every link reference
@@ -511,6 +623,7 @@ fn encodeCp(out: []u8, cp: u21) usize {
 fn closeParagraph(
     doc: *document.Document,
     paragraph: *?Paragraph,
+    parent: *document.Node,
     defs: *Definitions,
     pending: *std.ArrayList(PendingInline),
 ) ParseError!void {
@@ -534,7 +647,7 @@ fn closeParagraph(
         .end = remaining[remaining.len - 1].content.end,
     };
     const node = try doc.createNode(.paragraph, span, .none);
-    try doc.appendChild(doc.root, node);
+    try doc.appendChild(parent, node);
     try pending.append(doc.allocator(), .{ .paragraph = .{ .node = node, .lines = remaining } });
 }
 
@@ -656,11 +769,17 @@ fn tryAtxHeading(line: source.Line) ?AtxHeading {
     };
 }
 
-fn emitHeading(doc: *document.Document, line: source.Line, heading: AtxHeading, pending: *std.ArrayList(PendingInline)) ParseError!void {
+fn emitHeading(
+    doc: *document.Document,
+    line: source.Line,
+    heading: AtxHeading,
+    parent: *document.Node,
+    pending: *std.ArrayList(PendingInline),
+) ParseError!void {
     const node = try doc.createNode(.heading, line.contentSpan(), .{
         .heading = heading.level,
     });
-    try doc.appendChild(doc.root, node);
+    try doc.appendChild(parent, node);
     if (!heading.content.isEmpty()) {
         try pending.append(doc.allocator(), .{ .heading = .{ .node = node, .span = heading.content } });
     }
@@ -3093,6 +3212,115 @@ test "markdown: shortcut reference resolves (definition after use)" {
     const root = result.document.root;
     try testing.expectEqual(@as(usize, 1), root.children.items.len);
     const p = root.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p.tag);
+    try testing.expectEqual(@as(usize, 1), p.children.items.len);
+    try testing.expectEqual(document.Tag.link, p.children.items[0].tag);
+    try testing.expectEqualStrings("/url", p.children.items[0].data.link.href);
+}
+
+test "markdown: basic block quote contains its blocks, markers stripped" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "> foo\n> bar\n", .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 1), root.children.items.len);
+    const bq = root.children.items[0];
+    try testing.expectEqual(document.Tag.block_quote, bq.tag);
+    // The quote span covers the stripped content: 2 (the marker) .. end
+    // of the last line's content (byte 11 = after `> bar`).
+    try testing.expectEqual(@as(u32, 2), bq.span.start);
+    try testing.expectEqual(@as(u32, 11), bq.span.end);
+    try testing.expectEqual(@as(usize, 1), bq.children.items.len);
+    const p = bq.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p.tag);
+    // One paragraph with a soft break; the marker bytes are not in spans.
+    try testing.expectEqual(@as(u32, 2), p.span.start);
+    try testing.expectEqual(@as(u32, 11), p.span.end);
+    try testing.expectEqual(@as(usize, 3), p.children.items.len);
+    try testing.expectEqualStrings("foo", p.children.items[0].data.text);
+    try testing.expectEqual(document.Tag.soft_break, p.children.items[1].tag);
+    try testing.expectEqualStrings("bar", p.children.items[2].data.text);
+}
+
+test "markdown: nested block quotes" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "> > foo\n", .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    const outer = root.children.items[0];
+    try testing.expectEqual(document.Tag.block_quote, outer.tag);
+    const inner = outer.children.items[0];
+    try testing.expectEqual(document.Tag.block_quote, inner.tag);
+    const p = inner.children.items[0];
+    try testing.expectEqualStrings("foo", p.children.items[0].data.text);
+    try testing.expectEqual(@as(u32, 4), p.span.start); // "> > " = 4 bytes
+}
+
+test "markdown: lazy continuation keeps the quote; markers stay open" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "> foo\nbar\n", .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 1), root.children.items.len);
+    const bq = root.children.items[0];
+    try testing.expectEqual(document.Tag.block_quote, bq.tag);
+    const p = bq.children.items[0];
+    try testing.expectEqualStrings("foo", p.children.items[0].data.text);
+    // The lazy line's span starts at column 0 (no marker to strip).
+    try testing.expectEqualStrings("bar", p.children.items[2].data.text);
+    try testing.expectEqual(@as(u32, 6), p.children.items[2].span.start);
+    // The quote span extends to cover the lazy line (byte 9 = after `bar`).
+    try testing.expectEqual(@as(u32, 9), bq.span.end);
+}
+
+test "markdown: block quote interrupts a paragraph" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "foo\n> bar\n", .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 2), root.children.items.len);
+    try testing.expectEqual(document.Tag.paragraph, root.children.items[0].tag);
+    try testing.expectEqual(document.Tag.block_quote, root.children.items[1].tag);
+    const p = root.children.items[1].children.items[0];
+    try testing.expectEqualStrings("bar", p.children.items[0].data.text);
+}
+
+test "markdown: blank line separates block quotes; marker blank keeps one" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "> foo\n\n> bar\n", .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 2), root.children.items.len);
+    try testing.expectEqual(document.Tag.block_quote, root.children.items[0].tag);
+    try testing.expectEqual(document.Tag.block_quote, root.children.items[1].tag);
+
+    var result2 = try oliver.parse(testing.allocator, "> foo\n>\n> bar\n", .markdown, .{});
+    defer result2.deinit();
+    const root2 = result2.document.root;
+    try testing.expectEqual(@as(usize, 1), root2.children.items.len);
+    try testing.expectEqual(@as(usize, 2), root2.children.items[0].children.items.len);
+}
+
+test "markdown: empty block quote and marker-only lines" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, ">\n>  \n", .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 1), root.children.items.len);
+    try testing.expectEqual(document.Tag.block_quote, root.children.items[0].tag);
+    try testing.expectEqual(@as(usize, 0), root.children.items[0].children.items.len);
+}
+
+test "markdown: definitions inside a block quote register document-wide" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "> [foo]: /url\n> [foo]\n", .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    // The definition paragraph vanishes; the quote contains only the use.
+    const bq = root.children.items[0];
+    try testing.expectEqual(document.Tag.block_quote, bq.tag);
+    try testing.expectEqual(@as(usize, 1), bq.children.items.len);
+    const p = bq.children.items[0];
     try testing.expectEqual(document.Tag.paragraph, p.tag);
     try testing.expectEqual(@as(usize, 1), p.children.items.len);
     try testing.expectEqual(document.Tag.link, p.children.items[0].tag);
