@@ -11,12 +11,12 @@
 //! - The root node is always a `.document` whose children are blocks.
 //! - Block tags contain block or inline children as documented per tag.
 //! - `emphasis`/`strong`/`link` contain inline children; the leaf inline
-//!   tags (`text`, `code_span`, `soft_break`, `hard_break`) never have
-//!   children.
+//!   tags (`text`, `code_span`, `image`, `soft_break`, `hard_break`)
+//!   never have children.
 //! - `Node.data.text` always points into the document's source bytes;
-//!   `data.code_span`, `data.link.href`, and `data.link.title` are the
-//!   arena-owned (copied) payloads (see docs/DOCUMENT-MODEL.md
-//!   invariant 5).
+//!   `data.code_span`, `data.image` (src/alt/title), and
+//!   `data.link` (href/title) are the arena-owned (copied) payloads
+//!   (see docs/DOCUMENT-MODEL.md invariant 5).
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -47,6 +47,13 @@ pub const Tag = enum {
     /// url` planned). Children: inlines (the link text). `data.link` holds
     /// the arena-owned, escape-resolved href and optional title.
     link,
+    /// An inline image (Markdown `![alt](src "title")`; Textile
+    /// `!url(alt)!` planned). Leaf: no children. `data.image` holds the
+    /// arena-owned src, the flattened plain-string alt, and the optional
+    /// title (docs/IMAGES-PARSING.md §3: the description's inlines are
+    /// flattened to a string at parse time; the image node carries no
+    /// subtree).
+    image,
     /// A line break that renders as a newline in HTML (Markdown soft break).
     soft_break,
     /// A line break that renders as `<br />` in HTML (Markdown hard break,
@@ -56,13 +63,13 @@ pub const Tag = enum {
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading => true,
-            .text, .emphasis, .strong, .code_span, .link, .soft_break, .hard_break => false,
+            .text, .emphasis, .strong, .code_span, .link, .image, .soft_break, .hard_break => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .code_span, .link, .soft_break, .hard_break => true,
+            .text, .emphasis, .strong, .code_span, .link, .image, .soft_break, .hard_break => true,
             .document, .paragraph, .heading => false,
         };
     }
@@ -83,6 +90,25 @@ pub const Data = union(enum) {
     /// arena-owned copies (backslash escapes do not survive as source
     /// slices). The title is null when absent, not an empty string.
     link: Link,
+    /// `.image`: escape-resolved src and optional title (like `link`),
+    /// plus the flattened plain-string alt. All arena-owned copies; the
+    /// alt is the description's inlines flattened per §6.7 (see
+    /// docs/IMAGES-PARSING.md §3), so it cannot be a source slice. The
+    /// title is null when absent, not an empty string.
+    image: Image,
+};
+
+/// The payload of a `.image` node: the resolved src, the flattened
+/// plain-string alt (always present, possibly empty — the spec's `alt=""`
+/// for `![](/url)`), and the optional title. `src` and `title` are
+/// escape-resolved like `link.href`/`link.title`; percent-encoding of the
+/// src is a renderer policy shared with href (docs/ARCHITECTURE.md). The
+/// alt is the plain string content of the image description (no
+/// formatting) and is HTML-escaped at render like text.
+pub const Image = struct {
+    src: []const u8,
+    alt: []const u8,
+    title: ?[]const u8,
 };
 
 /// The payload of a `.link` node: the resolved href and optional title.

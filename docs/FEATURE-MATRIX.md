@@ -47,8 +47,8 @@ divergences.
 | entities | deferred | §2.3: named + numeric references; entity table is large (HTML5 entities.json) — a dedicated milestone with a compact lookup strategy. |
 | emphasis / strong | implemented | §6.2, full rule set (rules 1–12) with the scan → match → emit algorithm in docs/INLINE-PARSING.md: per-run flanking classification, a delimiter stack with `openers_bottom` pruning (amortized linear), the mod-3 rule, strong-before-emphasis, and front/back run consumption for intraword runs that act as both closer and opener. Unicode whitespace/punctuation classification comes from generated tables (src/unicode.zig, Unicode 13.0 categories Zs / P+S per §2.1). Adjacent text nodes merge when their spans are contiguous (normalized model). Verified against spec examples 384–418 including `***foo** bar*`, `*****Hello*world****`, `foo_bar_baz`, `5__6__78`, `пристаням__стремятся__`. |
 | code spans | implemented | §6.6: backtick-string discovery runs ahead of delimiter matching; an opener closes at the next backtick string of equal length (opening 2 vs closing 1 does not match); unmatched backticks stay literal. Content is opaque to delimiters and backslash escapes are inert inside; line endings become spaces; one ASCII space is stripped from each end when the content begins and ends with space but is not all spaces (tabs are not stripped, spec 344's note); the closer scan ignores backslash escapes (spec 340). `code_span` is a leaf inline with arena-owned normalized content; the node span covers the whole construct including backticks. Verified against spec examples 333–348. |
-| links | implemented | §6.6 (inline links): link-bracket discovery runs ahead of delimiter matching (brackets bind more tightly than emphasis; `*[foo*](/uri)` is a link), and code spans bind more tightly than brackets. A `]` whose nearest `[` is followed by a valid `(...)` forms a link; brackets that never form a link stay literal. Inline destination/title syntax per spec: `<...>` or bare destinations (balanced/escaped parens only), `"`/`'`/`(...)` titles, components separated by spaces/tabs/up to one line ending, destinations cannot contain line endings, titles may. A valid link kills every earlier `[` (links cannot contain links, innermost wins); link text is matched as a fresh inline scope. Destinations and titles resolve backslash escapes into arena-owned payloads (`data.link`); href percent-encoding is a renderer policy (see docs/ARCHITECTURE.md). **Chosen behaviors/divergences:** `![alt](url)` currently parses as literal `!` + link (images deferred); a paren-title closes at the first unescaped `)`; an unescaped `<` inside an angle destination fails the link; DoS guards — paren depth capped at 32 (spec-sanctioned) and component scans capped at 2048 bytes; `&entity;` in destinations/titles stays literal (entities deferred). Verified against spec examples 482–536 (inline subset), including the precedence and no-nesting shapes. |
-| images | planned | §6.7 (image part). `![alt](url)` — needs the image opener (`![` is currently treated as `!` + link, see the links row). |
+| links | implemented | §6.6 (inline links): link-bracket discovery runs ahead of delimiter matching (brackets bind more tightly than emphasis; `*[foo*](/uri)` is a link), and code spans bind more tightly than brackets. A `]` whose nearest `[` is followed by a valid `(...)` forms a link; brackets that never form a link stay literal. Inline destination/title syntax per spec: `<...>` or bare destinations (balanced/escaped parens only), `"`/`'`/`(...)` titles, components separated by spaces/tabs/up to one line ending, destinations cannot contain line endings, titles may. A valid link kills every earlier `[` (links cannot contain links, innermost wins); link text is matched as a fresh inline scope. Destinations and titles resolve backslash escapes into arena-owned payloads (`data.link`); href percent-encoding is a renderer policy (see docs/ARCHITECTURE.md). **Chosen behaviors/divergences:** a paren-title closes at the first unescaped `)`; an unescaped `<` inside an angle destination fails the link; DoS guards — paren depth capped at 32 (spec-sanctioned) and component scans capped at 2048 bytes; `&entity;` in destinations/titles stays literal (entities deferred). Verified against spec examples 482–536 (inline subset), including the precedence and no-nesting shapes. |
+| images | implemented | §6.7 (inline images), see docs/IMAGES-PARSING.md. `![` (unescaped `!` + `[`) is its own opener on the same discovery stack as links; an image description may contain links and images, so only a formed *link* inactivates earlier `[` openers — never `![` (the spec appendix's active/inactive rule, implemented as an O(1) monotone check). The description is matched as a fresh inline scope and flattened to the arena-owned `alt` string ("only the plain string content"); `.image` is a leaf inline (`data.image = { src, alt, title }`). `<img src alt title>` renders as a void element under `void_trailing_slash`; `src` uses the link `href` percent-encoding policy; `alt` is always emitted (possibly empty) and `title` only when present, both HTML-escaped like text; attribute order is fixed `src`, `alt`, `title`. Destinations/titles parse identically to links and share the §6.6 DoS guards (paren depth 32, scan cap 2048). **Deferred:** reference-style and collapsed/shortcut forms (`![alt][label]`, `![alt][]`, `![alt]`) — they need link reference definitions (§4.7), the parallel slice. Verified byte-for-byte against spec examples 572, 574, 575, 578–581 and the literal forms of 592–593. |
 | autolinks | planned | §6.8: `<scheme:...>` and email autolinks. |
 | inline HTML | planned | §6.9: raw inline tags under the same policy decision as HTML blocks. |
 | Unicode | partial | Bytes pass through untouched; no encoding assumptions beyond byte slicing. Text escaping operates on bytes; multibyte UTF-8 is unaffected. |
@@ -68,7 +68,10 @@ delimiter matching in a documented precedence order (code span markers are
 opaque to delimiters; link brackets are opaque to emphasis), exactly as
 §6.1's precedence requires. The code-span precedence landed with the
 code-span milestone; the link precedence (a second discovery pass with its
-own bracket stack) landed with the link milestone.
+own bracket stack) landed with the link milestone; images (`![` openers,
+with the appendix's active/inactive bracket semantics) extended that same
+pass with the images milestone (docs/IMAGES-PARSING.md, written as the
+design contract *before* the image code).
 
 ---
 
@@ -165,3 +168,21 @@ below).
 11. **Trailing tabs and hard breaks.** §6.7 requires "two or more spaces";
     Oliver counts only ASCII spaces in the trailing run (a tab does not
     trigger a hard break, but the whole run is consumed).
+12. **Alt flattening of breaks and code spans.** §6.7 says only the plain
+    string content of an image description is used, with no spec example
+    for breaks or code spans inside a description. **Oliver: soft and hard
+    breaks flatten to `\n`** (a break's plain string content is the line
+    ending; the hard-break marker is consumed as usual) **and code spans
+    flatten to their §6.1-normalized content.** Both pinned by fixtures
+    (`image-alt-breaks`, `image-alt-code`); see docs/IMAGES-PARSING.md
+    §3/§8.
+13. **Image section numbering.** The repo cites images as §6.7 (the
+    convention the link milestone established); the numbered 0.31.2 HTML
+    numbers the Images section §6.4. **Oliver keeps the repo convention**
+    and records the discrepancy in docs/IMAGES-PARSING.md.
+14. **Inactive `[` openers are kept, not cleared.** A formed link marks
+    every earlier `[` inactive per the spec appendix, and an inactive `[`
+    still intercepts a later `]` (it must not reach a `![` below it).
+    Oliver implements this with a monotone O(1) check instead of
+    re-marking, so the shape stays linear (fixture
+    `image-inactive-bracket`; docs/IMAGES-PARSING.md §2).

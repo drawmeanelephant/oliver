@@ -1,11 +1,12 @@
 //! Markdown frontend.
 //!
 //! Implemented: paragraphs, ATX headings, backslash escapes, hard and soft
-//! line breaks, emphasis and strong emphasis, code spans (§6.1), and
-//! inline links (§6.6). Behavior is taken from the CommonMark
-//! specification (0.31.2) where the slice implements it; divergences and
-//! chosen behaviors are documented in docs/FEATURE-MATRIX.md, and the
-//! emphasis/strong algorithm is derived in docs/INLINE-PARSING.md.
+//! line breaks, emphasis and strong emphasis, code spans (§6.1), inline
+//! links (§6.6), and inline images (§6.7). Behavior is taken from the
+//! CommonMark specification (0.31.2) where the slice implements it;
+//! divergences and chosen behaviors are documented in
+//! docs/FEATURE-MATRIX.md, and the emphasis/strong algorithm is derived
+//! in docs/INLINE-PARSING.md (images: docs/IMAGES-PARSING.md).
 //!
 //! Code spans are discovered *before* the delimiter scan (a discovery pass
 //! over the paragraph's raw content finds equal-length backtick-string
@@ -29,6 +30,15 @@
 //! innermost-first and link text never contains another link. This is the
 //! second delimiter-opacity rule (link brackets bind more tightly than
 //! emphasis; `*[foo*](/uri)` is a link).
+//!
+//! Inline images ride the same discovery pass: `![` is its own opener on
+//! the bracket stack, and an image description may contain links and
+//! images — a formed link inactivates only earlier `[` openers, never
+//! `![` (spec appendix; docs/IMAGES-PARSING.md §2). The description is
+//! matched as a fresh inline scope and then flattened to the arena-owned
+//! `alt` string (the spec's "only the plain string content of the image
+//! description"), so `.image` is a leaf node like `code_span`. Images
+//! reuse the link `(...)` parser and its DoS guards verbatim.
 //!
 //! The parser runs in two passes, matching the spec's precedence model:
 //! block structure first, then inline structure. The block pass recognizes
@@ -153,8 +163,9 @@ fn closeParagraph(doc: *document.Document, paragraph: *?Paragraph) ParseError!vo
             }
         }
     }
-    // Second discovery pass: inline links (§6.6), before emphasis matching.
-    try discoverLinks(doc, &items, span.end);
+    // Second discovery pass: inline links and images (§6.6/§6.7), before
+    // emphasis matching.
+    try discoverLinksAndImages(doc, &items, span.end);
     try matchInlines(doc, node, items.items);
 }
 
@@ -260,7 +271,7 @@ fn emitHeading(doc: *document.Document, line: source.Line, heading: AtxHeading) 
     defer spans.deinit(doc.allocator());
     try discoverCodeSpans(doc, &[_]source.Span{scan}, &spans);
     try scanLine(doc, &items, scan, scan, spans.items);
-    try discoverLinks(doc, &items, scan.end);
+    try discoverLinksAndImages(doc, &items, scan.end);
     try matchInlines(doc, node, items.items);
 
     if (scan.end != content.end) {
@@ -340,10 +351,25 @@ const InlineItem = union(enum) {
     /// of the destination (sans `<...>`) and title content (sans
     /// delimiters), resolved for escapes at emit time.
     link: LinkItem,
+    /// A discovered inline image (§6.7): `span` covers the whole construct
+    /// `![desc](dest "title")`; `children` are the description items (an
+    /// image description may contain links and images, so unlike a link
+    /// these may contain link/image items); `dest`/`title` are raw source
+    /// spans like a link's. The description is flattened to the `alt`
+    /// string at emit time (docs/IMAGES-PARSING.md §3).
+    image: ImageItem,
 };
 
 /// A discovered inline link (§6.6). See `InlineItem.link`.
 const LinkItem = struct {
+    span: source.Span,
+    children: std.ArrayList(InlineItem),
+    dest: source.Span,
+    title: ?source.Span,
+};
+
+/// A discovered inline image (§6.7). See `InlineItem.image`.
+const ImageItem = struct {
     span: source.Span,
     children: std.ArrayList(InlineItem),
     dest: source.Span,
@@ -360,6 +386,7 @@ fn itemSpan(item: InlineItem) source.Span {
         .code_span => |c| c.span,
         .bracket => |b| b.span,
         .link => |l| l.span,
+        .image => |im| im.span,
     };
 }
 
@@ -372,6 +399,7 @@ fn setItemSpan(item: *InlineItem, span: source.Span) void {
         .code_span => |*c| c.span = span,
         .bracket => |*b| b.span = span,
         .link => |*l| l.span = span,
+        .image => |*im| im.span = span,
     }
 }
 
@@ -631,28 +659,38 @@ fn scanTitle(bytes: []const u8, start: usize, para_end: usize) ?TitleParts {
 const max_dest_depth: usize = 32;
 const max_link_scan: usize = 2048;
 
-/// Discovers inline links (§6.6) in the item list, restructuring it in
-/// place. Walks the list with a bracket stack; on a `]` whose nearest `[`
-/// opener is followed by a valid `(...)` link in the source, splices the
-/// bracket range — plus the items covering the consumed `(...)` bytes —
-/// into a single `link` item whose children are the link-text items, and
-/// forgets every earlier `[` (links cannot contain links, so after a link
-/// forms no earlier `[` can ever open). Brackets that never form a link
-/// stay in the list and emit as literal text. Because a link inside a
-/// bracket range would have killed that range's opener, link children
-/// never contain links. Runs before emphasis matching: a link item is
-/// opaque to the delimiter stack, and its children are matched separately.
-fn discoverLinks(doc: *document.Document, items: *std.ArrayList(InlineItem), para_end: u32) ParseError!void {
+/// Discovers inline links (§6.6) and images (§6.7) in the item list,
+/// restructuring it in place. Walks the list with a bracket stack; on a
+/// `]` whose nearest `[` or `![` opener is followed by a valid `(...)`
+/// construct in the source, splices the bracket range — plus the items
+/// covering the consumed `(...)` bytes — into a single `link` or `image`
+/// item whose children are the bracket-range items, and drops the matched
+/// opener and everything trapped above it. Brackets that never form a
+/// construct stay in the list and emit as literal text.
+///
+/// Nesting follows the spec appendix's *look for link or image*: a formed
+/// *link* inactivates every earlier `[` opener (links cannot contain
+/// links, innermost wins), while a formed *image* inactivates nothing (an
+/// image description may contain links and images). Inactivity is decided
+/// by a monotone check — a `[` at out position `p` is inactive iff some
+/// link has formed with an opener at a larger out position, so nothing is
+/// re-marked and matching stays linear (docs/IMAGES-PARSING.md §2). `![`
+/// openers are never inactive. Runs before emphasis matching: link/image
+/// items are opaque to the delimiter stack, and their children are matched
+/// separately (link text as a fresh inline scope; image descriptions
+/// flattened to the alt string at emit time).
+fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineItem), para_end: u32) ParseError!void {
     const bytes = doc.src.bytes;
     var out = std.ArrayList(InlineItem).empty;
     var stack = std.ArrayList(usize).empty;
     defer stack.deinit(doc.allocator());
 
     const old = items.items;
+    var max_link_opener_out: usize = 0;
     var i: usize = 0;
     while (i < old.len) : (i += 1) {
         const item = old[i];
-        if (item == .bracket and item.bracket.ch == '[') {
+        if (item == .bracket and (item.bracket.ch == '[' or item.bracket.ch == '!')) {
             try out.append(doc.allocator(), item);
             try stack.append(doc.allocator(), out.items.len - 1);
             continue;
@@ -663,12 +701,23 @@ fn discoverLinks(doc: *document.Document, items: *std.ArrayList(InlineItem), par
                 continue;
             }
             const o = stack.items[stack.items.len - 1];
+            if (out.items[o].bracket.ch == '[' and max_link_opener_out > o) {
+                // Inactive opener (a `[` below a formed link): remove it
+                // and return a literal `]` — it must not reach a `![`
+                // below it (spec appendix; docs/IMAGES-PARSING.md §2).
+                _ = stack.pop();
+                try out.append(doc.allocator(), item);
+                continue;
+            }
             const close_end = item.bracket.span.end;
             if (tryParseLink(bytes, close_end, para_end)) |lp| {
+                const is_image = out.items[o].bracket.ch == '!';
                 const open_start = out.items[o].bracket.span.start;
 
-                // Children: the items between `[` and `]`. Never contains a
-                // link (one would have killed this opener first).
+                // Children: the items between the opener and `]`. Never
+                // contains a link (one would have killed this opener
+                // first); an image's description may contain links and
+                // images.
                 var children = std.ArrayList(InlineItem).empty;
                 try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
 
@@ -681,26 +730,43 @@ fn discoverLinks(doc: *document.Document, items: *std.ArrayList(InlineItem), par
                 if (itemSpan(old[j - 1]).end > lp.paren_end) {
                     // The last consumed item extends past the closing paren
                     // (e.g. `[foo](/uri) and more`): truncate its tail so it
-                    // stays literal text after the link.
+                    // stays literal text after the construct.
                     setItemSpan(&old[j - 1], .{ .start = lp.paren_end, .end = itemSpan(old[j - 1]).end });
                     try out.append(doc.allocator(), old[j - 1]);
                 }
 
                 out.shrinkRetainingCapacity(o);
-                try out.append(doc.allocator(), .{
-                    .link = .{
-                        .span = .{ .start = open_start, .end = lp.paren_end },
-                        .children = children,
-                        .dest = lp.dest,
-                        .title = lp.title,
-                    },
-                });
-                // Every earlier `[` is dead (links cannot contain links).
-                stack.clearRetainingCapacity();
+                if (is_image) {
+                    try out.append(doc.allocator(), .{
+                        .image = .{
+                            .span = .{ .start = open_start, .end = lp.paren_end },
+                            .children = children,
+                            .dest = lp.dest,
+                            .title = lp.title,
+                        },
+                    });
+                } else {
+                    try out.append(doc.allocator(), .{
+                        .link = .{
+                            .span = .{ .start = open_start, .end = lp.paren_end },
+                            .children = children,
+                            .dest = lp.dest,
+                            .title = lp.title,
+                        },
+                    });
+                    // A formed link inactivates every earlier `[` (the
+                    // monotone check above); record its out position so
+                    // those openers are recognized as dead.
+                    max_link_opener_out = @max(max_link_opener_out, o);
+                }
+                // The matched opener and everything trapped above it were
+                // consumed by the construct; entries below stay (their
+                // activity is decided by the monotone check).
+                while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
                 i = j - 1; // the `(...)` items were consumed
                 continue;
             }
-            // Not a link: the opener can never match a later `]`.
+            // Not a link/image: the opener can never match a later `]`.
             _ = stack.pop();
             try out.append(doc.allocator(), item);
             continue;
@@ -775,7 +841,20 @@ fn scanLine(
             continue;
         }
         const b = bytes[i];
-        if (b == '[' or b == ']') {
+        if (b == '!' and !isEscaped(bytes, i) and
+            i + 1 < raw.end and bytes[i + 1] == '[' and !isEscaped(bytes, i + 1))
+        {
+            // `![` with both characters unescaped is an image opener (§6.7):
+            // a bracket item spanning both bytes. An escaped `!` or `[` at
+            // the boundary is literal text (`\![foo]` is an escaped `!`;
+            // `!\[foo]` has an escaped `[` — neither opens an image).
+            try appendTextItem(doc, items, .{ .start = run_start, .end = i }, emit);
+            try items.append(doc.allocator(), .{
+                .bracket = .{ .ch = '!', .span = .{ .start = @intCast(i), .end = @intCast(i + 2) } },
+            });
+            run_start = i + 2;
+            i += 1; // the loop increments past the `[`
+        } else if (b == '[' or b == ']') {
             if (isEscaped(bytes, i)) continue; // literal text, not a bracket
             try appendTextItem(doc, items, .{ .start = run_start, .end = i }, emit);
             try items.append(doc.allocator(), .{
@@ -987,23 +1066,30 @@ fn mod3Allowed(o: *const DelimiterRun, c: *const DelimiterRun) bool {
     return o.len() % 3 == 0 and c.len() % 3 == 0;
 }
 
-/// Runs the match phase over the item list, then materializes document nodes
-/// under `block`.
-fn matchInlines(doc: *document.Document, block: *document.Node, items: []const InlineItem) ParseError!void {
+/// Runs the match phase over `items` (delimiter stack, rules 1–12),
+/// returning the arena-allocated match list. Mutates only
+/// `front_used`/`back_used` inside delimiter items; the item list itself
+/// is stable, so it is safe to alias it into a mutable slice. Each inline
+/// scope is matched exactly once: paragraph/heading items, link-text
+/// children, and image-description children (the latter only so the
+/// consumed delimiters are known when flattening to the alt string).
+fn matchItems(doc: *document.Document, items: []const InlineItem) ParseError![]const Match {
     var stack = std.ArrayList(usize).empty;
     var bottoms = Bottoms{};
     var matches = std.ArrayList(Match).empty;
 
-    // The match phase mutates only `front_used`/`back_used` inside delimiter
-    // items; the item list itself is stable, so it is safe to alias it into
-    // a mutable slice.
     const mutable = @constCast(items);
     for (mutable, 0..) |item, i| {
         if (item != .delimiter) continue;
         try processDelimiter(doc, mutable, &stack, &bottoms, &matches, i);
     }
+    return matches.items;
+}
 
-    try emitInlines(doc, block, mutable, matches.items);
+/// Matches the item list as a fresh inline scope, then materializes
+/// document nodes under `block`.
+fn matchInlines(doc: *document.Document, block: *document.Node, items: []const InlineItem) ParseError!void {
+    try emitInlines(doc, block, @constCast(items), try matchItems(doc, items));
 }
 
 // ---------------------------------------------------------------------------
@@ -1095,7 +1181,7 @@ fn emitInlines(
                 // matched with the `[` opener as stack_bottom (the spec's
                 // "process emphasis" call), so they never see delimiters
                 // outside the brackets — and they contain no links (see
-                // discoverLinks).
+                // discoverLinksAndImages).
                 const node = try doc.createNode(.link, lk.span, .{
                     .link = .{
                         .href = try resolveEscapes(doc, lk.dest),
@@ -1104,6 +1190,20 @@ fn emitInlines(
                 });
                 try doc.appendChild(current, node);
                 try matchInlines(doc, node, lk.children.items);
+            },
+            .image => |im| {
+                // Leaf node (no children): the description is flattened to
+                // the plain-string alt at parse time, per §6.7
+                // (docs/IMAGES-PARSING.md §3). `src`/`title` resolve
+                // escapes like a link's href/title.
+                const node = try doc.createNode(.image, im.span, .{
+                    .image = .{
+                        .src = try resolveEscapes(doc, im.dest),
+                        .alt = try flattenAlt(doc, im.children.items),
+                        .title = if (im.title) |ts| try resolveEscapes(doc, ts) else null,
+                    },
+                });
+                try doc.appendChild(current, node);
             },
             .delimiter => |run| {
                 const o_start = opener_off[i];
@@ -1304,6 +1404,68 @@ fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) 
     }
     const node = try doc.createNode(.text, span, .{ .text = doc.text(span) });
     try doc.appendChild(parent, node);
+}
+
+// ---------------------------------------------------------------------------
+// Inline pass: alt flattening (images, §6.7).
+// ---------------------------------------------------------------------------
+
+/// One scope frame of the alt-flattening work stack: an inline scope's
+/// items plus the next item index. Emphasis matching for a scope runs when
+/// the frame is pushed (it mutates delimiter items' consumed counters, so
+/// the walk itself needs no match list).
+const FlattenScope = struct {
+    items: []const InlineItem,
+    i: usize,
+};
+
+/// Flattens an image description to its plain string content (the `alt`
+/// attribute), per §6.7: "only the plain string content of the image
+/// description be used ... without formatting" (docs/IMAGES-PARSING.md
+/// §3). Each scope (the description itself, and the text of any link or
+/// nested image inside it) is first matched as a fresh inline scope
+/// (delimiter stack, rules 1–12), then walked in document order: text and
+/// code-span content contribute directly (escapes resolved, backticks
+/// dropped), consumed delimiters contribute nothing, leftover delimiters
+/// and unconsumed brackets contribute their literal bytes, soft/hard
+/// breaks contribute `\n`, and link and nested-image items contribute
+/// their own flattened children. Nested scopes are processed on an
+/// explicit work stack, so hostile nesting cannot overflow the call
+/// stack. Returns an arena-owned copy (like `code_span`/`link` payloads,
+/// the alt cannot be a source slice).
+fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]const u8 {
+    var buf = std.ArrayList(u8).empty;
+    var work = std.ArrayList(FlattenScope).empty;
+    defer work.deinit(doc.allocator());
+
+    _ = try matchItems(doc, items); // consumed delimiters are known to the walk
+    try work.append(doc.allocator(), .{ .items = items, .i = 0 });
+    while (work.items.len > 0) {
+        const top = work.items.len - 1;
+        const f = &work.items[top];
+        if (f.i >= f.items.len) {
+            work.shrinkRetainingCapacity(top);
+            continue;
+        }
+        const item = f.items[f.i];
+        f.i += 1;
+        switch (item) {
+            .text => |span| try buf.appendSlice(doc.allocator(), try resolveEscapes(doc, span)),
+            .code_span => |cs| try buf.appendSlice(doc.allocator(), try normalizeCodeSpan(doc, cs.content)),
+            .brk => try buf.append(doc.allocator(), '\n'),
+            .delimiter => |run| try buf.appendSlice(doc.allocator(), doc.src.bytes[run.span.start + run.front_used .. run.span.end - run.back_used]),
+            .bracket => |br| try buf.appendSlice(doc.allocator(), doc.src.bytes[br.span.start..br.span.end]),
+            .link => |lk| {
+                _ = try matchItems(doc, lk.children.items);
+                try work.append(doc.allocator(), .{ .items = lk.children.items, .i = 0 });
+            },
+            .image => |im| {
+                _ = try matchItems(doc, im.children.items);
+                try work.append(doc.allocator(), .{ .items = im.children.items, .i = 0 });
+            },
+        }
+    }
+    return buf.toOwnedSlice(doc.allocator());
 }
 
 // ---------------------------------------------------------------------------
@@ -2072,6 +2234,194 @@ test "markdown: link in heading, empty href, quote destination" {
         try testing.expectEqualStrings("\"title\"", lnk.data.link.href);
         try testing.expectEqual(@as(?[]const u8, null), lnk.data.link.title);
     }
+}
+
+// --- inline images (docs/IMAGES-PARSING.md) ---
+
+test "markdown: image structure, spans, and payloads" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "![foo](/uri \"title\")", .markdown, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(@as(usize, 1), p.children.items.len);
+    const img = p.children.items[0];
+    try testing.expectEqual(document.Tag.image, img.tag);
+    // The node span covers the whole construct: `![` .. `)`.
+    try testing.expectEqual(source.Span{ .start = 0, .end = 20 }, img.span);
+    try testing.expectEqualStrings("/uri", img.data.image.src);
+    try testing.expectEqualStrings("foo", img.data.image.alt);
+    try testing.expectEqualStrings("title", img.data.image.title.?);
+    // Leaf inline: no children (the description lives in the alt string).
+    try testing.expectEqual(@as(usize, 0), img.children.items.len);
+}
+
+test "markdown: image alt flattens description inlines" {
+    const oliver = @import("oliver.zig");
+    // Emphasis, strong, and code spans all flatten to plain string content
+    // (docs/IMAGES-PARSING.md §3: "only the plain string content ...").
+    {
+        var result = try oliver.parse(testing.allocator, "![foo *bar*](/u)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqualStrings("foo bar", img.data.image.alt);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "![*a* **b** `c`](/u)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqualStrings("a b c", img.data.image.alt);
+    }
+    // Escapes resolve in the description.
+    {
+        var result = try oliver.parse(testing.allocator, "![foo \\*bar\\*](/u)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqualStrings("foo *bar*", img.data.image.alt);
+    }
+    // Escaped and unmatched brackets are literal content.
+    {
+        var result = try oliver.parse(testing.allocator, "![foo\\]bar](/u)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqualStrings("foo]bar", img.data.image.alt);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "![foo [bar] baz](/u)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqualStrings("foo [bar] baz", img.data.image.alt);
+    }
+    // Empty description → empty alt (spec example 581).
+    {
+        var result = try oliver.parse(testing.allocator, "![](/url)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqualStrings("", img.data.image.alt);
+    }
+}
+
+test "markdown: images may contain links and images, links may contain images" {
+    const oliver = @import("oliver.zig");
+    // Image description contains a link (spec example 575).
+    {
+        var result = try oliver.parse(testing.allocator, "![foo [bar](/url)](/url2)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("/url2", img.data.image.src);
+        try testing.expectEqualStrings("foo bar", img.data.image.alt);
+    }
+    // Image description contains an image (spec example 574).
+    {
+        var result = try oliver.parse(testing.allocator, "![foo ![bar](/url)](/url2)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqualStrings("foo bar", img.data.image.alt);
+    }
+    // Links may contain images (spec example 540): the image is a child
+    // node of the link.
+    {
+        var result = try oliver.parse(testing.allocator, "[![moon](moon.jpg)](/uri)", .markdown, .{});
+        defer result.deinit();
+        const lnk = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.link, lnk.tag);
+        try testing.expectEqual(@as(usize, 1), lnk.children.items.len);
+        try testing.expectEqual(document.Tag.image, lnk.children.items[0].tag);
+        try testing.expectEqualStrings("moon", lnk.children.items[0].data.image.alt);
+    }
+    // A link inside the description does not kill the image opener, and a
+    // dead `[` above a live `![` intercepts a `]` (the appendix's
+    // inactive-bracket semantics; docs/IMAGES-PARSING.md §2).
+    {
+        var result = try oliver.parse(testing.allocator, "![foo [bar [baz](/u)](/u2)](/u3)", .markdown, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.image, img.tag);
+        try testing.expectEqualStrings("foo [bar baz](/u2)", img.data.image.alt);
+    }
+}
+
+test "markdown: image openers require an unescaped bang and bracket" {
+    const oliver = @import("oliver.zig");
+    // Escaped `[`: literal `![foo]` (spec example 592 shape).
+    {
+        var result = try oliver.parse(testing.allocator, "!\\[foo]", .markdown, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try testing.expectEqualStrings("![foo]", try inlineText(&result.document, p));
+        try testing.expectEqual(@as(usize, 0), countImages(&result.document));
+    }
+    // Escaped `!`: literal `!` then `[foo]` (spec example 593 shape;
+    // reference links are deferred, so the brackets stay literal).
+    {
+        var result = try oliver.parse(testing.allocator, "\\![foo]", .markdown, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try testing.expectEqualStrings("![foo]", try inlineText(&result.document, p));
+        try testing.expectEqual(@as(usize, 0), countImages(&result.document));
+    }
+    // A plain `!` not followed by `[` is just text.
+    {
+        var result = try oliver.parse(testing.allocator, "hello! world", .markdown, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try testing.expectEqual(@as(usize, 1), p.children.items.len);
+        try testing.expectEqualStrings("hello! world", p.children.items[0].data.text);
+    }
+}
+
+test "markdown: image in heading and emphasis; code spans keep it from closing" {
+    const oliver = @import("oliver.zig");
+    {
+        var result = try oliver.parse(testing.allocator, "# ![foo](/url)", .markdown, .{});
+        defer result.deinit();
+        const h = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.heading, h.tag);
+        try testing.expectEqual(document.Tag.image, h.children.items[0].tag);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "*![foo](/url)*", .markdown, .{});
+        defer result.deinit();
+        const em = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.emphasis, em.tag);
+        try testing.expectEqual(document.Tag.image, em.children.items[0].tag);
+    }
+    // Code spans bind more tightly than brackets: the `]` inside the span
+    // never closes the image, so it stays literal (`` ![foo`](/uri)` ``).
+    {
+        var result = try oliver.parse(testing.allocator, "![foo`](/uri)`", .markdown, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try testing.expectEqual(@as(usize, 2), p.children.items.len);
+        try testing.expectEqualStrings("![foo", p.children.items[0].data.text);
+        try testing.expectEqual(document.Tag.code_span, p.children.items[1].tag);
+        try testing.expectEqualStrings("](/uri)", p.children.items[1].data.code_span);
+    }
+}
+
+test "markdown: image destination and title resolve backslash escapes" {
+    const oliver = @import("oliver.zig");
+    // `![x](\(foo\) \"ti\\*tle\")`: escaped parens in the destination
+    // and an escaped `*` in the title, resolved into arena-owned payloads
+    // exactly like a link's.
+    var result = try oliver.parse(testing.allocator, "![x](\\(foo\\) \"ti\\*tle\")", .markdown, .{});
+    defer result.deinit();
+    const img = result.document.root.children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.image, img.tag);
+    try testing.expectEqualStrings("(foo)", img.data.image.src);
+    try testing.expectEqualStrings("ti*tle", img.data.image.title.?);
+    try testing.expectEqual(@as(usize, 0), img.children.items.len);
+}
+
+/// Counts `.image` nodes in a document (structural assertions).
+fn countImages(doc: *document.Document) usize {
+    var it = document.Document.Iterator.init(doc.allocator(), doc.root) catch return 0;
+    defer it.deinit();
+    var n: usize = 0;
+    while (it.next() catch null) |node| {
+        if (node.tag == .image) n += 1;
+    }
+    return n;
 }
 
 /// Concatenates a node's inline text payloads (escapes split text into
