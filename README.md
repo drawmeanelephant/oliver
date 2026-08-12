@@ -26,20 +26,24 @@ including the mod-3 rule and `openers_bottom` pruning), code spans (§6.6,
 run-length matching with delimiter opacity), inline links (§6.6, bracket
 opacity, destination/title syntax, href percent-encoding), inline images
 (§6.7, `![alt](src "title")` with alt flattening and `<img>` rendering),
-reference links (§4.7 link reference definitions collected in the block
-pass; full, collapsed, and shortcut forms resolved against a Unicode
-case-folded label map), block quotes (§5.1 on the container-block stack
-with nesting, laziness, and interruption — the architecture for lists),
-plain inline text, a shared document model, a deterministic HTML renderer,
-Markdown (ATX) and Textile (`hN.`) frontends, structured diagnostics, and
-a provisional CLI.
+<<<<<<< HEAD
+reference links and reference-style images (§4.7 link reference
+definitions collected in the block pass; full, collapsed, and shortcut
+forms resolved against a Unicode case-folded label map — for `[text]`
+links and `![alt]` images alike), block quotes (§5.1 on the
+container-block stack with nesting, laziness, and interruption — the
+architecture for lists), plain inline text, a shared document model, a
+deterministic HTML renderer, Markdown (ATX) and Textile (`hN.`)
+frontends, structured diagnostics, and a provisional CLI.
+>>>>>>> origin/main
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
 implemented, planned, and deferred. The emphasis/strong algorithm contract
 is [docs/INLINE-PARSING.md](docs/INLINE-PARSING.md), derived from the
 CommonMark spec's flanking rules (§6.2); the image algorithm contract is
-[docs/IMAGES-PARSING.md](docs/IMAGES-PARSING.md). Code spans, links, and
-images ride the same scan → match → emit seam.
+[docs/IMAGES-PARSING.md](docs/IMAGES-PARSING.md); the reference-style
+image contract is [docs/REFERENCE-IMAGES.md](docs/REFERENCE-IMAGES.md).
+Code spans, links, and images ride the same scan → match → emit seam.
 
 ## Building and testing
 
@@ -49,7 +53,7 @@ normative example in a CommonMark spec (see docs/TESTS.md for the
 current 348/655 baseline and how to fetch the spec).
 
 ```bash
-zig build test    # run all tests (68 tests)
+zig build test    # run all tests (73 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 

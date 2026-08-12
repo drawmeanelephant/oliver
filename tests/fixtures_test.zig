@@ -689,6 +689,72 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/image-unclosed.md"),
         .expected = @embedFile("fixtures/markdown/image-unclosed.html"),
     },
+    // --- reference-style images (docs/REFERENCE-IMAGES.md §4) ---
+    .{
+        .name = "ref-image-full",
+        .input = @embedFile("fixtures/markdown/ref-image-full.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-full.html"),
+    },
+    .{
+        .name = "ref-image-case",
+        .input = @embedFile("fixtures/markdown/ref-image-case.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-case.html"),
+    },
+    .{
+        .name = "ref-image-collapsed",
+        .input = @embedFile("fixtures/markdown/ref-image-collapsed.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-collapsed.html"),
+    },
+    .{
+        .name = "ref-image-collapsed-em",
+        .input = @embedFile("fixtures/markdown/ref-image-collapsed-em.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-collapsed-em.html"),
+    },
+    .{
+        .name = "ref-image-collapsed-case",
+        .input = @embedFile("fixtures/markdown/ref-image-collapsed-case.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-collapsed-case.html"),
+    },
+    .{
+        .name = "ref-image-shortcut",
+        .input = @embedFile("fixtures/markdown/ref-image-shortcut.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-shortcut.html"),
+    },
+    .{
+        .name = "ref-image-shortcut-em",
+        .input = @embedFile("fixtures/markdown/ref-image-shortcut-em.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-shortcut-em.html"),
+    },
+    .{
+        .name = "ref-image-shortcut-alt",
+        .input = @embedFile("fixtures/markdown/ref-image-shortcut-alt.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-shortcut-alt.html"),
+    },
+    .{
+        .name = "ref-image-unmatched",
+        .input = @embedFile("fixtures/markdown/ref-image-unmatched.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-unmatched.html"),
+    },
+    .{
+        .name = "ref-image-def-after-use",
+        .input = @embedFile("fixtures/markdown/ref-image-def-after-use.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-def-after-use.html"),
+    },
+    .{
+        .name = "ref-image-inline-wins",
+        .input = @embedFile("fixtures/markdown/ref-image-inline-wins.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-inline-wins.html"),
+    },
+    .{
+        .name = "ref-image-in-link",
+        .input = @embedFile("fixtures/markdown/ref-image-in-link.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-in-link.html"),
+    },
+    .{
+        .name = "ref-image-first-wins",
+        .input = @embedFile("fixtures/markdown/ref-image-first-wins.md"),
+        .expected = @embedFile("fixtures/markdown/ref-image-first-wins.html"),
+    },
 };
 
 const TextileFixture = struct {
@@ -935,6 +1001,23 @@ test "adversarial smoke: hostile input never crashes or leaks" {
     defer image_mix.deinit(gpa);
     for (0..20_000) |_| try image_mix.appendSlice(gpa, "![a](u) *b* `c` ");
 
+    // Reference-image bombs: shortcut/collapsed/full image lookups share
+    // the definition map and the monotone inactive check, so repeated
+    // `![x]`/`![x][]`/`![x][x]` must stay linear exactly like their link
+    // counterparts (docs/REFERENCE-IMAGES.md §4).
+    var image_shortcut_bomb = std.ArrayList(u8).empty;
+    defer image_shortcut_bomb.deinit(gpa);
+    for (0..30_000) |_| try image_shortcut_bomb.appendSlice(gpa, "![alpha] ");
+    var image_collapsed_bomb = std.ArrayList(u8).empty;
+    defer image_collapsed_bomb.deinit(gpa);
+    for (0..20_000) |_| try image_collapsed_bomb.appendSlice(gpa, "![alpha][] ");
+    var image_full_bomb = std.ArrayList(u8).empty;
+    defer image_full_bomb.deinit(gpa);
+    for (0..20_000) |_| try image_full_bomb.appendSlice(gpa, "![alpha][beta] ");
+    var image_near_miss = std.ArrayList(u8).empty;
+    defer image_near_miss.deinit(gpa);
+    for (0..30_000) |_| try image_near_miss.appendSlice(gpa, "![ALPHA!] ");
+
     // The inactive-bracket marking shape: every `]` forms a link whose
     // opener leaves a dead `[` below on the stack (the monotone check
     // keeps this linear; naive re-marking would be quadratic).
@@ -983,6 +1066,10 @@ test "adversarial smoke: hostile input never crashes or leaks" {
         unbalanced_images.items,
         deep_images.items,
         image_mix.items,
+        image_shortcut_bomb.items,
+        image_collapsed_bomb.items,
+        image_full_bomb.items,
+        image_near_miss.items,
         nested_link_marks.items,
         deep_quotes.items,
         lazy_flood.items,

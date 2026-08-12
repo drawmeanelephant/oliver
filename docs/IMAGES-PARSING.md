@@ -1,6 +1,6 @@
 # Oliver Inline Parsing: Images
 
-**Status: design note (written before any image code).** This document is
+**Status: implemented.** This document is
 the contract for the inline-images slice of Oliver's Markdown frontend,
 derived entirely from the CommonMark specification (0.31.2) and Oliver's
 own docs. It fixes, in one place: the `![`-opener algorithm (from §6.7 and
@@ -123,8 +123,10 @@ and later items sit strictly after). A single running
 hostile inputs like `[[[a](u) [[b](v) [[c](w)...` (which would otherwise
 re-mark a growing inactive pile per link — quadratic) stay linear. `![`
 entries are never subject to the check. This reproduces the appendix's
-*look for link or image* step for step, with the reference-style
-branches (collapsed/shortcut) deferred with §4.7.
+*look for link or image* step for step. The reference-style branches
+(full/collapsed/shortcut for `![` openers) are implemented on the same
+stack via the §4.7 definition table — the separate contract
+docs/REFERENCE-IMAGES.md, written before that code.
 
 ## 3. Alt: the model decision
 
@@ -225,14 +227,12 @@ Implemented: the inline image `![alt](dest "title")` in paragraphs and
 headings; destinations and titles parsed identically to links
 (`<...>`/bare destinations, `"`/`'`/`(...)` titles, separators, and the
 shared §6.6 DoS guards — paren depth 32, per-component scan cap 2048
-bytes); alt flattening per §3; `<img>` rendering per §4.
-
-Deferred (belongs to the parallel reference-links slice, §4.7):
-reference-style and collapsed/shortcut image forms (`![alt][label]`,
-`![alt][]`, `![alt]`). The spec examples that need a link reference
-definition are not part of this mission; where the *literal* behavior
-survives without a definition (examples 592, 593), it is verified and
-fixture-pinned.
+bytes); alt flattening per §3; `<img>` rendering per §4. The
+reference-style forms (`![alt][label]`, `![alt][]`, `![alt]`) are also
+implemented, resolved through the §4.7 definition table with the same
+full→collapsed→shortcut ordering and alt flattening as their inline
+counterparts (docs/REFERENCE-IMAGES.md); the §6.4 reference-image spec
+examples 582–591 verify byte-for-byte.
 
 Out of scope, untouched: entities, autolinks, raw HTML, Textile.
 

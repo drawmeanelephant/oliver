@@ -337,6 +337,49 @@ and degrades malformed input to null).
 - 115 Markdown fixtures (24 new on top of the images milestone's 91),
   62 library tests, 68/68 total; `zig fmt --check` clean; build clean.
 
+## Addendum: reference-style images (session 7)
+
+- **Implemented the deferred image reference forms** (§6.4/§6.7) on top
+  of the reference-links slice: `![alt][label]` (full), `![alt][]`
+  (collapsed), and `![alt]` (shortcut) now resolve through the same §4.7
+  definition table, label normalization, and full → collapsed → shortcut
+  ordering as reference links, per the design contract
+  docs/REFERENCE-IMAGES.md (written and committed before the code). The
+  reference-links slice had gated the `!is_image` branches off in the
+  shared discovery pass; this slice removes exactly that gate — the
+  appendix's *look for link or image* procedure is uniform for links and
+  images. No new model or renderer surface: a reference-style image is
+  the same `.image` node, the definition supplies src/title, and the
+  description flattens to the arena-owned `alt` via the existing
+  `flattenAlt` path.
+- **Correctness detail:** the collapsed/shortcut label is the opener's
+  own bracket text, which for a `![` opener starts *after the bang* —
+  the reference-links slice's `text` span (opener + 1) would have
+  included the `[` byte for images, so this slice fixes the span start
+  to `opener + 2` when the opener is an image. Full references were
+  unaffected (their label is scanned independently).
+- **Inactive-bracket rule unchanged:** a formed reference *link*
+  inactivates earlier `[` openers via the same monotone O(1) check; a
+  formed reference *image* inactivates nothing (matching the inline-image
+  behavior).
+- **Verified** byte-for-byte against the §6.4 reference-image spec
+  examples 582–591 (full/collapsed/shortcut, case-insensitive labels,
+  emphasis in the description flattening to alt, no-space-between-
+  brackets, unescaped-bracket labels staying literal), plus 13 new
+  Markdown fixtures (`ref-image-*`) covering those shapes, image inside
+  reference-link text, inline-beats-reference precedence, first-wins,
+  unmatched → literal, and definition-after-use.
+- **Tests:** 5 new unit tests (full/collapsed/shortcut resolution,
+  alt flattening through the reference forms, precedence and the
+  exclusive full-reference path, image-in-reference-link, unmatched and
+  the inactive-bracket shape); smoke extended with 30k `![alpha]`
+  shortcut, 20k collapsed and 20k full reference-image bombs, and 30k
+  near-miss labels — all linear. 128 Markdown fixtures (13 new), 67
+  library tests, 73/73 total; `zig fmt --check` clean; build clean.
+- **Also fixed:** a leftover merge-conflict marker in README.md's Status
+  section that the reference-links merge (d76f971) had committed
+  verbatim; resolved while updating the README.
+
 ## Addendum: inline images (session 5)
 
 - **Implemented §6.7 (inline images)** on the same seam, per the design
