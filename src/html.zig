@@ -89,6 +89,10 @@ fn writeOpen(
         .document => {
             try stack.append(gpa, .{ .exit = node });
         },
+        .block_quote => {
+            try writer.writeAll("<blockquote>\n");
+            try stack.append(gpa, .{ .exit = node });
+        },
         .paragraph => {
             try writer.writeAll("<p>");
             try stack.append(gpa, .{ .exit = node });
@@ -168,6 +172,7 @@ fn writeClose(writer: anytype, node: *const document.Node, options: RenderOption
     _ = options;
     switch (node.tag) {
         .document => {},
+        .block_quote => try writer.writeAll("</blockquote>\n"),
         .paragraph => try writer.writeAll("</p>\n"),
         .heading => {
             const level = clampHeading(node.data.heading);
