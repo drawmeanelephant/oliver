@@ -40,6 +40,25 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the oliver CLI");
     run_step.dependOn(&cli_run.step);
 
+    // CommonMark spec-conformance harness: runs every example in a
+    // spec.txt through the library and prints a per-section scorecard.
+    // Development tool only (reads files; the library core does not).
+    const spec_tool = b.addExecutable(.{
+        .name = "spec-conformance",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/spec_conformance.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "oliver", .module = oliver_mod },
+            },
+        }),
+    });
+    const spec_run = b.addRunArtifact(spec_tool);
+    if (b.args) |args| spec_run.addArgs(args);
+    const spec_step = b.step("spec-conformance", "Run the CommonMark spec-conformance scorecard");
+    spec_step.dependOn(&spec_run.step);
+
     // Unit tests embedded in the library modules.
     const lib_tests = b.addTest(.{
         .root_module = oliver_mod,
