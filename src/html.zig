@@ -1,0 +1,422 @@
+//! Deterministic HTML rendering from the normalized document model.
+//!
+//! Rendering depends only on the document, never on the dialect that produced
+//! it, and never reparses source. See docs/ARCHITECTURE.md ("HTML output
+//! policy") for the explicit policies this renderer follows:
+//!
+//! - Text is escaped: `&` `&amp;`, `<` `&lt;`, `>` `&gt;`, `"` `&quot;`;
+//!   NUL (U+0000) is emitted as U+FFFD.
+//! - Link attributes: `href` is percent-encoded (a deliberate, documented
+//!   policy derived from the spec examples: encode everything except
+//!   alphanumerics and `-_.~!*'(),;:&=+$#@/%?`) and then HTML-escaped;
+//!   `title` is HTML-escaped without percent-encoding. Attributes are
+//!   emitted in the fixed order `href` then `title`, in double quotes.
+//! - Headings use the level 1..6 (clamped for hand-built documents).
+//! - Code spans render `<code>...</code>` with the same escaping as text.
+//! - Lists/code blocks/tables: not yet implemented (no tags exist).
+//! - Line endings in output are always `\n`.
+//! - Every block-level element is followed by exactly one `\n`, so nonempty
+//!   output always ends with `\n`.
+//! - Void elements are emitted as `<br />` by default (CommonMark reference
+//!   style), toggleable via `RenderOptions`.
+//! - Raw HTML: none exists in the slice; every text node is escaped.
+//!
+//! Traversal uses an explicit stack rather than recursion, so rendering a
+//! hostile, deeply nested document cannot overflow the call stack.
+
+const std = @import("std");
+const document = @import("document.zig");
+
+pub const RenderOptions = struct {
+    /// Emit void elements with a trailing slash (`<br />`) instead of the
+    /// HTML5 form (`<br>`). Defaults to the CommonMark reference style.
+    void_trailing_slash: bool = true,
+};
+
+/// Renders `doc` to `writer`.
+///
+/// `writer` may be any value with a `writeAll([]const u8) !void` method;
+/// pass a pointer to it. In Zig 0.16, `std.Io.Writer` values (e.g. from
+/// `std.Io.Writer.Allocating` or `std.Io.File.writer`) satisfy this.
+///
+/// `gpa` is used only for the temporary traversal stack; nothing is retained.
+pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Document, options: RenderOptions) !void {
+    var stack = std.ArrayList(Frame).empty;
+    defer stack.deinit(gpa);
+
+    try stack.append(gpa, .{ .enter = doc.root });
+    while (stack.pop()) |frame| {
+        switch (frame) {
+            .enter => |node| {
+                try writeOpen(gpa, writer, &stack, node, options);
+                try pushChildren(gpa, &stack, node);
+            },
+            .exit => |node| try writeClose(writer, node, options),
+        }
+    }
+}
+
+const Frame = union(enum) {
+    enter: *const document.Node,
+    exit: *const document.Node,
+};
+
+fn pushChildren(
+    gpa: std.mem.Allocator,
+    stack: *std.ArrayList(Frame),
+    node: *const document.Node,
+) !void {
+    var i = node.children.items.len;
+    while (i > 0) {
+        i -= 1;
+        try stack.append(gpa, .{ .enter = node.children.items[i] });
+    }
+}
+
+fn writeOpen(
+    gpa: std.mem.Allocator,
+    writer: anytype,
+    stack: *std.ArrayList(Frame),
+    node: *const document.Node,
+    options: RenderOptions,
+) !void {
+    switch (node.tag) {
+        .document => {
+            try stack.append(gpa, .{ .exit = node });
+        },
+        .paragraph => {
+            try writer.writeAll("<p>");
+            try stack.append(gpa, .{ .exit = node });
+        },
+        .heading => {
+            const level = clampHeading(node.data.heading);
+            var buf: [8]u8 = undefined;
+            const tag = try std.fmt.bufPrint(&buf, "<h{d}>", .{level});
+            try writer.writeAll(tag);
+            try stack.append(gpa, .{ .exit = node });
+        },
+        .emphasis => {
+            try writer.writeAll("<em>");
+            try stack.append(gpa, .{ .exit = node });
+        },
+        .strong => {
+            try writer.writeAll("<strong>");
+            try stack.append(gpa, .{ .exit = node });
+        },
+        .code_span => {
+            try writer.writeAll("<code>");
+            // Leaf tag: the (normalized) content is escaped like text
+            // (& < > " and NUL -> U+FFFD), written on enter.
+            try writeEscaped(writer, node.data.code_span);
+            try stack.append(gpa, .{ .exit = node });
+        },
+        .link => {
+            try writer.writeAll("<a href=\"");
+            try writeEscapedHref(writer, node.data.link.href);
+            try writer.writeByte('\"');
+            if (node.data.link.title) |title| {
+                try writer.writeAll(" title=\"");
+                try writeEscaped(writer, title);
+                try writer.writeByte('\"');
+            }
+            try writer.writeByte('>');
+            try stack.append(gpa, .{ .exit = node });
+        },
+        .text => try writeEscaped(writer, node.data.text),
+        .soft_break => try writer.writeAll("\n"),
+        .hard_break => {
+            try writer.writeAll(if (options.void_trailing_slash) "<br />" else "<br>");
+            try writer.writeAll("\n");
+        },
+    }
+}
+
+fn writeClose(writer: anytype, node: *const document.Node, options: RenderOptions) !void {
+    _ = options;
+    switch (node.tag) {
+        .document => {},
+        .paragraph => try writer.writeAll("</p>\n"),
+        .heading => {
+            const level = clampHeading(node.data.heading);
+            var buf: [8]u8 = undefined;
+            const tag = try std.fmt.bufPrint(&buf, "</h{d}>\n", .{level});
+            try writer.writeAll(tag);
+        },
+        .emphasis => try writer.writeAll("</em>"),
+        .strong => try writer.writeAll("</strong>"),
+        .code_span => try writer.writeAll("</code>"),
+        .link => try writer.writeAll("</a>"),
+        // These tags never push exit frames.
+        .text, .soft_break, .hard_break => unreachable,
+    }
+}
+
+/// Heading levels are clamped to 1..6 so hand-built documents with invalid
+/// levels still render deterministically. Dialect frontends only produce
+/// valid levels, so clamping is purely defensive.
+fn clampHeading(level: u8) u8 {
+    return @min(@max(level, 1), 6);
+}
+
+/// Percent-encodes the href per Oliver's documented URL policy (see the
+/// module comment), then HTML-escapes the result (`&` -> `&amp;`; the other
+/// specials were already percent-encoded). Non-ASCII bytes are each encoded
+/// as `%XX` (uppercase hex), a renderer choice the spec explicitly leaves
+/// open.
+fn writeEscapedHref(writer: anytype, href: []const u8) !void {
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < href.len) : (i += 1) {
+        const b = href[i];
+        // `&` is URL-safe (kept unencoded) but must be `&amp;` inside an
+        // HTML attribute value; the other attribute specials (`< > "`)
+        // were already percent-encoded.
+        if (b == '&') {
+            if (i > start) try writer.writeAll(href[start..i]);
+            try writer.writeAll("&amp;");
+            start = i + 1;
+            continue;
+        }
+        if (hrefSafe(b)) continue;
+        if (i > start) try writer.writeAll(href[start..i]);
+        var buf: [3]u8 = undefined;
+        const hex = "0123456789ABCDEF";
+        buf[0] = '%';
+        buf[1] = hex[b >> 4];
+        buf[2] = hex[b & 0xF];
+        try writer.writeAll(&buf);
+        start = i + 1;
+    }
+    if (start < href.len) try writer.writeAll(href[start..]);
+}
+
+/// URL-safe characters, i.e. left unpercent-encoded: RFC 3986 unreserved
+/// (`A-Za-z0-9-._~`) plus the sub-delims (`!$&'()*+,;=`) and the reserved
+/// chars the spec examples keep unencoded (`:/?#@`) plus `%` (existing
+/// escapes are left alone; "all URL-escaped characters are also valid URL
+/// characters"). Everything else — space, `"`, `\`, `<`, `>`, backtick,
+/// brackets, control chars, and all non-ASCII — is percent-encoded. `&` is
+/// URL-safe but still HTML-escaped to `&amp;` in the attribute (see
+/// `writeEscapedHref`).
+fn hrefSafe(b: u8) bool {
+    return switch (b) {
+        'A'...'Z', 'a'...'z', '0'...'9' => true,
+        '-', '_', '.', '~', '!', '*', '\'', '(', ')', ',', ';', ':', '&', '=', '+', '$', '#', '@', '/', '?', '%' => true,
+        else => false,
+    };
+}
+
+/// Escapes text content. `&`, `<`, `>`, and `"` are escaped (the set the
+/// CommonMark reference output escapes); NUL is replaced with U+FFFD.
+fn writeEscaped(writer: anytype, text: []const u8) !void {
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const replacement: []const u8 = switch (text[i]) {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '"' => "&quot;",
+            0 => "\xEF\xBF\xBD", // U+FFFD
+            else => continue,
+        };
+        if (i > start) try writer.writeAll(text[start..i]);
+        try writer.writeAll(replacement);
+        start = i + 1;
+    }
+    if (start < text.len) try writer.writeAll(text[start..]);
+}
+
+// ---------------------------------------------------------------------------
+// Tests: rendering directly from hand-constructed documents, independent of
+// either dialect frontend.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+fn renderDoc(doc: *document.Document) !std.ArrayList(u8) {
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try render(testing.allocator, &aw.writer, doc, .{});
+    return aw.toArrayList();
+}
+
+fn addText(doc: *document.Document, parent: *document.Node, text: []const u8) !void {
+    const node = try doc.createNode(.text, .{ .start = 0, .end = @intCast(text.len) }, .{ .text = text });
+    try doc.appendChild(parent, node);
+}
+
+test "html: escaping" {
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(doc.root, p);
+    try addText(&doc, p, "a & b < c > d \" e \x00 f");
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>a &amp; b &lt; c &gt; d &quot; e \u{FFFD} f</p>\n", out.items);
+}
+
+test "html: soft vs hard breaks and void option" {
+    {
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        try addText(&doc, p, "a");
+        try doc.appendChild(p, try doc.createNode(.soft_break, .{ .start = 0, .end = 0 }, .none));
+        try addText(&doc, p, "b");
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>a\nb</p>\n", out.items);
+    }
+    {
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        try addText(&doc, p, "a");
+        try doc.appendChild(p, try doc.createNode(.hard_break, .{ .start = 0, .end = 0 }, .none));
+        try addText(&doc, p, "b");
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>a<br />\nb</p>\n", out.items);
+
+        // void_trailing_slash = false gives HTML5-style <br>.
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try render(testing.allocator, &aw.writer, &doc, .{ .void_trailing_slash = false });
+        var out2 = aw.toArrayList();
+        defer out2.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>a<br>\nb</p>\n", out2.items);
+    }
+}
+
+test "html: heading clamp and empty document" {
+    {
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        try doc.appendChild(doc.root, try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = 0 }));
+        try doc.appendChild(doc.root, try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = 7 }));
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<h1></h1>\n<h6></h6>\n", out.items);
+    }
+    {
+        // Empty document renders to empty output.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("", out.items);
+    }
+}
+
+test "html: emphasis and strong render from hand-built documents" {
+    // Renderer-only: emphasis/strong nodes built by hand, not parsed — the
+    // renderer consumes the model, not the dialect (docs/INLINE-PARSING.md
+    // §15, "Renderer-only").
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(doc.root, p);
+    const em = try doc.createNode(.emphasis, .{ .start = 0, .end = 12 }, .none);
+    try doc.appendChild(p, em);
+    try addText(&doc, em, "a ");
+    const strong = try doc.createNode(.strong, .{ .start = 3, .end = 9 }, .none);
+    try doc.appendChild(em, strong);
+    try addText(&doc, strong, "b");
+    try addText(&doc, em, " c");
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p><em>a <strong>b</strong> c</em></p>\n", out.items);
+}
+
+test "html: code span content is escaped, not re-parsed" {
+    // Renderer-only: a hand-built code_span with markup-ish payload must
+    // render the payload escaped inside <code> — the renderer never treats
+    // code_span content as inline markup (leaf inline, docs/DOCUMENT-MODEL).
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(doc.root, p);
+    const cs = try doc.createNode(.code_span, .{ .start = 0, .end = 14 }, .{ .code_span = "a <b>& \"c\"`" });
+    try doc.appendChild(p, cs);
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p><code>a &lt;b&gt;&amp; &quot;c&quot;`</code></p>\n", out.items);
+}
+
+test "html: link renders href and title with escaping policy" {
+    // Renderer-only: hand-built link nodes — the renderer consumes the
+    // model, never the dialect (docs/DOCUMENT-MODEL.md).
+    {
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        const lnk = try doc.createNode(.link, .{ .start = 0, .end = 0 }, .{
+            .link = .{ .href = "/uri", .title = "the title" },
+        });
+        try doc.appendChild(p, lnk);
+        try addText(&doc, lnk, "foo");
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p><a href=\"/uri\" title=\"the title\">foo</a></p>\n", out.items);
+    }
+    {
+        // href percent-encoding: space, quote, backslash, and non-ASCII are
+        // encoded; `&` is HTML-escaped; safe URL chars stay.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        const lnk = try doc.createNode(.link, .{ .start = 0, .end = 0 }, .{
+            .link = .{ .href = "/my url\"\\foo()a&b", .title = null },
+        });
+        try doc.appendChild(p, lnk);
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p><a href=\"/my%20url%22%5Cfoo()a&amp;b\"></a></p>\n", out.items);
+    }
+    {
+        // title escaping: HTML-escaped, no percent-encoding.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        const lnk = try doc.createNode(.link, .{ .start = 0, .end = 0 }, .{
+            .link = .{ .href = "/u", .title = "a \"b\" & <c>" },
+        });
+        try doc.appendChild(p, lnk);
+        try addText(&doc, lnk, "x");
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p><a href=\"/u\" title=\"a &quot;b&quot; &amp; &lt;c&gt;\">x</a></p>\n", out.items);
+    }
+    {
+        // No title attribute when the title is absent.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        try doc.appendChild(doc.root, p);
+        const lnk = try doc.createNode(.link, .{ .start = 0, .end = 0 }, .{
+            .link = .{ .href = "/u", .title = null },
+        });
+        try doc.appendChild(p, lnk);
+        try addText(&doc, lnk, "x");
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p><a href=\"/u\">x</a></p>\n", out.items);
+    }
+}
+
+test "html: mixed blocks render independently of dialect" {
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    try doc.appendChild(doc.root, try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = 2 }));
+    try doc.appendChild(doc.root, try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none));
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<h2></h2>\n<p></p>\n", out.items);
+}
