@@ -23,13 +23,13 @@ Node {
 ```
 
 `Tag` in the slice: `document`, `paragraph`, `heading`, `block_quote`,
-`text`, `emphasis`, `strong`, `code_span`, `link`, `image`, `autolink`,
-`raw_html`, `soft_break`, `hard_break`. Blocks and inlines are distinguished by
-`Tag.isBlock` / `Tag.isInline`. `Data` carries `heading` level (1..6), the
-borrowed `text` slice, the arena-owned `code_span` content, the arena-owned
-`link` href/title, the arena-owned `image` src/alt/title, or the arena-owned
-`autolink` href/label. `raw_html` has no data payload; its source bytes are
-read from `Node.span`.
+`list`, `list_item`, `text`, `emphasis`, `strong`, `code_span`, `link`, `image`,
+`autolink`, `raw_html`, `soft_break`, `hard_break`. Blocks and inlines are
+distinguished by `Tag.isBlock` / `Tag.isInline`. `Data` carries `heading`
+level (1..6), list kind/marker metadata/start/looseness, the borrowed `text`
+slice, the arena-owned `code_span` content, the arena-owned `link` href/title,
+the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
+`raw_html` has no data payload; its source bytes are read from `Node.span`.
 
 ## Design decisions
 
@@ -71,25 +71,29 @@ read from `Node.span`.
    covers its lines' content with markers stripped, and text inside it
    slices the stripped content (marker bytes are excluded from child
    spans).
-5. `emphasis`/`strong`/`link` contain inline children. The leaf inline
+5. `.list` children are `.list_item` blocks; `.list_item` children are
+   blocks, and list payloads record bullet/ordered type, marker metadata,
+   ordered start, and tight/loose state.
+6. `emphasis`/`strong`/`link` contain inline children. The leaf inline
    tags (`text`, `code_span`, `image`, `autolink`, `raw_html`, `soft_break`,
    `hard_break`) never
    have children.
-6. `Data.text` always slices the document's source bytes; `raw_html` also
-   borrows its bytes through `Node.span` and carries `Data.none`; the other text
+7. `Data.text` always slices the document's source bytes; `raw_html` also
+   borrows its bytes through `Node.span` and carries `Data.none`; the other
+   text
    payloads (`code_span`, `link.href`, `link.title`, `image.src`,
    `image.alt`, `image.title`, `autolink.href`, `autolink.label`) are
    arena-owned copies — normalization (code-span content, escape
    resolution, alt flattening, the `mailto:` prefix) cannot be
    expressed as a source slice.
-7. `span.start <= span.end`; all spans lie within the source.
-8. Consecutive `text` children of one parent never have contiguous spans:
+8. `span.start <= span.end`; all spans lie within the source.
+9. Consecutive `text` children of one parent never have contiguous spans:
    adjacent source bytes land in one text node. Scanning artifacts (item
    boundaries, leftover delimiters, escape splits) merge at emission, so
    the normalized model has no text fragmentation (chosen behavior,
    docs/INLINE-PARSING.md §15; a consumed backslash or delimiter byte can
    still leave a gap, which is why `a\*b` stays two nodes).
-9. `link` children never contain another `link` (links cannot contain
+10. `link` children never contain another `link` (links cannot contain
    links, §6.6), but may contain `image` nodes (an image description may
    contain links and images, §6.7); each link's children are a
    self-contained inline scope. `image` is a leaf whose `alt` is the
@@ -102,8 +106,7 @@ read from `Node.span`.
 
 ## Growth path (planned tags, not yet implemented)
 
-Blocks: `list`, `list_item` (ordered/unordered is a `Data`
-field, e.g. `list: { ordered: bool, start: ?u32 }`), `code_block` (fenced /
+Blocks: `code_block` (fenced /
 indented, info string), `thematic_break`, `table` (+ `table_row`, `table_cell`
 with header flag).
 

@@ -95,7 +95,9 @@ Explicit, documented policies:
   escaped/rejected mode remain future work.
 - Headings: `<h1>`..`<h6>`; levels outside 1..6 are clamped (defensive for
   hand-built documents; frontends never produce them).
-- Lists, code, tables: no model tags yet, so nothing to emit.
+- Lists: `<ul>`/`<ol>` and `<li>` are emitted from the normalized list
+  nodes; tight-list direct paragraphs omit `<p>`, while loose-list
+  paragraphs retain it. Code blocks and tables remain unimplemented.
 - Line endings: `\n` only. Every block-level element is followed by exactly
   one `\n`; nonempty output always ends with `\n`. Empty input → empty output.
 - Void elements: `<br />` (CommonMark reference style) by default; toggle

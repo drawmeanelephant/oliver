@@ -13,6 +13,7 @@
 //! - `emphasis`/`strong`/`link` contain inline children; the leaf inline
 //!   tags (`text`, `code_span`, `image`, `autolink`, `raw_html`,
 //!   `soft_break`, `hard_break`) never have children.
+//! - `list` children are `list_item` blocks; `list_item` children are blocks.
 //! - `Node.data.text` always points into the document's source bytes;
 //!   `raw_html` reads its bytes by `Node.span` and carries no data payload;
 //!   `data.code_span`, `data.image` (src/alt/title),
@@ -36,6 +37,13 @@ pub const Tag = enum {
     /// A block quote (Markdown `>` markers, §5.1). Container: children are
     /// blocks. Span covers its lines' content with markers stripped.
     block_quote,
+    /// A list (Markdown §5.3). Container: children are list items.
+    /// `data.list` carries the type, ordered start, and tight/loose flag.
+    /// Span covers its items' content lines.
+    list,
+    /// A list item (Markdown §5.2). Container: children are blocks.
+    /// Span covers its content lines (marker stripped).
+    list_item,
     /// Plain text. `data.text` is a slice of the source.
     text,
     /// Emphasized inline content (Markdown `*x*`, `_x_`). Children: inlines.
@@ -79,7 +87,7 @@ pub const Tag = enum {
 
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
-            .document, .paragraph, .heading, .block_quote => true,
+            .document, .paragraph, .heading, .block_quote, .list, .list_item => true,
             .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => false,
         };
     }
@@ -87,7 +95,7 @@ pub const Tag = enum {
     pub fn isInline(self: Tag) bool {
         return switch (self) {
             .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => true,
-            .document, .paragraph, .heading => false,
+            .document, .paragraph, .heading, .block_quote, .list, .list_item => false,
         };
     }
 };
@@ -118,6 +126,12 @@ pub const Data = union(enum) {
     /// inside autolinks (§6.8), so the content is copied verbatim — never
     /// passed through escape resolution (docs/AUTOLINKS.md §3).
     autolink: Autolink,
+    /// `.list`: the list's type, its bullet character or ordered delimiter,
+    /// the ordered start number (1 for bullet lists; the first item's number
+    /// for ordered), and the tight/loose flag (docs/BLOCKS-PARSING.md §4:
+    /// loose iff any item pair is separated by a blank line or any item
+    /// directly contains two blocks separated by one).
+    list: List,
 };
 
 /// `.autolink` payload: the raw content between `<` and `>`, verbatim
@@ -128,6 +142,26 @@ pub const Data = union(enum) {
 pub const Autolink = struct {
     href: []const u8,
     label: []const u8,
+};
+
+/// The payload of a `.list` node (Markdown §5.3). `bullet`/`delimiter`
+/// are what define "same type" for merging adjacent items: same bullet
+/// character, or same ordered delimiter (`.` vs `)`).
+pub const ListKind = enum { bullet, ordered };
+
+pub const List = struct {
+    /// Bullet or ordered.
+    kind: ListKind,
+    /// For `.bullet`: the marker character (`-`, `+`, or `*`).
+    bullet: u8 = 0,
+    /// For `.ordered`: the delimiter (`.` or `)`).
+    delimiter: u8 = 0,
+    /// For `.ordered`: the start number (its first item's number).
+    /// Always 1 for bullet lists.
+    start: u32 = 1,
+    /// Tight (false) vs loose (true). Paragraphs directly in a tight
+    /// list's items render without `<p>`.
+    loose: bool = false,
 };
 
 /// The payload of a `.image` node: the resolved src, the flattened

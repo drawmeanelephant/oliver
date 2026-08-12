@@ -29,10 +29,11 @@ opacity, destination/title syntax, href percent-encoding), inline images
 reference links and reference-style images (§4.7 link reference
 definitions collected in the block pass; full, collapsed, and shortcut
 forms resolved against a Unicode case-folded label map — for `[text]`
-links and `![alt]` images alike), autolinks (§6.8, URI and email forms
-with `mailto:` hrefs, escapes inert, linear recognition), block quotes
-(§5.1 on the container-block stack with nesting, laziness, and interruption
-— the architecture for lists), raw HTML (§6.6,
+links and `![alt]` images alike), block quotes (§5.1) and list items/lists
+(§5.2/§5.3) on the container-block stack with nesting, content indentation,
+same-type merging, tight/loose tracking, and deterministic `<ul>`/`<ol>`
+rendering, autolinks (§6.8, URI and email forms with `mailto:` hrefs,
+escapes inert, linear recognition), raw HTML (§6.6,
 tags/comments/instructions/declarations/CDATA rendered verbatim), plain
 inline text, a shared document model, a deterministic HTML renderer,
 Markdown (ATX) and Textile (`hN.`)

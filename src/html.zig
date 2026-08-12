@@ -20,7 +20,9 @@
 //! - Code spans render `<code>...</code>` with the same escaping as text.
 //! - Raw HTML leaves write their source spans verbatim, without escaping;
 //!   this is the one inline form whose bytes can include source line endings.
-//! - Lists/code blocks/tables: not yet implemented (no tags exist).
+//! - Lists render as `<ul>`/`<ol>` with `<li>` children; tight-list direct
+//!   paragraphs omit `<p>`, while loose-list paragraphs retain it.
+//! - Code blocks/tables: not yet implemented (no tags exist).
 //! - Generated line endings in output are always `\n`; raw HTML source spans
 //!   retain their original line-ending bytes by design.
 //! - Every block-level element is followed by exactly one `\n`, so nonempty
@@ -51,32 +53,82 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
     var stack = std.ArrayList(Frame).empty;
     defer stack.deinit(gpa);
 
-    try stack.append(gpa, .{ .enter = doc.root });
+    try stack.append(gpa, .{ .enter = .{
+        .node = doc.root,
+        .tight_item = false,
+        .suppress_p = false,
+        .prefix_newline = false,
+    } });
     while (stack.pop()) |frame| {
         switch (frame) {
-            .enter => |node| {
-                try writeOpen(gpa, writer, &stack, node, options, doc.src.bytes);
-                try pushChildren(gpa, &stack, node);
+            .enter => |f| {
+                if (f.prefix_newline) try writer.writeByte('\n');
+                try writeOpen(gpa, writer, &stack, f.node, f.suppress_p, options, doc.src.bytes);
+                try pushChildren(gpa, &stack, f.node, f.tight_item);
             },
-            .exit => |node| try writeClose(writer, node, options),
+            .exit => |f| try writeClose(writer, f.node, f.suppress_p, options),
         }
     }
 }
 
 const Frame = union(enum) {
-    enter: *const document.Node,
-    exit: *const document.Node,
+    enter: struct {
+        node: *const document.Node,
+        /// True when `node` is a `.list_item` of a tight list; passed to
+        /// `pushChildren` so the item's direct paragraph children know to
+        /// render without `<p>` (§5.3).
+        tight_item: bool,
+        /// True when `node` is a `.paragraph` whose direct parent is a
+        /// tight list's item: render without `<p>`.
+        suppress_p: bool,
+        /// Some block children of a list item need a line break before their
+        /// opening tag. Tight paragraphs do not emit a trailing newline, so
+        /// a following nested block supplies that separator here; the first
+        /// block in a loose item also starts on the line after `<li>`.
+        prefix_newline: bool,
+    },
+    /// `suppress_p` mirrors the decision made at open time, so the close
+    /// tag matches.
+    exit: struct { node: *const document.Node, suppress_p: bool },
 };
 
 fn pushChildren(
     gpa: std.mem.Allocator,
     stack: *std.ArrayList(Frame),
     node: *const document.Node,
+    node_tight_item: bool,
 ) !void {
     var i = node.children.items.len;
     while (i > 0) {
         i -= 1;
-        try stack.append(gpa, .{ .enter = node.children.items[i] });
+        const c = node.children.items[i];
+        // An item's direct paragraph children are suppressed iff its list
+        // is tight; a list's children (items) carry the tight flag for
+        // their own children.
+        const tight = c.tag == .list_item and node.tag == .list and !node.data.list.loose;
+        const suppress = c.tag == .paragraph and node.tag == .list_item and node_tight_item;
+        var prefix_newline = false;
+        if (node.tag == .list_item) {
+            if (c.tag == .paragraph) {
+                // A loose item's first paragraph starts after the opening
+                // tag; tight paragraphs are inline with it. Later paragraphs
+                // already follow a block's newline (or make the list loose).
+                prefix_newline = !node_tight_item and i == 0;
+            } else {
+                // Nested containers and other block children always start
+                // on a new line when first. A nested block following a tight
+                // paragraph needs the separator that the suppressed
+                // paragraph deliberately does not emit.
+                prefix_newline = i == 0 or
+                    (node_tight_item and i > 0 and node.children.items[i - 1].tag == .paragraph);
+            }
+        }
+        try stack.append(gpa, .{ .enter = .{
+            .node = c,
+            .tight_item = tight,
+            .suppress_p = suppress,
+            .prefix_newline = prefix_newline,
+        } });
     }
 }
 
@@ -85,42 +137,65 @@ fn writeOpen(
     writer: anytype,
     stack: *std.ArrayList(Frame),
     node: *const document.Node,
+    suppress_p: bool,
     options: RenderOptions,
     src: []const u8,
 ) !void {
     switch (node.tag) {
         .document => {
-            try stack.append(gpa, .{ .exit = node });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .block_quote => {
             try writer.writeAll("<blockquote>\n");
-            try stack.append(gpa, .{ .exit = node });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .list => {
+            const list = node.data.list;
+            switch (list.kind) {
+                .bullet => try writer.writeAll("<ul>\n"),
+                .ordered => {
+                    if (list.start == 1) {
+                        try writer.writeAll("<ol>\n");
+                    } else {
+                        var buf: [32]u8 = undefined;
+                        const tag = try std.fmt.bufPrint(&buf, "<ol start=\"{d}\">\n", .{list.start});
+                        try writer.writeAll(tag);
+                    }
+                },
+            }
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .list_item => {
+            try writer.writeAll("<li>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .paragraph => {
-            try writer.writeAll("<p>");
-            try stack.append(gpa, .{ .exit = node });
+            // §5.3: a paragraph directly in a tight list's item renders
+            // without `<p>` (`suppress_p` is computed at push time).
+            if (!suppress_p) try writer.writeAll("<p>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = suppress_p } });
         },
         .heading => {
             const level = clampHeading(node.data.heading);
             var buf: [8]u8 = undefined;
             const tag = try std.fmt.bufPrint(&buf, "<h{d}>", .{level});
             try writer.writeAll(tag);
-            try stack.append(gpa, .{ .exit = node });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .emphasis => {
             try writer.writeAll("<em>");
-            try stack.append(gpa, .{ .exit = node });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .strong => {
             try writer.writeAll("<strong>");
-            try stack.append(gpa, .{ .exit = node });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .code_span => {
             try writer.writeAll("<code>");
             // Leaf tag: the (normalized) content is escaped like text
             // (& < > " and NUL -> U+FFFD), written on enter.
             try writeEscaped(writer, node.data.code_span);
-            try stack.append(gpa, .{ .exit = node });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .link => {
             try writer.writeAll("<a href=\"");
@@ -132,7 +207,7 @@ fn writeOpen(
                 try writer.writeByte('\"');
             }
             try writer.writeByte('>');
-            try stack.append(gpa, .{ .exit = node });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .autolink => {
             // Leaf tag: one <a> with the raw label as its text. The href
@@ -177,12 +252,26 @@ fn writeOpen(
     }
 }
 
-fn writeClose(writer: anytype, node: *const document.Node, options: RenderOptions) !void {
+fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, options: RenderOptions) !void {
     _ = options;
     switch (node.tag) {
         .document => {},
         .block_quote => try writer.writeAll("</blockquote>\n"),
-        .paragraph => try writer.writeAll("</p>\n"),
+        .list => {
+            switch (node.data.list.kind) {
+                .bullet => try writer.writeAll("</ul>\n"),
+                .ordered => try writer.writeAll("</ol>\n"),
+            }
+        },
+        .list_item => try writer.writeAll("</li>\n"),
+        .paragraph => {
+            if (suppress_p) {
+                // Tight-list paragraphs are inline content of `<li>`; a
+                // following block gets its own leading newline in its frame.
+            } else {
+                try writer.writeAll("</p>\n");
+            }
+        },
         .heading => {
             const level = clampHeading(node.data.heading);
             var buf: [8]u8 = undefined;
@@ -534,6 +623,57 @@ test "html: image renders as a void element with fixed attribute order" {
         defer out.deinit(testing.allocator);
         try testing.expectEqualStrings("<p><img src=\"/u\" alt=\"a\"></p>\n", out.items);
     }
+}
+
+test "html: tight and loose lists keep block framing deterministic" {
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+
+    const list = try doc.createNode(.list, .{ .start = 0, .end = 0 }, .{ .list = .{
+        .kind = .bullet,
+        .bullet = '-',
+        .loose = false,
+    } });
+    try doc.appendChild(doc.root, list);
+
+    const first = try doc.createNode(.list_item, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(list, first);
+    const first_p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(first, first_p);
+    try addText(&doc, first_p, "one");
+
+    const nested = try doc.createNode(.list, .{ .start = 0, .end = 0 }, .{ .list = .{
+        .kind = .ordered,
+        .delimiter = '.',
+        .start = 3,
+    } });
+    try doc.appendChild(first, nested);
+    const nested_item = try doc.createNode(.list_item, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(nested, nested_item);
+    const nested_p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(nested_item, nested_p);
+    try addText(&doc, nested_p, "three");
+
+    const second = try doc.createNode(.list_item, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(list, second);
+    const second_p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(second, second_p);
+    try addText(&doc, second_p, "two");
+
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<ul>\n<li>one\n<ol start=\"3\">\n<li>three</li>\n</ol>\n</li>\n<li>two</li>\n</ul>\n",
+        out.items,
+    );
+
+    list.data.list.loose = true;
+    var loose_out = try renderDoc(&doc);
+    defer loose_out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<ul>\n<li>\n<p>one</p>\n<ol start=\"3\">\n<li>three</li>\n</ol>\n</li>\n<li>\n<p>two</p>\n</li>\n</ul>\n",
+        loose_out.items,
+    );
 }
 
 test "html: mixed blocks render independently of dialect" {
