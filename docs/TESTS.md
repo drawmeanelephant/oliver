@@ -10,12 +10,22 @@ Tests are product contracts. `zig build test` runs two suites:
    terminal-backslash behavior, every implemented inline family, exact AST
    shapes, and exact spans. Renderer tests construct documents directly so
    renderer behavior is verified without a dialect parser.
-2. **Fixture and adversarial tests** — 8 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 216 Markdown and 10 Textile fixture pairs.
-   It also verifies shared-model convergence, hostile-input completion and
-   leak freedom, NUL policy, diagnostics, and deterministic repeat rendering.
+2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
+   The explicit index contains 242 Markdown and 10 Textile fixture pairs.
+   The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
+   emphasis/strong, code spans, inline links, inline/reference-style images,
+   block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
+   ordered starts and near misses, empty items, interruption, nesting,
+   marker/delimiter separation, tight/loose propagation, and quote/list
+   composition), reference links, autolinks, raw HTML, thematic breaks,
+   Setext headings, and fenced code blocks. It also verifies shared-model
+   convergence, hostile-input completion and leak freedom, NUL policy,
+   diagnostics, and deterministic repeat rendering (list stress: 2k nested
+   items, 10k same-marker items, 15k alternating markers, 12k variably
+   indented markers, and 8k valid plus 8k near-miss ordered markers, each
+   rendered twice).
 
-The current complete result is **113/113 tests passing** with Zig 0.16.0.
+The current complete result is **114/114 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 

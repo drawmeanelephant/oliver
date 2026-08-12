@@ -738,6 +738,166 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/quote-definition.md"),
         .expected = @embedFile("fixtures/markdown/quote-definition.html"),
     },
+    // --- list items and lists (CommonMark 0.31.2 §§5.2-5.3) ---
+    // Each entry is one normative example, copied byte-for-byte from the
+    // specification corpus. Keeping the example number beside the fixture
+    // makes provenance and future scorecard changes reviewable.
+    // Example 255: insufficient continuation indentation ends the item.
+    .{
+        .name = "list-item-indent-boundary",
+        .input = @embedFile("fixtures/markdown/list-item-indent-boundary.md"),
+        .expected = @embedFile("fixtures/markdown/list-item-indent-boundary.html"),
+    },
+    // Example 256: sufficient indentation adds a continuation paragraph.
+    .{
+        .name = "list-item-continuation-block",
+        .input = @embedFile("fixtures/markdown/list-item-continuation-block.md"),
+        .expected = @embedFile("fixtures/markdown/list-item-continuation-block.html"),
+    },
+    // Example 258: marker padding determines continuation indentation.
+    .{
+        .name = "list-item-wide-padding",
+        .input = @embedFile("fixtures/markdown/list-item-wide-padding.md"),
+        .expected = @embedFile("fixtures/markdown/list-item-wide-padding.html"),
+    },
+    // Example 259: ordered list item nested inside two block quotes.
+    .{
+        .name = "list-item-in-nested-quotes",
+        .input = @embedFile("fixtures/markdown/list-item-in-nested-quotes.md"),
+        .expected = @embedFile("fixtures/markdown/list-item-in-nested-quotes.html"),
+    },
+    // Example 261: a nonempty marker requires following whitespace.
+    .{
+        .name = "list-marker-requires-space",
+        .input = @embedFile("fixtures/markdown/list-marker-requires-space.md"),
+        .expected = @embedFile("fixtures/markdown/list-marker-requires-space.html"),
+    },
+    // Example 265: ordered markers accept at most nine digits.
+    .{
+        .name = "list-ordered-nine-digit-start",
+        .input = @embedFile("fixtures/markdown/list-ordered-nine-digit-start.md"),
+        .expected = @embedFile("fixtures/markdown/list-ordered-nine-digit-start.html"),
+    },
+    // Example 266: a ten-digit ordered marker remains paragraph text.
+    .{
+        .name = "list-ordered-ten-digit-near-miss",
+        .input = @embedFile("fixtures/markdown/list-ordered-ten-digit-near-miss.md"),
+        .expected = @embedFile("fixtures/markdown/list-ordered-ten-digit-near-miss.html"),
+    },
+    // Example 268: leading zeroes are normalized in the ordered start.
+    .{
+        .name = "list-ordered-leading-zeroes",
+        .input = @embedFile("fixtures/markdown/list-ordered-leading-zeroes.md"),
+        .expected = @embedFile("fixtures/markdown/list-ordered-leading-zeroes.html"),
+    },
+    // Example 281: empty bullet items remain structural list items.
+    .{
+        .name = "list-empty-bullet-item",
+        .input = @embedFile("fixtures/markdown/list-empty-bullet-item.md"),
+        .expected = @embedFile("fixtures/markdown/list-empty-bullet-item.html"),
+    },
+    // Example 283: empty ordered items remain structural list items.
+    .{
+        .name = "list-empty-ordered-item",
+        .input = @embedFile("fixtures/markdown/list-empty-ordered-item.md"),
+        .expected = @embedFile("fixtures/markdown/list-empty-ordered-item.html"),
+    },
+    // Example 285: an empty item cannot interrupt a paragraph.
+    .{
+        .name = "list-empty-item-no-interrupt",
+        .input = @embedFile("fixtures/markdown/list-empty-item-no-interrupt.md"),
+        .expected = @embedFile("fixtures/markdown/list-empty-item-no-interrupt.html"),
+    },
+    // Example 291: a paragraph continuation may be lazily indented.
+    .{
+        .name = "list-item-lazy-continuation",
+        .input = @embedFile("fixtures/markdown/list-item-lazy-continuation.md"),
+        .expected = @embedFile("fixtures/markdown/list-item-lazy-continuation.html"),
+    },
+    // Example 294: sufficient indentation creates nested bullet lists.
+    .{
+        .name = "list-nested-bullets",
+        .input = @embedFile("fixtures/markdown/list-nested-bullets.md"),
+        .expected = @embedFile("fixtures/markdown/list-nested-bullets.html"),
+    },
+    // Example 296: a wide ordered marker requires a four-space sublist indent.
+    .{
+        .name = "list-wide-marker-nesting",
+        .input = @embedFile("fixtures/markdown/list-wide-marker-nesting.md"),
+        .expected = @embedFile("fixtures/markdown/list-wide-marker-nesting.html"),
+    },
+    // Example 299: list types may nest as the first block of an item.
+    .{
+        .name = "list-heterogeneous-nesting",
+        .input = @embedFile("fixtures/markdown/list-heterogeneous-nesting.md"),
+        .expected = @embedFile("fixtures/markdown/list-heterogeneous-nesting.html"),
+    },
+    // Example 301: changing bullet characters starts a new list.
+    .{
+        .name = "list-bullet-marker-separation",
+        .input = @embedFile("fixtures/markdown/list-bullet-marker-separation.md"),
+        .expected = @embedFile("fixtures/markdown/list-bullet-marker-separation.html"),
+    },
+    // Example 302: changing ordered delimiters starts a new list.
+    .{
+        .name = "list-ordered-delimiter-separation",
+        .input = @embedFile("fixtures/markdown/list-ordered-delimiter-separation.md"),
+        .expected = @embedFile("fixtures/markdown/list-ordered-delimiter-separation.html"),
+    },
+    // Example 303: a bullet list may interrupt a paragraph.
+    .{
+        .name = "list-bullet-interrupts-paragraph",
+        .input = @embedFile("fixtures/markdown/list-bullet-interrupts-paragraph.md"),
+        .expected = @embedFile("fixtures/markdown/list-bullet-interrupts-paragraph.html"),
+    },
+    // Example 304: an ordered list starting above one cannot interrupt.
+    .{
+        .name = "list-ordered-nonone-no-interrupt",
+        .input = @embedFile("fixtures/markdown/list-ordered-nonone-no-interrupt.md"),
+        .expected = @embedFile("fixtures/markdown/list-ordered-nonone-no-interrupt.html"),
+    },
+    // Example 305: an ordered list starting at one may interrupt.
+    .{
+        .name = "list-ordered-one-interrupts",
+        .input = @embedFile("fixtures/markdown/list-ordered-one-interrupts.md"),
+        .expected = @embedFile("fixtures/markdown/list-ordered-one-interrupts.html"),
+    },
+    // Example 306: blank lines between items make the whole list loose.
+    .{
+        .name = "list-loose-separated-items",
+        .input = @embedFile("fixtures/markdown/list-loose-separated-items.md"),
+        .expected = @embedFile("fixtures/markdown/list-loose-separated-items.html"),
+    },
+    // Example 319: a loose sublist does not make its outer list loose.
+    .{
+        .name = "list-tight-outer-loose-inner",
+        .input = @embedFile("fixtures/markdown/list-tight-outer-loose-inner.md"),
+        .expected = @embedFile("fixtures/markdown/list-tight-outer-loose-inner.html"),
+    },
+    // Example 320: a blank marker inside a quote keeps the list tight.
+    .{
+        .name = "list-tight-quote-child",
+        .input = @embedFile("fixtures/markdown/list-tight-quote-child.md"),
+        .expected = @embedFile("fixtures/markdown/list-tight-quote-child.html"),
+    },
+    // Example 322: a single-paragraph list is tight.
+    .{
+        .name = "list-tight-single-item",
+        .input = @embedFile("fixtures/markdown/list-tight-single-item.md"),
+        .expected = @embedFile("fixtures/markdown/list-tight-single-item.html"),
+    },
+    // Example 325: separated outer blocks make only the outer list loose.
+    .{
+        .name = "list-loose-outer-tight-inner",
+        .input = @embedFile("fixtures/markdown/list-loose-outer-tight-inner.md"),
+        .expected = @embedFile("fixtures/markdown/list-loose-outer-tight-inner.html"),
+    },
+    // Example 326: blank lines propagate looseness across outer items.
+    .{
+        .name = "list-loose-nested-items",
+        .input = @embedFile("fixtures/markdown/list-loose-nested-items.md"),
+        .expected = @embedFile("fixtures/markdown/list-loose-nested-items.html"),
+    },
     // --- inline images (docs/IMAGES-PARSING.md §7) ---
     .{
         .name = "image-simple",
@@ -1468,6 +1628,67 @@ test "adversarial smoke: hostile input never crashes or leaks" {
                 defer aw.deinit();
                 try oliver.html.render(gpa, &aw.writer, &result.document, .{});
             }
+        }
+    }
+}
+
+test "adversarial: list workloads are stack-safe and deterministic" {
+    const gpa = std.testing.allocator;
+
+    // A compact but deeply nested list: each `- ` opens another item whose
+    // first block is a sublist (CommonMark 0.31.2 example 298's shape).
+    // This gives thousands of container levels without quadratic indentation.
+    var deep_nesting = std.ArrayList(u8).empty;
+    defer deep_nesting.deinit(gpa);
+    for (0..2_000) |_| try deep_nesting.appendSlice(gpa, "- ");
+    try deep_nesting.appendSlice(gpa, "leaf");
+
+    // Large same-marker lists exercise item closing and same-type merging.
+    var marker_storm = std.ArrayList(u8).empty;
+    defer marker_storm.deinit(gpa);
+    for (0..10_000) |_| try marker_storm.appendSlice(gpa, "- item\n");
+
+    // Every marker change must close one list and open another. This is the
+    // hostile form of examples 301-302's bullet/delimiter separation rules.
+    var alternating_markers = std.ArrayList(u8).empty;
+    defer alternating_markers.deinit(gpa);
+    for (0..3_000) |_| {
+        try alternating_markers.appendSlice(gpa, "- a\n+ b\n* c\n1. d\n1) e\n");
+    }
+
+    // Repeated 0-3-space marker indentation must remain a same-level scan,
+    // following the boundary exercised by normative example 310.
+    var indentation_storm = std.ArrayList(u8).empty;
+    defer indentation_storm.deinit(gpa);
+    for (0..3_000) |_| {
+        try indentation_storm.appendSlice(gpa, "- a\n - b\n  - c\n   - d\n");
+    }
+
+    // Nine digits are valid; ten are a near-miss. Run both at volume so an
+    // implementation cannot hide repeated integer parsing or rescans.
+    var ordered_marker_storm = std.ArrayList(u8).empty;
+    defer ordered_marker_storm.deinit(gpa);
+    for (0..8_000) |_| try ordered_marker_storm.appendSlice(gpa, "123456789. item\n");
+    var ordered_near_miss = std.ArrayList(u8).empty;
+    defer ordered_near_miss.deinit(gpa);
+    for (0..8_000) |_| try ordered_near_miss.appendSlice(gpa, "1234567890. item\n");
+
+    const cases = [_]struct { name: []const u8, input: []const u8 }{
+        .{ .name = "deep nesting", .input = deep_nesting.items },
+        .{ .name = "same-marker storm", .input = marker_storm.items },
+        .{ .name = "alternating-marker storm", .input = alternating_markers.items },
+        .{ .name = "indentation storm", .input = indentation_storm.items },
+        .{ .name = "nine-digit ordered-marker storm", .input = ordered_marker_storm.items },
+        .{ .name = "ten-digit ordered-marker near-miss", .input = ordered_near_miss.items },
+    };
+    for (cases) |case| {
+        var first = try renderHtml(case.input, .markdown);
+        defer first.deinit(gpa);
+        var second = try renderHtml(case.input, .markdown);
+        defer second.deinit(gpa);
+        if (!std.mem.eql(u8, first.items, second.items)) {
+            std.debug.print("list adversarial case [{s}] rendered nondeterministically\n", .{case.name});
+            return error.NondeterministicRender;
         }
     }
 }

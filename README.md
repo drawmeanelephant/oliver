@@ -64,7 +64,7 @@ normative example in a CommonMark spec (see docs/TESTS.md for the current
 546/652 CommonMark 0.31.2 scorecard and how to fetch the spec).
 
 ```bash
-zig build test    # run all tests (113 tests)
+zig build test    # run all tests (114 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 
