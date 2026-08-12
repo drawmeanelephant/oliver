@@ -8,10 +8,10 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 
 | lane | mission | semantic ownership | dependency / merge order | state |
 | --- | --- | --- | --- | --- |
-| lead | M1 thematic breaks + Setext headings | central Markdown block precedence; `document` thematic node; HTML leaf rendering | first | implemented on `codex/thematic-setext` |
-| lead | M2 fenced code blocks | Markdown open-leaf state; shared code-block model; HTML rendering | stacked after M1 | implemented on `codex/fenced-code` |
-| conformance worker | Q1 list conformance wall | list fixture pairs and list-only hostile tests; no parser files | independent; merge after M1 only to minimize fixture-index conflict | committed on `codex/list-conformance-wall` |
-| Textile worker | T1 `p.`/break-span repairs + `bq.` | Textile frontend, Textile fixtures/provenance; no Markdown/core model | independent | committed on `codex/textile-blockquote` |
+| lead | M1 thematic breaks + Setext headings | central Markdown block precedence; `document` thematic node; HTML leaf rendering | first | integrated on main (PR #10) |
+| lead | M2 fenced code blocks | Markdown open-leaf state; shared code-block model; HTML rendering | stacked after M1 | integrated on main (PR #13) |
+| conformance worker | Q1 list conformance wall | list fixture pairs and list-only hostile tests; no parser files | independent; merge after M1 only to minimize fixture-index conflict | integrated on main (PR #11) |
+| Textile worker | T1 `p.`/break-span repairs + `bq.` | Textile frontend, Textile fixtures/provenance; no Markdown/core model | independent | integrated on main (PR #12) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -30,9 +30,9 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   suite/section scorecards.
 - **Parallelism:** no. The lead owns this sensitive block-parser seam.
 - **Integration:** first.
-- **State:** implemented and green; the canonical scorecard at this milestone
-  was 513/652, thematic 18/19, Setext 25/27. Remaining focused failures require
-  indented code.
+- **State:** integrated on main (PR #10). The canonical scorecard at this
+  milestone was 513/652, thematic 18/19, Setext 25/27; the overall scorecard
+  reached 546/652 after M2. Remaining focused failures require indented code.
 
 ## Q1 — List conformance wall
 
@@ -48,7 +48,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Tests:** 26 normative fixture pairs and named list stress/determinism test.
 - **Parallelism:** yes; fixtures-only ownership.
 - **Integration:** after M1 to resolve the shared fixture index once.
-- **State:** committed and green on its isolated branch.
+- **State:** integrated on main (PR #11); rebased onto the M1/M2 fixture index
+  during integration.
 
 ## T1 — Textile single-period block quotes
 
@@ -65,7 +66,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Tests:** eight fixture pairs, AST/span unit tests, 10,000-signature flood.
 - **Parallelism:** yes; Textile-local ownership.
 - **Integration:** independent after M1/Q1 fixture-index reconciliation.
-- **State:** committed and green on its isolated branch.
+- **State:** integrated on main (PR #12).
 
 ## M2 — Fenced code blocks
 
@@ -87,9 +88,9 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** no during core design/implementation; fixtures may be
   prepared independently after the model contract is fixed.
 - **Integration:** after M1; before indented code.
-- **State:** implemented and green on `codex/fenced-code`; 113/113 tests,
-  canonical scorecard 546/652 and §4.5 at 28/29. The sole focused failure is
-  the four-space-indented-code dependency.
+- **State:** integrated on main (PR #13). Branch-state measurements: 113/113
+  tests, canonical scorecard 546/652 and §4.5 at 28/29. The sole focused
+  failure is the four-space-indented-code dependency.
 
 ## M3 — Tab-aware indentation and indented code
 
@@ -128,7 +129,9 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes, tooling-only ownership.
 - **Integration:** any time after current PR stack; avoid simultaneous edits to
   global test-count prose.
-- **State:** implementation-ready.
+- **State:** integrated on main (PR #15); the manifest is 546 supported, 106
+  not-yet, and 0 named divergences (the former ATX trailing-backslash
+  divergence now conforms).
 
 ## Deferred architectural cards
 
@@ -137,7 +140,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   satisfy that invariant, and renderer-side Markdown parsing is forbidden.
 - **B1 HTML blocks (§4.6):** blocked on an explicit block raw-HTML policy and
   profile contract; seven start/end kinds then become implementable.
-- **T2 Textile `@code@`:** ready after T1; Textile-local inline scanner using
-  existing `.code_span` IR, with opacity and delimiter-storm tests.
+- **T2 Textile `@code@`:** integrated on main (PR #14); Textile-local inline
+  scanner using the existing `.code_span` IR, with opacity and delimiter-storm
+  tests (docs/TEXTILE-INLINE-CODE.md).
 - **T3 Textile emphasis/strong:** follows T2; same-line boundary/nesting policy
   must be pinned from authoritative Textile documentation first.
