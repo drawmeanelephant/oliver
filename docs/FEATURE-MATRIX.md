@@ -119,7 +119,7 @@ below).
 | bold `**x**` / italic `__x__` | planned | → `<b>` / `<i>`. Both references agree (Hobix: "doubling the underscores or asterisks"). |
 | deleted `-x-` / inserted `+x+` | planned | → `<del>` / `<ins>`. Both references agree. |
 | superscript `^x^` / subscript `~x~` | planned | → `<sup>` / `<sub>`. Both references agree. |
-| code `@x@` | planned | → `<code>`; `<`/`>` escaped inside. Both references agree. |
+| code `@x@` | implemented | Same-line code phrase → shared opaque `.code_span` → `<code>`; payload bytes are verbatim and the full `@...@` source range is the node span. Textile 2 explicitly requires `<`/`>` escaping; the shared renderer also escapes `&`, `"`, and NUL. Open/close operators must touch non-whitespace content and use outside Unicode whitespace/punctuation boundaries; intraword, empty, edge-whitespace, unmatched, embedded-`@`, and cross-line shapes fall back literally. Backslash has no escape role in the cited references. Exact clean-room contract: `docs/TEXTILE-INLINE-CODE.md`. |
 | citation `??x??` | planned | → `<cite>`. Hobix only. |
 | span `%x%` | planned | → `<span>` (with attributes). Both references agree. |
 | big `++x++` / small `--x--` | deferred | Textile 2 only; Hobix does not document them. Oliver will not implement until the inline milestone and will record the choice. |
@@ -128,7 +128,7 @@ below).
 | acronyms | deferred | `CSS(Cascading Style Sheets)` → `<acronym title=...>`. Hobix only. |
 | escaping | planned | `==...==` inline region (Textile 2). Backslash escaping varies by version and is unresolved in the references; Oliver will choose one documented form when implementing. |
 | character replacements | deferred | Curly quotes, `--`→em-dash, `...`→ellipsis, `(c)`/`(r)`/`(tm)`, Textile 2 macros. Oliver deliberately defers all implicit typography: implicit text transformation is the kind of magic a library should make explicit, and it is not needed by the migration consumers. |
-| whitespace sensitivity | planned | Textile 2: inline operators need whitespace before/after to be recognized; brackets/braces can force recognition. Will be part of the inline milestone. |
+| whitespace sensitivity | planned | Textile 2: inline operators need whitespace before/after to be recognized; brackets/braces can force recognition. The boundary rule is implemented for `@code@`; bracket/brace forcing and the remaining phrase operators stay planned. |
 
 ## Recorded ambiguities and chosen behaviors
 
@@ -209,3 +209,13 @@ below).
     unmarked lines after `bq.` remain in its one quoted paragraph until a
     blank line or another recognized block signature.** `bq..` is a later,
     separately documented feature rather than an accidental synonym.
+17. **Textile inline-code delimiter edges.** Hobix documents at-sign-delimited
+    code phrases, and Textile 2 documents `@code@`, entity escaping, generic
+    whitespace sensitivity, and bracket/brace forcing. Neither reference
+    defines embedded at-signs, multiline matching, empty/edge-whitespace
+    content, or a backslash escape. **Oliver: code is same-line and nonempty;
+    operators touch non-whitespace content and have outside Unicode
+    whitespace/punctuation-or-symbol boundaries; the first following `@` is
+    the only closer candidate; invalid shapes remain literal; backslash is
+    inert.** Bracket/brace forcing and `==...==` escaping are later features.
+    See `docs/TEXTILE-INLINE-CODE.md`.

@@ -1,11 +1,12 @@
 //! Textile frontend.
 //!
 //! Vertical slice: paragraphs, `h1.`–`h6.` headings, single-period `bq.` block
-//! quotes, and plain inline text with line breaks. Behavior is chosen from the
-//! published user-facing Textile documentation (Hobix reference; Movable Type
-//! "Textile 2 Syntax"; Textile Markup Language Documentation) where the slice
-//! implements it; disagreements between versions and Oliver's chosen
-//! resolutions are recorded in docs/FEATURE-MATRIX.md.
+//! quotes, plain inline text, and same-line `@code@` phrases with line breaks.
+//! Behavior is chosen from the published user-facing Textile documentation
+//! (Hobix reference; Movable Type "Textile 2 Syntax"; Textile Markup Language
+//! Documentation) where the slice implements it; disagreements between
+//! versions and Oliver's chosen resolutions are recorded in
+//! docs/FEATURE-MATRIX.md and docs/TEXTILE-INLINE-CODE.md.
 //!
 //! Chosen behaviors for this slice:
 //! - Blocks are separated by blank lines.
@@ -21,6 +22,9 @@
 //!   documentation does not define an empty block-quote form.
 //! - A newline inside a paragraph is a hard line break (Textile 2: "newlines
 //!   for XHTML content receive a `<br />` tag at the end of the line").
+//! - `@code@` is recognized only within one line, with the conservative
+//!   whitespace/punctuation boundary contract in docs/TEXTILE-INLINE-CODE.md.
+//!   Code content is an opaque, verbatim `.code_span` payload.
 //! - Paragraph content is preserved verbatim (only the marker's separator
 //!   whitespace is consumed).
 //! - `h0.` and `h7.`+ are not headings; they remain paragraph text.
@@ -29,6 +33,7 @@ const std = @import("std");
 const source = @import("source.zig");
 const document = @import("document.zig");
 const diagnostic = @import("diagnostic.zig");
+const unicode = @import("unicode.zig");
 
 pub const ParseError = error{OutOfMemory};
 
@@ -130,10 +135,7 @@ fn closeBlock(doc: *document.Document, block: *?ActiveBlock) ParseError!void {
             const brk = try doc.createNode(.hard_break, lines[i - 1].terminator, .none);
             try doc.appendChild(paragraph, brk);
         }
-        const text_node = try doc.createNode(.text, ref.content, .{
-            .text = doc.text(ref.content),
-        });
-        try doc.appendChild(paragraph, text_node);
+        try parseInlines(doc, paragraph, ref.content);
     }
 }
 
@@ -213,13 +215,94 @@ fn emitHeading(doc: *document.Document, line: source.Line, heading: Heading) Par
     try parseInlines(doc, node, heading.content);
 }
 
-/// Inline parsing seam: the slice emits one text node per non-empty content
-/// range. Emphasis, links, images, code, attributes, and escaping are later
-/// milestones (see docs/FEATURE-MATRIX.md).
+/// Textile-local iterative inline scanner. A qualifying `@` opener pairs only
+/// with the first following `@`; a failed closer invalidates that opener and
+/// may independently seed the next one. The scanner never rescans a substring,
+/// so even hostile at-sign runs stay linear. See docs/TEXTILE-INLINE-CODE.md.
 fn parseInlines(doc: *document.Document, parent: *document.Node, content: source.Span) ParseError!void {
     if (content.isEmpty()) return;
-    const node = try doc.createNode(.text, content, .{ .text = doc.text(content) });
+
+    const bytes = doc.text(content);
+    var text_start: usize = 0;
+    var opener: ?usize = null;
+    var i: usize = 0;
+    while (i < bytes.len) : (i += 1) {
+        if (bytes[i] != '@') continue;
+
+        if (opener) |open| {
+            if (canCloseCode(bytes, open, i)) {
+                try emitText(doc, parent, subSpan(content, text_start, open));
+
+                const whole = subSpan(content, open, i + 1);
+                const payload_span = subSpan(content, open + 1, i);
+                const payload = try doc.allocator().dupe(u8, doc.text(payload_span));
+                const code = try doc.createNode(.code_span, whole, .{ .code_span = payload });
+                try doc.appendChild(parent, code);
+
+                text_start = i + 1;
+                opener = null;
+                continue;
+            }
+
+            // Only the first following at-sign can close this opener. If it
+            // cannot, preserve the old candidate literally and let this byte
+            // act as a fresh opener only when it qualifies on its own.
+            opener = if (canOpenCode(bytes, i)) i else null;
+            continue;
+        }
+
+        if (canOpenCode(bytes, i)) opener = i;
+    }
+
+    try emitText(doc, parent, subSpan(content, text_start, bytes.len));
+}
+
+fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) ParseError!void {
+    if (span.isEmpty()) return;
+    const node = try doc.createNode(.text, span, .{ .text = doc.text(span) });
     try doc.appendChild(parent, node);
+}
+
+fn subSpan(outer: source.Span, start: usize, end: usize) source.Span {
+    std.debug.assert(start <= end);
+    std.debug.assert(end <= outer.len());
+    return .{
+        .start = outer.start + @as(u32, @intCast(start)),
+        .end = outer.start + @as(u32, @intCast(end)),
+    };
+}
+
+fn canOpenCode(bytes: []const u8, i: usize) bool {
+    std.debug.assert(i < bytes.len and bytes[i] == '@');
+    if (i > 0 and bytes[i - 1] == '@') return false;
+    if (!isInlineBoundaryBefore(bytes, i)) return false;
+    if (i + 1 >= bytes.len or bytes[i + 1] == '@') return false;
+    if (unicode.decode(bytes, i + 1)) |next| {
+        if (unicode.isWhitespace(next)) return false;
+    }
+    return true;
+}
+
+fn canCloseCode(bytes: []const u8, opener: usize, i: usize) bool {
+    std.debug.assert(opener < i and bytes[opener] == '@' and bytes[i] == '@');
+    if (i == opener + 1 or bytes[i - 1] == '@') return false;
+    if (i + 1 < bytes.len and bytes[i + 1] == '@') return false;
+    if (unicode.decodePrev(bytes, i)) |previous| {
+        if (unicode.isWhitespace(previous)) return false;
+    }
+    return isInlineBoundaryAfter(bytes, i + 1);
+}
+
+fn isInlineBoundaryBefore(bytes: []const u8, i: usize) bool {
+    if (i == 0) return true;
+    const previous = unicode.decodePrev(bytes, i) orelse return false;
+    return unicode.isWhitespace(previous) or unicode.isPunctuation(previous);
+}
+
+fn isInlineBoundaryAfter(bytes: []const u8, i: usize) bool {
+    if (i == bytes.len) return true;
+    const next = unicode.decode(bytes, i) orelse return false;
+    return unicode.isWhitespace(next) or unicode.isPunctuation(next);
 }
 
 test "textile: headings and paragraph structure" {
@@ -336,6 +419,117 @@ test "textile: block quote uses shared IR with content-only spans" {
     try std.testing.expectEqual(source.Span{ .start = 9, .end = 11 }, p.children.items[1].span);
     try std.testing.expectEqualStrings("again", p.children.items[2].data.text);
     try std.testing.expectEqual(source.Span{ .start = 11, .end = 16 }, p.children.items[2].span);
+}
+
+test "textile: inline code has exact spans and an opaque owned payload" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(std.testing.allocator, "pre @café<&@ post", .textile, .{});
+    defer result.deinit();
+
+    const p = result.document.root.children.items[0];
+    try std.testing.expectEqual(@as(usize, 3), p.children.items.len);
+
+    try std.testing.expectEqual(document.Tag.text, p.children.items[0].tag);
+    try std.testing.expectEqual(source.Span{ .start = 0, .end = 4 }, p.children.items[0].span);
+    try std.testing.expectEqualStrings("pre ", p.children.items[0].data.text);
+
+    const code = p.children.items[1];
+    try std.testing.expectEqual(document.Tag.code_span, code.tag);
+    try std.testing.expectEqual(source.Span{ .start = 4, .end = 13 }, code.span);
+    try std.testing.expectEqualStrings("café<&", code.data.code_span);
+    try std.testing.expectEqual(@as(usize, 0), code.children.items.len);
+    try std.testing.expect(code.data.code_span.ptr != result.document.src.bytes[5..12].ptr);
+
+    try std.testing.expectEqual(document.Tag.text, p.children.items[2].tag);
+    try std.testing.expectEqual(source.Span{ .start = 13, .end = 18 }, p.children.items[2].span);
+    try std.testing.expectEqualStrings(" post", p.children.items[2].data.text);
+}
+
+test "textile: headings and quoted paragraphs share the inline code scanner" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(std.testing.allocator, "h2. @head@\nbq. @quote@", .textile, .{});
+    defer result.deinit();
+
+    const root = result.document.root;
+    try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+
+    const heading = root.children.items[0];
+    try std.testing.expectEqual(document.Tag.heading, heading.tag);
+    try std.testing.expectEqual(@as(u8, 2), heading.data.heading);
+    try std.testing.expectEqual(@as(usize, 1), heading.children.items.len);
+    try std.testing.expectEqual(document.Tag.code_span, heading.children.items[0].tag);
+    try std.testing.expectEqual(source.Span{ .start = 4, .end = 10 }, heading.children.items[0].span);
+    try std.testing.expectEqualStrings("head", heading.children.items[0].data.code_span);
+
+    const quote = root.children.items[1];
+    try std.testing.expectEqual(document.Tag.block_quote, quote.tag);
+    const paragraph = quote.children.items[0];
+    try std.testing.expectEqual(@as(usize, 1), paragraph.children.items.len);
+    try std.testing.expectEqual(document.Tag.code_span, paragraph.children.items[0].tag);
+    try std.testing.expectEqual(source.Span{ .start = 15, .end = 22 }, paragraph.children.items[0].span);
+    try std.testing.expectEqualStrings("quote", paragraph.children.items[0].data.code_span);
+}
+
+test "textile: inline code never crosses a line ending" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(std.testing.allocator, "@open\nclose@", .textile, .{});
+    defer result.deinit();
+
+    const p = result.document.root.children.items[0];
+    try std.testing.expectEqual(@as(usize, 3), p.children.items.len);
+    try std.testing.expectEqual(document.Tag.text, p.children.items[0].tag);
+    try std.testing.expectEqual(source.Span{ .start = 0, .end = 5 }, p.children.items[0].span);
+    try std.testing.expectEqualStrings("@open", p.children.items[0].data.text);
+    try std.testing.expectEqual(document.Tag.hard_break, p.children.items[1].tag);
+    try std.testing.expectEqual(source.Span{ .start = 5, .end = 6 }, p.children.items[1].span);
+    try std.testing.expectEqual(document.Tag.text, p.children.items[2].tag);
+    try std.testing.expectEqual(source.Span{ .start = 6, .end = 12 }, p.children.items[2].span);
+    try std.testing.expectEqualStrings("close@", p.children.items[2].data.text);
+}
+
+test "textile: matched and near-miss at-sign storms stay deterministic" {
+    const oliver = @import("oliver.zig");
+    const count = 10_000;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(std.testing.allocator);
+    var expected = std.ArrayList(u8).empty;
+    defer expected.deinit(std.testing.allocator);
+    try expected.appendSlice(std.testing.allocator, "<p>");
+    for (0..count) |i| {
+        if (i % 2 == 0) {
+            try input.appendSlice(std.testing.allocator, "@ok@ ");
+            try expected.appendSlice(std.testing.allocator, "<code>ok</code> ");
+        } else {
+            // The first possible closer is intraword on its right, so this
+            // deliberately malformed pair stays literal without a rescan.
+            try input.appendSlice(std.testing.allocator, "@bad@word ");
+            try expected.appendSlice(std.testing.allocator, "@bad@word ");
+        }
+    }
+    try expected.appendSlice(std.testing.allocator, "</p>\n");
+
+    var result = try oliver.parse(std.testing.allocator, input.items, .textile, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    var code_count: usize = 0;
+    for (p.children.items) |child| {
+        if (child.tag == .code_span) code_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, count / 2), code_count);
+
+    var first_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer first_writer.deinit();
+    try oliver.html.render(std.testing.allocator, &first_writer.writer, &result.document, .{});
+    var first = first_writer.toArrayList();
+    defer first.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u8, expected.items, first.items);
+
+    var second_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer second_writer.deinit();
+    try oliver.html.render(std.testing.allocator, &second_writer.writer, &result.document, .{});
+    var second = second_writer.toArrayList();
+    defer second.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u8, first.items, second.items);
 }
 
 test "textile: empty extended and citation block-quote signatures stay literal" {

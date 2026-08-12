@@ -1369,6 +1369,38 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/bq-tab.textile"),
         .expected = @embedFile("fixtures/textile/bq-tab.html"),
     },
+    // Same-line Textile @code@ phrases use the clean-room boundary and
+    // fallback contract in docs/TEXTILE-INLINE-CODE.md.
+    .{
+        .name = "code-basic",
+        .input = @embedFile("fixtures/textile/code-basic.textile"),
+        .expected = @embedFile("fixtures/textile/code-basic.html"),
+    },
+    .{
+        .name = "code-opacity",
+        .input = @embedFile("fixtures/textile/code-opacity.textile"),
+        .expected = @embedFile("fixtures/textile/code-opacity.html"),
+    },
+    .{
+        .name = "code-contexts",
+        .input = @embedFile("fixtures/textile/code-contexts.textile"),
+        .expected = @embedFile("fixtures/textile/code-contexts.html"),
+    },
+    .{
+        .name = "code-boundaries",
+        .input = @embedFile("fixtures/textile/code-boundaries.textile"),
+        .expected = @embedFile("fixtures/textile/code-boundaries.html"),
+    },
+    .{
+        .name = "code-literal",
+        .input = @embedFile("fixtures/textile/code-literal.textile"),
+        .expected = @embedFile("fixtures/textile/code-literal.html"),
+    },
+    .{
+        .name = "code-same-line",
+        .input = @embedFile("fixtures/textile/code-same-line.textile"),
+        .expected = @embedFile("fixtures/textile/code-same-line.html"),
+    },
     .{
         .name = "special-chars",
         .input = @embedFile("fixtures/textile/special-chars.textile"),
