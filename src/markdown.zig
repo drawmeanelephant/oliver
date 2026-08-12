@@ -81,20 +81,45 @@ pub const ParseError = error{OutOfMemory};
 pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnostic)) ParseError!void {
     _ = diags;
 
+    // Two-phase parse (spec appendix "A parsing strategy"): phase 1 builds
+    // the block structure and collects link reference definitions (§4.7)
+    // into `defs`; inline parsing is deferred to phase 2, because a
+    // reference link may precede the definition it uses. `pending` records
+    // each block's raw content for the second pass.
+    var defs = Definitions.init(doc.allocator());
+    defer defs.deinit();
+    var pending = std.ArrayList(PendingInline).empty;
+    defer pending.deinit(doc.allocator());
+
     var lines = source.Lines.init(doc.src.bytes);
     var paragraph: ?Paragraph = null;
     while (lines.next()) |line| {
         if (isBlank(line.text)) {
-            try closeParagraph(doc, &paragraph);
+            try closeParagraph(doc, &paragraph, &defs, &pending);
         } else if (tryAtxHeading(line)) |heading| {
-            try closeParagraph(doc, &paragraph);
-            try emitHeading(doc, line, heading);
+            try closeParagraph(doc, &paragraph, &defs, &pending);
+            try emitHeading(doc, line, heading, &pending);
         } else {
             try appendParagraphLine(doc, &paragraph, line);
         }
     }
-    try closeParagraph(doc, &paragraph);
+    try closeParagraph(doc, &paragraph, &defs, &pending);
+
+    // Phase 2: inline pass, with the full definitions map available.
+    for (pending.items) |job| {
+        switch (job) {
+            .paragraph => |pp| try parseParagraphInlines(doc, pp.node, pp.lines, &defs),
+            .heading => |hh| try parseHeadingInlines(doc, hh.node, hh.span, &defs),
+        }
+    }
 }
+
+/// A block whose inlines are parsed in phase 2, once every link reference
+/// definition is known.
+const PendingInline = union(enum) {
+    paragraph: struct { node: *document.Node, lines: []const Paragraph.LineRef },
+    heading: struct { node: *document.Node, span: source.Span },
+};
 
 /// A paragraph under construction. `content` is the full raw line span
 /// (leading and trailing whitespace included); the inline pass decides what
@@ -108,6 +133,20 @@ const Paragraph = struct {
         terminator: source.Span,
     };
 };
+
+/// A link reference definition (§4.7): a label, an optional destination,
+/// and an optional title. The destination and title spans are raw source
+/// (backslash escapes resolved at emit time, like inline links).
+const Definition = struct {
+    dest: source.Span,
+    title: ?source.Span,
+};
+
+/// The document's link reference definitions, keyed by *normalized* label
+/// (see `normalizeLabel`). Keys are arena-owned copies. The first
+/// definition for a label wins (§4.7: "If there are several matching
+/// definitions, the first one takes precedence").
+const Definitions = std.StringHashMap(Definition);
 
 fn isBlank(text: []const u8) bool {
     for (text) |b| {
@@ -126,18 +165,387 @@ fn appendParagraphLine(doc: *document.Document, paragraph: *?Paragraph, line: so
     });
 }
 
-fn closeParagraph(doc: *document.Document, paragraph: *?Paragraph) ParseError!void {
+/// A parsed link reference definition (§4.7): the label content span and
+/// the number of paragraph lines it consumed (the label may span lines).
+const ParsedDefinition = struct {
+    /// Content between the label's brackets.
+    label: source.Span,
+    /// Destination content span (sans `<...>` for the angle form).
+    dest: source.Span,
+    /// Title content span (sans delimiters), when present.
+    title: ?source.Span,
+    /// Lines consumed by the definition (label lines + destination/title
+    /// lines), so the block pass can skip them.
+    consumed_lines: usize,
+};
+
+/// Parses a link reference definition (§4.7) starting at the first line of
+/// `lines`, whose contents may span lines. The grammar:
+///
+///     [label]: ws? dest ws? title?
+///
+/// where ws is spaces/tabs including up to one line ending, the label may
+/// contain line endings (spec example 202), the destination may not, and
+/// the title may. "No further character may occur" after the title (or
+/// destination when there is no title) — the definition ends at the end of
+/// that line. Returns null when the lines are not a definition (in which
+/// case the whole paragraph is ordinary text: definitions cannot interrupt
+/// a paragraph, §4.7 example 204).
+fn tryParseDefinition(doc: *document.Document, lines: []const Paragraph.LineRef) ?ParsedDefinition {
+    const bytes = doc.src.bytes;
+    const para_end = lines[lines.len - 1].content.end;
+
+    // Optional indentation: up to three spaces (a tab disqualifies the
+    // line — full tab-stop handling is deferred, as in ATX headings).
+    var i: usize = 0;
+    var indent: usize = 0;
+    while (i < lines[0].content.len() and bytes[lines[0].content.start + i] == ' ') : (i += 1) {
+        indent += 1;
+    }
+    if (indent > 3) return null;
+    if (i < lines[0].content.len() and bytes[lines[0].content.start + i] == '\t') return null;
+
+    // The label: `[` ... first unescaped `]` (may span lines).
+    const label = scanDefinitionLabel(bytes, lines, i) orelse return null;
+
+    // The colon, then ws (spaces/tabs including up to one line ending).
+    var cur = label.after;
+    if (!hasByte(bytes, para_end, cur, ':')) return null;
+    cur += 1;
+    const after_colon = skipDefWs(bytes, lines, cur, para_end) orelse return null;
+
+    // The destination: angle or bare, on the current line (destinations
+    // cannot contain line endings).
+    var dest: source.Span = undefined;
+    var p = after_colon;
+    if (p < para_end and bytes[p] == '<') {
+        const end = scanAngleDest(bytes, p + 1, lineEnd(bytes, lines, p)) orelse return null;
+        dest = .{ .start = @intCast(p + 1), .end = @intCast(end) };
+        p = end + 1;
+    } else {
+        const end = scanBareDest(bytes, p, lineEnd(bytes, lines, p)) orelse return null;
+        dest = .{ .start = @intCast(p), .end = @intCast(end) };
+        p = end;
+    }
+
+    // After the destination: optional ws, then an optional title, then end
+    // of line. The title must be *separated* from the destination by spaces
+    // or tabs (§4.7: `[foo]: <bar>(baz)` is not a definition, because
+    // `(baz)` follows the destination with no separating whitespace).
+    var title: ?source.Span = null;
+    var end_line_end: usize = undefined;
+    var q = p;
+    const dest_line_end = lineEnd(bytes, lines, p);
+    while (q < dest_line_end and (bytes[q] == ' ' or bytes[q] == '\t')) q += 1;
+
+    if (q < dest_line_end) {
+        // A title opens on the destination's line. A title opener that
+        // fails to parse as a complete title (unclosed, or followed by
+        // non-whitespace) invalidates the whole definition: "No further
+        // character may occur."
+        if (bytes[q] != '"' and bytes[q] != '\'' and bytes[q] != '(') return null;
+        const t = scanTitle(bytes, q, para_end) orelse return null;
+        title = t.content;
+        q = t.end;
+        end_line_end = lineEnd(bytes, lines, q);
+        while (q < end_line_end) : (q += 1) {
+            if (bytes[q] != ' ' and bytes[q] != '\t') return null;
+        }
+    } else if (nextLineStart(lines, q)) |next_start| {
+        // End of the destination's line: the title, if any, begins on the
+        // next line (the line ending is itself the separator). A failed
+        // title attempt leaves the definition without a title and does not
+        // consume the next line (§4.7 example: `[foo]: /url\n"title" ok`
+        // is the definition `[foo]: /url` followed by a paragraph).
+        var n = next_start;
+        const n_end = lineEnd(bytes, lines, n);
+        while (n < n_end and (bytes[n] == ' ' or bytes[n] == '\t')) n += 1;
+        if (n < n_end and (bytes[n] == '"' or bytes[n] == '\'' or bytes[n] == '(')) {
+            if (scanTitle(bytes, n, para_end)) |t| {
+                var q2 = t.end;
+                const t_line_end = lineEnd(bytes, lines, q2);
+                var clean = true;
+                while (q2 < t_line_end) : (q2 += 1) {
+                    if (bytes[q2] != ' ' and bytes[q2] != '\t') {
+                        clean = false;
+                        break;
+                    }
+                }
+                if (clean) {
+                    title = t.content;
+                    end_line_end = t_line_end;
+                } else {
+                    end_line_end = dest_line_end;
+                }
+            } else {
+                end_line_end = dest_line_end;
+            }
+        } else {
+            end_line_end = dest_line_end;
+        }
+    } else {
+        // Destination on the last line, nothing after it.
+        end_line_end = dest_line_end;
+    }
+
+    return .{
+        .label = label.content,
+        .dest = dest,
+        .title = title,
+        .consumed_lines = consumedLines(bytes, lines, end_line_end),
+    };
+}
+
+/// Registers a parsed definition; the first definition for a label wins
+/// (§4.7: "If there are several matching definitions, the first one takes
+/// precedence"). The normalized label is arena-owned.
+fn registerDefinition(doc: *document.Document, defs: *Definitions, def: ParsedDefinition) ParseError!void {
+    const key = try normalizeLabel(doc, def.label);
+    const gop = try defs.getOrPut(key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{ .dest = def.dest, .title = def.title };
+    }
+}
+
+/// The result of scanning a definition's label.
+const ScannedLabel = struct {
+    /// Content between the brackets.
+    content: source.Span,
+    /// Position just past the closing `]`.
+    after: usize,
+};
+
+/// Scans a link label (§6.6): `[` ... first `]` not backslash-escaped,
+/// with no unescaped brackets inside, at least one non-whitespace
+/// character, at most 999 characters. The label may span lines (line
+/// endings are content, later normalized away). Returns null when the text
+/// is not a valid label.
+fn scanDefinitionLabel(bytes: []const u8, lines: []const Paragraph.LineRef, start: usize) ?ScannedLabel {
+    if (start >= lines[0].content.len()) return null;
+    const first = lines[0].content.start + start;
+    if (bytes[first] != '[') return null;
+    const para_end = lines[lines.len - 1].content.end;
+
+    var p = first + 1;
+    var has_nonspace = false;
+    var count: usize = 0;
+    while (p < para_end) : (p += 1) {
+        const b = bytes[p];
+        if (b == ']' and !isEscaped(bytes, p)) {
+            if (!has_nonspace) return null;
+            return .{ .content = .{ .start = @intCast(first + 1), .end = @intCast(p) }, .after = p + 1 };
+        }
+        if (b == '[' and !isEscaped(bytes, p)) return null; // unescaped bracket inside
+        if (b != ' ' and b != '\t' and b != '\n' and b != '\r') has_nonspace = true;
+        count += 1;
+        if (count > 999) return null; // §6.6: at most 999 characters
+    }
+    return null;
+}
+
+/// The byte at absolute position `pos` is `ch`? (`pos` may be past the end
+/// of its line's content but within the paragraph — the colon after a
+/// label spanning lines is on the label's last line.)
+fn hasByte(bytes: []const u8, para_end: usize, pos: usize, ch: u8) bool {
+    return pos < para_end and bytes[pos] == ch;
+}
+
+/// Skips definition whitespace (§4.7): spaces/tabs, including up to one
+/// line ending. Returns the position after the whitespace, or null when two
+/// line endings (or a blank line) appear — the block pass splits paragraphs
+/// on blank lines, so this also bounds the scan.
+fn skipDefWs(bytes: []const u8, lines: []const Paragraph.LineRef, start: usize, para_end: usize) ?usize {
+    _ = lines;
+    var p = start;
+    var seen_eol = false;
+    while (p < para_end) : (p += 1) {
+        const b = bytes[p];
+        if (b == ' ' or b == '\t') continue;
+        if (b == '\n' or b == '\r') {
+            if (seen_eol) return null;
+            seen_eol = true;
+            if (b == '\r' and p + 1 < para_end and bytes[p + 1] == '\n') p += 1;
+            continue;
+        }
+        break;
+    }
+    return p;
+}
+
+/// The end of the line whose content contains absolute position `pos` (the
+/// last line's content end if `pos` is past everything). Line contents are
+/// disjoint with terminators between them, so this is the byte just before
+/// the next line's content.
+fn lineEnd(bytes: []const u8, lines: []const Paragraph.LineRef, pos: usize) usize {
+    _ = bytes;
+    var end = lines[0].content.end;
+    for (lines) |ref| {
+        if (ref.content.start <= pos) end = ref.content.end;
+    }
+    return end;
+}
+
+/// The content start of the line after the one containing `pos`, or null
+/// when `pos` is on the last line.
+fn nextLineStart(lines: []const Paragraph.LineRef, pos: usize) ?usize {
+    var cur: usize = 0;
+    for (lines, 0..) |ref, k| {
+        if (ref.content.start <= pos) cur = k;
+    }
+    if (cur + 1 >= lines.len) return null;
+    return lines[cur + 1].content.start;
+}
+
+/// Lines consumed by a definition ending at `line_end`: one for each line
+/// whose content starts before that position.
+fn consumedLines(bytes: []const u8, lines: []const Paragraph.LineRef, line_end: usize) usize {
+    _ = bytes;
+    var n: usize = 0;
+    for (lines) |ref| {
+        if (ref.content.start >= line_end) break;
+        n += 1;
+    }
+    return n;
+}
+
+/// Normalizes a label (§6.6): strip the brackets (the caller passes the
+/// content span), perform the Unicode case fold, strip leading and trailing
+/// spaces/tabs/line endings, and collapse consecutive internal
+/// spaces/tabs/line endings to a single space. The result is an
+/// arena-owned copy — folds can expand (e.g. ẞ -> ss), so it cannot borrow
+/// the source.
+fn normalizeLabel(doc: *document.Document, content: source.Span) ParseError![]const u8 {
+    const bytes = doc.src.bytes;
+
+    // Pass 1: folded length (case folds expand to at most three code
+    // points; each of those is at most four UTF-8 bytes).
+    var n: usize = 0;
+    var i: usize = content.start;
+    while (i < content.end) {
+        const cp = unicode.decode(bytes, i) orelse bytes[i];
+        const f = unicode.caseFold(cp);
+        for (0..f.len) |j| n += utf8Len(f.chars[j]);
+        i += if (unicode.decode(bytes, i)) |_| unicodeCpLen(bytes, i) else 1;
+    }
+
+    const buf = try doc.allocator().alloc(u8, n);
+    var k: usize = 0;
+    i = content.start;
+    while (i < content.end) {
+        const cp = unicode.decode(bytes, i) orelse bytes[i];
+        const f = unicode.caseFold(cp);
+        for (0..f.len) |j| k += encodeCp(buf[k..], f.chars[j]);
+        i += if (unicode.decode(bytes, i)) |_| unicodeCpLen(bytes, i) else 1;
+    }
+
+    // Strip leading/trailing whitespace (space, tab, line ending) and
+    // collapse consecutive internal runs to a single space.
+    var start: usize = 0;
+    while (start < n and isLabelWs(buf[start])) start += 1;
+    var end = n;
+    while (end > start and isLabelWs(buf[end - 1])) end -= 1;
+    var out: usize = 0;
+    var prev_ws = false;
+    for (buf[start..end]) |b| {
+        if (isLabelWs(b)) {
+            if (!prev_ws) {
+                buf[out] = ' ';
+                out += 1;
+                prev_ws = true;
+            }
+        } else {
+            buf[out] = b;
+            out += 1;
+            prev_ws = false;
+        }
+    }
+    return buf[0..out];
+}
+
+fn isLabelWs(b: u8) bool {
+    return b == ' ' or b == '\t' or b == '\n' or b == '\r';
+}
+
+/// UTF-8 encoded length of a code point.
+fn utf8Len(cp: u21) usize {
+    return if (cp < 0x80) 1 else if (cp < 0x800) 2 else if (cp < 0x10000) 3 else 4;
+}
+
+/// Byte length of the UTF-8 sequence at position `i`.
+fn unicodeCpLen(bytes: []const u8, i: usize) usize {
+    const b = bytes[i];
+    return if (b < 0x80) 1 else if (b < 0xE0) 2 else if (b < 0xF0) 3 else 4;
+}
+
+/// Encodes a code point as UTF-8 into `out[0..]`; returns bytes written.
+fn encodeCp(out: []u8, cp: u21) usize {
+    if (cp < 0x80) {
+        out[0] = @intCast(cp);
+        return 1;
+    } else if (cp < 0x800) {
+        out[0] = @intCast(0xC0 | (cp >> 6));
+        out[1] = @intCast(0x80 | (cp & 0x3F));
+        return 2;
+    } else if (cp < 0x10000) {
+        out[0] = @intCast(0xE0 | (cp >> 12));
+        out[1] = @intCast(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = @intCast(0x80 | (cp & 0x3F));
+        return 3;
+    } else {
+        out[0] = @intCast(0xF0 | (cp >> 18));
+        out[1] = @intCast(0x80 | ((cp >> 12) & 0x3F));
+        out[2] = @intCast(0x80 | ((cp >> 6) & 0x3F));
+        out[3] = @intCast(0x80 | (cp & 0x3F));
+        return 4;
+    }
+}
+
+/// Closes a paragraph (phase 1). Leading lines that parse as link reference
+/// definitions (§4.7) are extracted and registered; the remaining lines
+/// form the paragraph node. A paragraph consisting entirely of definitions
+/// produces no block at all ("no visible content"). Definitions cannot
+/// interrupt a paragraph — only a paragraph *starting* with them is
+/// partially or wholly a definition — so extraction stops at the first
+/// non-definition line. Inline parsing is deferred to phase 2, where the
+/// complete definitions map is available.
+fn closeParagraph(
+    doc: *document.Document,
+    paragraph: *?Paragraph,
+    defs: *Definitions,
+    pending: *std.ArrayList(PendingInline),
+) ParseError!void {
     const p = paragraph.* orelse return;
     paragraph.* = null;
 
     const lines = p.lines.items;
+
+    // Extract leading link reference definitions.
+    var k: usize = 0;
+    while (k < lines.len) {
+        const def = tryParseDefinition(doc, lines[k..]) orelse break;
+        try registerDefinition(doc, defs, def);
+        k += def.consumed_lines;
+    }
+    if (k == lines.len) return; // entirely definitions: no block
+
+    const remaining = lines[k..];
     const span = source.Span{
-        .start = p.start,
-        .end = lines[lines.len - 1].content.end,
+        .start = remaining[0].content.start,
+        .end = remaining[remaining.len - 1].content.end,
     };
     const node = try doc.createNode(.paragraph, span, .none);
     try doc.appendChild(doc.root, node);
+    try pending.append(doc.allocator(), .{ .paragraph = .{ .node = node, .lines = remaining } });
+}
 
+/// Phase 2 inline pass for a paragraph: discovery -> scan -> link discovery
+/// -> match, now with the full definitions map.
+fn parseParagraphInlines(
+    doc: *document.Document,
+    node: *document.Node,
+    lines: []const Paragraph.LineRef,
+    defs: *Definitions,
+) ParseError!void {
     var items = std.ArrayList(InlineItem).empty;
     defer items.deinit(doc.allocator());
 
@@ -163,9 +571,10 @@ fn closeParagraph(doc: *document.Document, paragraph: *?Paragraph) ParseError!vo
             }
         }
     }
-    // Second discovery pass: inline links and images (§6.6/§6.7), before
-    // emphasis matching.
-    try discoverLinksAndImages(doc, &items, span.end);
+    // Second discovery pass: inline links, images, and reference links
+    // (§6.6/§6.7), before emphasis matching.
+    const para_end = lines[lines.len - 1].content.end;
+    try discoverLinksAndImages(doc, &items, para_end, defs);
     try matchInlines(doc, node, items.items);
 }
 
@@ -247,15 +656,23 @@ fn tryAtxHeading(line: source.Line) ?AtxHeading {
     };
 }
 
-fn emitHeading(doc: *document.Document, line: source.Line, heading: AtxHeading) ParseError!void {
+fn emitHeading(doc: *document.Document, line: source.Line, heading: AtxHeading, pending: *std.ArrayList(PendingInline)) ParseError!void {
     const node = try doc.createNode(.heading, line.contentSpan(), .{
         .heading = heading.level,
     });
     try doc.appendChild(doc.root, node);
+    if (!heading.content.isEmpty()) {
+        try pending.append(doc.allocator(), .{ .heading = .{ .node = node, .span = heading.content } });
+    }
+}
 
-    const content = heading.content;
-    if (content.isEmpty()) return;
-
+/// Phase 2 inline pass for a heading (see `emitHeading`).
+fn parseHeadingInlines(
+    doc: *document.Document,
+    node: *document.Node,
+    content: source.Span,
+    defs: *Definitions,
+) ParseError!void {
     // A trailing unescaped backslash at the end of an ATX heading line is a
     // hard line break inside the heading (chosen behavior, see matrix); it is
     // scanned up to, and a hard break node is appended after.
@@ -271,7 +688,7 @@ fn emitHeading(doc: *document.Document, line: source.Line, heading: AtxHeading) 
     defer spans.deinit(doc.allocator());
     try discoverCodeSpans(doc, &[_]source.Span{scan}, &spans);
     try scanLine(doc, &items, scan, scan, spans.items);
-    try discoverLinksAndImages(doc, &items, scan.end);
+    try discoverLinksAndImages(doc, &items, scan.end, defs);
     try matchInlines(doc, node, items.items);
 
     if (scan.end != content.end) {
@@ -659,27 +1076,34 @@ fn scanTitle(bytes: []const u8, start: usize, para_end: usize) ?TitleParts {
 const max_dest_depth: usize = 32;
 const max_link_scan: usize = 2048;
 
-/// Discovers inline links (§6.6) and images (§6.7) in the item list,
-/// restructuring it in place. Walks the list with a bracket stack; on a
-/// `]` whose nearest `[` or `![` opener is followed by a valid `(...)`
-/// construct in the source, splices the bracket range — plus the items
-/// covering the consumed `(...)` bytes — into a single `link` or `image`
-/// item whose children are the bracket-range items, and drops the matched
-/// opener and everything trapped above it. Brackets that never form a
-/// construct stay in the list and emit as literal text.
+/// Discovers inline links and images (§6.6/§6.7) and reference links
+/// (§6.6 reference forms) in the item list, restructuring it in place.
+/// Walks the list with a bracket stack; on a `]` whose nearest `[` or `![`
+/// opener is followed by a valid `(...)` construct in the source, or whose
+/// nearest `[` is followed by a reference label (full/collapsed/shortcut)
+/// with a matching definition, splices the bracket range — plus the items
+/// covering the consumed `(...)`/label bytes — into a single `link` or
+/// `image` item whose children are the bracket-range items, and drops the
+/// matched opener and everything trapped above it. Brackets that never form
+/// a construct stay in the list and emit as literal text.
 ///
 /// Nesting follows the spec appendix's *look for link or image*: a formed
-/// *link* inactivates every earlier `[` opener (links cannot contain
-/// links, innermost wins), while a formed *image* inactivates nothing (an
-/// image description may contain links and images). Inactivity is decided
-/// by a monotone check — a `[` at out position `p` is inactive iff some
-/// link has formed with an opener at a larger out position, so nothing is
-/// re-marked and matching stays linear (docs/IMAGES-PARSING.md §2). `![`
-/// openers are never inactive. Runs before emphasis matching: link/image
-/// items are opaque to the delimiter stack, and their children are matched
-/// separately (link text as a fresh inline scope; image descriptions
-/// flattened to the alt string at emit time).
-fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineItem), para_end: u32) ParseError!void {
+/// *link* inactivates every earlier `[` opener (links cannot contain links,
+/// innermost wins), while a formed *image* inactivates nothing (an image
+/// description may contain links and images). Inactivity is decided by a
+/// monotone check — a `[` at out position `p` is inactive iff some link has
+/// formed with an opener at a larger out position, so nothing is re-marked
+/// and matching stays linear (docs/IMAGES-PARSING.md §2). `![` openers are
+/// never inactive. Reference precedence (§6.6): an inline link (`(...)`),
+/// then full (`[text][label]`), then collapsed (`[text][]`), then shortcut
+/// (`[text]`); a failed inline `(...)` does not block the shortcut form
+/// (spec example 561); reference forms apply only to `[` openers —
+/// reference-style images are deferred (docs/IMAGES-PARSING.md). Runs
+/// before emphasis matching: link/image items are opaque to the delimiter
+/// stack, and their children are matched separately (link text as a fresh
+/// inline scope; image descriptions flattened to the alt string at emit
+/// time).
+fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineItem), para_end: u32, defs: *Definitions) ParseError!void {
     const bytes = doc.src.bytes;
     var out = std.ArrayList(InlineItem).empty;
     var stack = std.ArrayList(usize).empty;
@@ -710,62 +1134,170 @@ fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineI
                 continue;
             }
             const close_end = item.bracket.span.end;
-            if (tryParseLink(bytes, close_end, para_end)) |lp| {
-                const is_image = out.items[o].bracket.ch == '!';
-                const open_start = out.items[o].bracket.span.start;
+            const is_image = out.items[o].bracket.ch == '!';
+            const open_start = out.items[o].bracket.span.start;
 
-                // Children: the items between the opener and `]`. Never
-                // contains a link (one would have killed this opener
-                // first); an image's description may contain links and
-                // images.
-                var children = std.ArrayList(InlineItem).empty;
-                try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
+            // The link text span: between the opener and this `]`.
+            const text = source.Span{ .start = open_start + 1, .end = close_end - 1 };
 
-                // Consume the `(...)` items: everything after the `]` up to
-                // (not including) the closing paren. The last consumed item
-                // may extend past the paren (e.g. `[foo](/uri) and more`) —
-                // truncate it so its tail stays literal.
-                var j = i + 1;
-                while (j < old.len and itemSpan(old[j]).start < lp.paren_end) : (j += 1) {}
-                if (itemSpan(old[j - 1]).end > lp.paren_end) {
-                    // The last consumed item extends past the closing paren
-                    // (e.g. `[foo](/uri) and more`): truncate its tail so it
+            // 1. Inline link/image: `(` immediately after the `]`.
+            if (close_end < para_end and bytes[close_end] == '(') {
+                if (tryParseLink(bytes, close_end, para_end)) |lp| {
+                    // Children: the items between the opener and `]`. Never
+                    // contains a link (one would have killed this opener
+                    // first); an image's description may contain links and
+                    // images.
+                    var children = std.ArrayList(InlineItem).empty;
+                    try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
+
+                    // Consume the `(...)` items: everything after the `]` up
+                    // to (not including) the closing paren. The last
+                    // consumed item may extend past the closing paren (e.g.
+                    // `[foo](/uri) and more`) — truncate it so its tail
                     // stays literal text after the construct.
-                    setItemSpan(&old[j - 1], .{ .start = lp.paren_end, .end = itemSpan(old[j - 1]).end });
-                    try out.append(doc.allocator(), old[j - 1]);
+                    var j = i + 1;
+                    while (j < old.len and itemSpan(old[j]).start < lp.paren_end) : (j += 1) {}
+                    if (itemSpan(old[j - 1]).end > lp.paren_end) {
+                        setItemSpan(&old[j - 1], .{ .start = lp.paren_end, .end = itemSpan(old[j - 1]).end });
+                        try out.append(doc.allocator(), old[j - 1]);
+                    }
+
+                    out.shrinkRetainingCapacity(o);
+                    if (is_image) {
+                        try out.append(doc.allocator(), .{
+                            .image = .{
+                                .span = .{ .start = open_start, .end = lp.paren_end },
+                                .children = children,
+                                .dest = lp.dest,
+                                .title = lp.title,
+                            },
+                        });
+                    } else {
+                        try out.append(doc.allocator(), .{
+                            .link = .{
+                                .span = .{ .start = open_start, .end = lp.paren_end },
+                                .children = children,
+                                .dest = lp.dest,
+                                .title = lp.title,
+                            },
+                        });
+                        // A formed link inactivates every earlier `[` (the
+                        // monotone check above); record its out position so
+                        // those openers are recognized as dead.
+                        max_link_opener_out = @max(max_link_opener_out, o);
+                    }
+                    // The matched opener and everything trapped above it
+                    // were consumed by the construct; entries below stay
+                    // (their activity is decided by the monotone check).
+                    while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
+                    i = j - 1; // the `(...)` items were consumed
+                    continue;
+                }
+                // A `(` that fails to parse as an inline construct falls
+                // through to the reference forms below (§6.6 example:
+                // `[foo](not a link)` with `[foo]: /url1` → shortcut
+                // reference, with `(not a link)` as literal text).
+            }
+
+            // 2. Reference forms (links only; reference-style images are
+            // deferred, see docs/IMAGES-PARSING.md): a `[` immediately after
+            // the `]` is a full or collapsed reference; nothing else is a
+            // shortcut.
+            if (!is_image and close_end < para_end and bytes[close_end] == '[') {
+                // Collapsed: `[]` — the label is the link text itself.
+                if (close_end + 1 < para_end and bytes[close_end + 1] == ']') {
+                    if (try tryResolveReference(doc, defs, text)) |def| {
+                        var children = std.ArrayList(InlineItem).empty;
+                        try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
+
+                        var j = i + 1;
+                        while (j < old.len and itemSpan(old[j]).start < close_end + 2) : (j += 1) {}
+                        if (itemSpan(old[j - 1]).end > close_end + 2) {
+                            setItemSpan(&old[j - 1], .{ .start = close_end + 2, .end = itemSpan(old[j - 1]).end });
+                            try out.append(doc.allocator(), old[j - 1]);
+                        }
+
+                        out.shrinkRetainingCapacity(o);
+                        try out.append(doc.allocator(), .{
+                            .link = .{
+                                .span = .{ .start = open_start, .end = close_end + 2 },
+                                .children = children,
+                                .dest = def.dest,
+                                .title = def.title,
+                            },
+                        });
+                        max_link_opener_out = @max(max_link_opener_out, o);
+                        while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
+                        i = j - 1;
+                        continue;
+                    }
+                    // An unresolved `[]` still blocks the shortcut form.
+                    _ = stack.pop();
+                    try out.append(doc.allocator(), item);
+                    continue;
                 }
 
-                out.shrinkRetainingCapacity(o);
-                if (is_image) {
-                    try out.append(doc.allocator(), .{
-                        .image = .{
-                            .span = .{ .start = open_start, .end = lp.paren_end },
-                            .children = children,
-                            .dest = lp.dest,
-                            .title = lp.title,
-                        },
-                    });
-                } else {
-                    try out.append(doc.allocator(), .{
-                        .link = .{
-                            .span = .{ .start = open_start, .end = lp.paren_end },
-                            .children = children,
-                            .dest = lp.dest,
-                            .title = lp.title,
-                        },
-                    });
-                    // A formed link inactivates every earlier `[` (the
-                    // monotone check above); record its out position so
-                    // those openers are recognized as dead.
-                    max_link_opener_out = @max(max_link_opener_out, o);
+                // Full: `[label]` — the label is scanned and resolved.
+                if (scanRefLabel(bytes, close_end, para_end)) |lab| {
+                    if (try tryResolveReference(doc, defs, lab.content)) |def| {
+                        var children = std.ArrayList(InlineItem).empty;
+                        try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
+
+                        // Consume items covering the label `[...]`.
+                        var j = i + 1;
+                        while (j < old.len and itemSpan(old[j]).start < lab.after) : (j += 1) {}
+                        if (itemSpan(old[j - 1]).end > lab.after) {
+                            setItemSpan(&old[j - 1], .{ .start = @intCast(lab.after), .end = itemSpan(old[j - 1]).end });
+                            try out.append(doc.allocator(), old[j - 1]);
+                        }
+
+                        out.shrinkRetainingCapacity(o);
+                        try out.append(doc.allocator(), .{
+                            .link = .{
+                                .span = .{ .start = open_start, .end = @intCast(lab.after) },
+                                .children = children,
+                                .dest = def.dest,
+                                .title = def.title,
+                            },
+                        });
+                        max_link_opener_out = @max(max_link_opener_out, o);
+                        while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
+                        i = j - 1;
+                        continue;
+                    }
                 }
-                // The matched opener and everything trapped above it were
-                // consumed by the construct; entries below stay (their
-                // activity is decided by the monotone check).
-                while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
-                i = j - 1; // the `(...)` items were consumed
+                // A `[` that does not resolve (or an invalid label) still
+                // blocks the shortcut form: "not followed by [] or a link
+                // label".
+                _ = stack.pop();
+                try out.append(doc.allocator(), item);
                 continue;
             }
+
+            // 3. Shortcut reference: `[text]` not followed by `[]` or a
+            // link label (§6.6) — i.e. not followed by `[`. A `(` after a
+            // failed inline link does not block the shortcut (§6.6 example
+            // `[foo](not a link)` with `[foo]: /url1`).
+            if (!is_image and (close_end >= para_end or bytes[close_end] != '[')) {
+                if (try tryResolveReference(doc, defs, text)) |def| {
+                    var children = std.ArrayList(InlineItem).empty;
+                    try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
+
+                    out.shrinkRetainingCapacity(o);
+                    try out.append(doc.allocator(), .{
+                        .link = .{
+                            .span = .{ .start = open_start, .end = close_end },
+                            .children = children,
+                            .dest = def.dest,
+                            .title = def.title,
+                        },
+                    });
+                    max_link_opener_out = @max(max_link_opener_out, o);
+                    while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
+                    continue;
+                }
+            }
+
             // Not a link/image: the opener can never match a later `]`.
             _ = stack.pop();
             try out.append(doc.allocator(), item);
@@ -775,6 +1307,49 @@ fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineI
     }
 
     items.* = out; // moved; the old buffer stays in the arena
+}
+
+/// The result of scanning a reference label following a `]`.
+const ScannedRefLabel = struct {
+    /// Content between the label's brackets.
+    content: source.Span,
+    /// Position just past the label's closing `]`.
+    after: usize,
+};
+
+/// Scans a reference label `[...]` starting at the `[` at position `pos`
+/// (immediately after a link text's `]`). The label ends at the first `]`
+/// not backslash-escaped, with no unescaped brackets inside and at least
+/// one non-whitespace character (§6.6). Returns null for an invalid label.
+fn scanRefLabel(bytes: []const u8, pos: usize, para_end: usize) ?ScannedRefLabel {
+    if (pos >= para_end or bytes[pos] != '[') return null;
+    var p = pos + 1;
+    var has_nonspace = false;
+    var count: usize = 0;
+    while (p < para_end) : (p += 1) {
+        const b = bytes[p];
+        if (b == ']' and !isEscaped(bytes, p)) {
+            if (!has_nonspace) return null;
+            return .{ .content = .{ .start = @intCast(pos + 1), .end = @intCast(p) }, .after = p + 1 };
+        }
+        if (b == '[' and !isEscaped(bytes, p)) return null; // unescaped bracket inside
+        if (b != ' ' and b != '\t' and b != '\n' and b != '\r') has_nonspace = true;
+        count += 1;
+        if (count > 999) return null; // §6.6: at most 999 characters
+    }
+    return null;
+}
+
+/// Looks up the definition matching a reference label, normalizing the
+/// label for comparison. Returns null when there is no match.
+fn tryResolveReference(
+    doc: *document.Document,
+    defs: *Definitions,
+    label: source.Span,
+) ParseError!?Definition {
+    const key = try normalizeLabel(doc, label);
+    if (defs.get(key)) |def| return def;
+    return null;
 }
 
 /// A delimiter run, classified once at scan time. `can_open`/`can_close`
@@ -2433,4 +3008,93 @@ fn inlineText(doc: *document.Document, node: *document.Node) ![]u8 {
         try buf.appendSlice(doc.allocator(), child.data.text);
     }
     return buf.toOwnedSlice(doc.allocator());
+}
+
+test "markdown: full reference link with title" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "[foo][bar]\n\n[bar]: /url \"title\"\n", .markdown, .{});
+    defer result.deinit();
+    const lnk = result.document.root.children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.link, lnk.tag);
+    try testing.expectEqualStrings("/url", lnk.data.link.href);
+    try testing.expectEqualStrings("title", lnk.data.link.title.?);
+}
+
+test "markdown: collapsed reference link" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "[foo][]\n\n[foo]: /url\n", .markdown, .{});
+    defer result.deinit();
+    const lnk = result.document.root.children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.link, lnk.tag);
+    try testing.expectEqualStrings("/url", lnk.data.link.href);
+}
+
+test "markdown: reference precedence over shortcut" {
+    const oliver = @import("oliver.zig");
+    // Both foo and bar defined: [foo][bar] is a full reference to bar.
+    var result = try oliver.parse(testing.allocator, "[foo][bar]\n\n[foo]: /url1\n[bar]: /url2\n", .markdown, .{});
+    defer result.deinit();
+    const lnk = result.document.root.children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.link, lnk.tag);
+    try testing.expectEqualStrings("/url2", lnk.data.link.href);
+}
+
+test "markdown: failed inline falls through to shortcut" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "[foo](not a link)\n\n[foo]: /url1\n", .markdown, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    // link foo + literal text `(not a link)`.
+    try testing.expectEqual(document.Tag.link, p.children.items[0].tag);
+    try testing.expectEqualStrings("foo", p.children.items[0].children.items[0].data.text);
+    try testing.expectEqualStrings("(not a link)", p.children.items[1].data.text);
+}
+
+test "markdown: label normalization matches across whitespace and case" {
+    const oliver = @import("oliver.zig");
+    // The spec's own examples: Unicode case fold (ẞ matches SS), and
+    // internal whitespace collapse ([Foo\n  bar] matches [Foo bar]).
+    var r1 = try oliver.parse(testing.allocator, "[ẞ]\n\n[SS]: /url\n", .markdown, .{});
+    defer r1.deinit();
+    try testing.expectEqual(document.Tag.link, r1.document.root.children.items[0].children.items[0].tag);
+
+    var r2 = try oliver.parse(testing.allocator, "[Foo\n  bar]: /url\n\n[Baz][Foo bar]\n", .markdown, .{});
+    defer r2.deinit();
+    try testing.expectEqual(document.Tag.link, r2.document.root.children.items[0].children.items[0].tag);
+}
+
+test "markdown: no link when label undefined; brackets stay literal" {
+    const oliver = @import("oliver.zig");
+    // Shortcut with no definition, and full reference with no definition
+    // for the label but one for the text (so `[foo]` is not a shortcut
+    // either, being followed by a link label).
+    var result = try oliver.parse(testing.allocator, "[foo][bar][baz]\n\n[baz]: /url1\n[foo]: /url2\n", .markdown, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    // `[foo]` literal, then a link for `[bar][baz]`.
+    try testing.expectEqualStrings("[foo]", p.children.items[0].data.text);
+    try testing.expectEqual(document.Tag.link, p.children.items[1].tag);
+    try testing.expectEqualStrings("bar", p.children.items[1].children.items[0].data.text);
+}
+
+test "markdown: definition-only paragraph produces no block" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "[foo]: /url\n\nbar\n", .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 1), root.children.items.len);
+    try testing.expectEqualStrings("bar", root.children.items[0].children.items[0].data.text);
+}
+
+test "markdown: shortcut reference resolves (definition after use)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "[foo]\n\n[foo]: /url\n", .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 1), root.children.items.len);
+    const p = root.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p.tag);
+    try testing.expectEqual(@as(usize, 1), p.children.items.len);
+    try testing.expectEqual(document.Tag.link, p.children.items[0].tag);
+    try testing.expectEqualStrings("/url", p.children.items[0].data.link.href);
 }

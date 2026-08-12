@@ -102,7 +102,10 @@ carry no special data — nesting already expresses it. `code_span`,
 `data.link` is the escape-resolved href/title, and `data.image` is the
 escape-resolved src/title plus the flattened plain-string alt (copies,
 unlike `data.text` which borrows the source), because normalization
-cannot be expressed as a source slice.
+cannot be expressed as a source slice. Reference links (§4.7 + §6.6
+reference forms) produce the same `link` node as inline links — the
+definitions map is parser-internal state, not a model concept, so the
+model is unchanged by that milestone.
 
 Attributes (Textile classes/ids/styles; Markdown image/link titles) will be
 represented as an ordered attribute list on the node (`Data.attrs`), since

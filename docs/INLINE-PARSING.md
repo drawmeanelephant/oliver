@@ -1,9 +1,9 @@
 # Oliver Inline Parsing: Emphasis and Strong Emphasis
 
 **Status: implemented (Markdown), with code spans (§6.6), inline links
-(§6.6), and inline images (§6.7) landed on the same scan → match → emit
-seam.** This document was
-written *before* any delimiter code existed, as the design contract; the
+(§6.6), inline images (§6.7), and reference links (§4.7 + §6.6
+reference forms) landed on the same scan → match → emit seam.** This
+document waswritten *before* any delimiter code existed, as the design contract; the
 implementation in `src/markdown.zig` (scan → match → emit,
 `openers_bottom` pruning) follows it, and the §15 fixture corpus plus the
 span unit tests lock the behavior. Images share the link discovery pass
@@ -19,8 +19,13 @@ stack: unescaped `[`/`]` become scan items, a `]` whose nearest `[` is
 followed by a valid `(...)` splices the range into a `link` item, every
 earlier `[` dies (links cannot contain links), and link text is matched as
 a fresh inline scope (the spec's "process emphasis with the `[` opener as
-stack_bottom"). Both land exactly as the §17 implementation order
-predicted. Textile inline markers (`_`/`*`/`**`/`__`) are a later
+stack_bottom"). Reference links required a two-phase restructure: link
+reference definitions (§4.7) are collected during the block pass (before
+any inline parsing, since a use may precede its definition), and the
+inline pass then resolves the full `[text][label]`, collapsed `[text][]`,
+and shortcut `[text]` forms against that map in discovery — labels are
+Unicode case-folded with whitespace collapsed per §6.3. Both land exactly
+as the §17 implementation order predicted. Textile inline markers (`_`/`*`/`**`/`__`) are a later
 milestone and will ride the same seam. Every deliberate choice below that
 the implementation deviates from — the two §16 open questions, the
 contiguous-text merge rule, and the front/back consumption model in §8.3 —
