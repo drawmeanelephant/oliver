@@ -18,13 +18,15 @@
 //!   when present. Attribute order is fixed: `src`, `alt`, `title`.
 //! - Headings use the level 1..6 (clamped for hand-built documents).
 //! - Code spans render `<code>...</code>` with the same escaping as text.
+//! - Code blocks render `<pre><code>...</code></pre>`; the first word of an
+//!   info string becomes an escaped `language-...` class.
 //! - Raw HTML leaves write their source spans verbatim, without escaping;
 //!   this is the one inline form whose bytes can include source line endings.
 //! - Lists render as `<ul>`/`<ol>` with `<li>` children; tight-list direct
 //!   paragraphs omit `<p>`, while loose-list paragraphs retain it.
 //! - Thematic breaks render as `<hr />` by default (or `<hr>` when the void
 //!   trailing-slash option is disabled).
-//! - Code blocks/tables: not yet implemented (no tags exist).
+//! - Tables: not yet implemented (no tags exist).
 //! - Generated line endings in output are always `\n`; raw HTML source spans
 //!   retain their original line-ending bytes by design.
 //! - Every block-level element is followed by exactly one `\n`, so nonempty
@@ -187,6 +189,21 @@ fn writeOpen(
         .thematic_break => {
             try writer.writeAll(if (options.void_trailing_slash) "<hr />\n" else "<hr>\n");
         },
+        .code_block => {
+            const code = node.data.code_block;
+            try writer.writeAll("<pre><code");
+            if (code.info) |info| {
+                const language_end = std.mem.indexOfAny(u8, info, " \t") orelse info.len;
+                if (language_end > 0) {
+                    try writer.writeAll(" class=\"language-");
+                    try writeEscaped(writer, info[0..language_end]);
+                    try writer.writeByte('"');
+                }
+            }
+            try writer.writeByte('>');
+            try writeEscaped(writer, code.content);
+            try writer.writeAll("</code></pre>\n");
+        },
         .emphasis => {
             try writer.writeAll("<em>");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
@@ -288,7 +305,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .thematic_break, .text, .image, .autolink, .raw_html, .soft_break, .hard_break => unreachable,
+        .thematic_break, .code_block, .text, .image, .autolink, .raw_html, .soft_break, .hard_break => unreachable,
     }
 }
 
@@ -706,4 +723,24 @@ test "html: thematic break follows the void-element profile" {
     var modern_out = aw.toArrayList();
     defer modern_out.deinit(testing.allocator);
     try testing.expectEqualStrings("<hr>\n", modern_out.items);
+}
+
+test "html: code block escapes content and uses the first info word" {
+    const input = "``` zig&lang extra\n<x>\x00\n```";
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = input });
+    defer doc.deinit();
+    const code = try doc.createNode(.code_block, .{ .start = 0, .end = @intCast(input.len) }, .{
+        .code_block = .{
+            .content = "<x>\x00\n",
+            .info = "zig&lang extra",
+        },
+    });
+    try doc.appendChild(doc.root, code);
+
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<pre><code class=\"language-zig&amp;lang\">&lt;x&gt;\u{FFFD}\n</code></pre>\n",
+        out.items,
+    );
 }

@@ -9,6 +9,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | lane | mission | semantic ownership | dependency / merge order | state |
 | --- | --- | --- | --- | --- |
 | lead | M1 thematic breaks + Setext headings | central Markdown block precedence; `document` thematic node; HTML leaf rendering | first | implemented on `codex/thematic-setext` |
+| lead | M2 fenced code blocks | Markdown open-leaf state; shared code-block model; HTML rendering | stacked after M1 | implemented on `codex/fenced-code` |
 | conformance worker | Q1 list conformance wall | list fixture pairs and list-only hostile tests; no parser files | independent; merge after M1 only to minimize fixture-index conflict | committed on `codex/list-conformance-wall` |
 | Textile worker | T1 `p.`/break-span repairs + `bq.` | Textile frontend, Textile fixtures/provenance; no Markdown/core model | independent | committed on `codex/textile-blockquote` |
 
@@ -29,8 +30,9 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   suite/section scorecards.
 - **Parallelism:** no. The lead owns this sensitive block-parser seam.
 - **Integration:** first.
-- **State:** implemented and green; canonical scorecard 513/652, thematic
-  18/19, Setext 25/27. Remaining focused failures require indented code.
+- **State:** implemented and green; the canonical scorecard at this milestone
+  was 513/652, thematic 18/19, Setext 25/27. Remaining focused failures require
+  indented code.
 
 ## Q1 — List conformance wall
 
@@ -74,18 +76,20 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   appendix phase-1 rules.
 - **Dependencies:** M1 precedence rung. Requires a normalized `.code_block`
   node with content and optional info-string/language payload.
-- **Expected seams:** lead-owned `document` tag/data contract, Markdown open
+- **Seams:** lead-owned `document` tag/data contract, Markdown open
   leaf state, HTML `<pre><code>` rendering, fixtures/design docs.
 - **Acceptance:** backtick/tilde run rules; closing fence length/indentation;
   unclosed-to-EOF; backticks forbidden in backtick info strings; content
   literal/opaque; matched quote/list behavior; exact spans; long-fence and
   unclosed-fence hostile cases.
-- **Tests:** normative §4.5 wall, containers, CR/LF/CRLF, exact IR/rendering,
-  fence-run storms.
+- **Tests:** 13 fixture groups, canonical §4.5 wall, containers, CR/LF/CRLF,
+  exact IR/rendering, fence-run and unclosed-content storms.
 - **Parallelism:** no during core design/implementation; fixtures may be
   prepared independently after the model contract is fixed.
 - **Integration:** after M1; before indented code.
-- **State:** next central Markdown card.
+- **State:** implemented and green on `codex/fenced-code`; 113/113 tests,
+  canonical scorecard 546/652 and §4.5 at 28/29. The sole focused failure is
+  the four-space-indented-code dependency.
 
 ## M3 — Tab-aware indentation and indented code
 
@@ -105,7 +109,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   lists/quotes, long whitespace/tabs.
 - **Parallelism:** no until the virtual-column seam is designed by the lead.
 - **Integration:** after M2.
-- **State:** dependency-blocked by M2/design.
+- **State:** M2 dependency cleared; the virtual-column/tab design is the next
+  lead-owned architectural decision.
 
 ## C1 — Classified conformance expectations
 

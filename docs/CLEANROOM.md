@@ -72,8 +72,9 @@ allowed; source code of parsers is not.**
 - CommonMark specification 0.31.2 (2024-01-28), `spec.txt`
   <https://spec.commonmark.org/0.31.2/spec.txt> — normative Markdown
   behavior for the features in the slice: lines/line endings, blank lines,
-  tabs, NUL replacement, backslash escapes, ATX headings (§4.2), setext
-  headings (§4.3), paragraphs, precedence of block vs inline structure.
+  tabs, NUL replacement, backslash escapes (§2.4), thematic breaks (§4.1),
+  ATX headings (§4.2), Setext headings (§4.3), fenced code blocks (§4.5),
+  paragraphs, containers, and precedence of block vs inline structure.
 - Hobix "Textile Reference" (Dean Allen)
   <https://hobix.com/textile> — user-facing Textile syntax: paragraphs,
   `hN.` headings, line breaks, phrase modifiers, attributes, lists, links,

@@ -1,15 +1,15 @@
 //! Markdown frontend.
 //!
 //! Implemented: paragraphs, ATX and Setext headings (§4.2/§4.3), thematic
-//! breaks (§4.1), block quotes (§5.1), list items and lists (§5.2/§5.3),
-//! backslash escapes, hard and soft line breaks,
+//! breaks (§4.1), fenced code blocks (§4.5), block quotes (§5.1), list items
+//! and lists (§5.2/§5.3), backslash escapes, hard and soft line breaks,
 //! emphasis and strong emphasis, code spans (§6.1), raw HTML tags (§6.6),
 //! inline links (§6.3), inline images (§6.4), and autolinks (§6.5). Behavior
 //! is taken from the CommonMark specification (0.31.2) where the slice
 //! implements it; divergences and chosen behaviors are documented in
 //! docs/FEATURE-MATRIX.md, and the emphasis/strong algorithm is derived
-//! in docs/INLINE-PARSING.md (leaf blocks: docs/LEAF-BLOCKS.md; images:
-//! docs/IMAGES-PARSING.md;
+//! in docs/INLINE-PARSING.md (leaf blocks: docs/LEAF-BLOCKS.md and
+//! docs/FENCED-CODE.md; images: docs/IMAGES-PARSING.md;
 //! autolinks: docs/AUTOLINKS.md).
 //!
 //! Code spans are discovered *before* the delimiter scan (a discovery pass
@@ -62,9 +62,9 @@
 //!
 //! The parser runs in two passes, matching the spec's precedence model:
 //! block structure first, then inline structure. The block pass recognizes
-//! paragraphs, ATX and Setext headings, thematic breaks, block quotes, list
-//! items, and lists; unsupported leaf-block forms currently fall back to
-//! paragraphs.
+//! paragraphs, ATX and Setext headings, thematic breaks, fenced code blocks,
+//! block quotes, list items, and lists; unsupported leaf-block forms currently
+//! fall back to paragraphs.
 //!
 //! The inline pass is discovery plus three phases (see
 //! docs/INLINE-PARSING.md §8):
@@ -126,14 +126,10 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var containers = std.ArrayList(ContainerState).empty;
     defer containers.deinit(doc.allocator());
     var paragraph: ?Paragraph = null;
+    var fenced: ?FencedCode = null;
 
     var lines = source.Lines.init(doc.src.bytes);
     while (lines.next()) |line| {
-        // The same physical line can be re-examined at many nested list
-        // depths. Summarize its thematic-break suffixes once so precedence
-        // checks stay O(1) per consumed container marker.
-        const thematic_facts = ThematicLineFacts.init(line);
-
         // A. Match open containers top-down, consuming one marker each. A
         // block quote consumes `> `; a list item consumes its content
         // indentation; a list consumes nothing (its fate is decided by its
@@ -155,20 +151,55 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 .list_item => {
                     if (c.inert) break;
                     if (isBlank(view.text)) {
-                        // Blank lines keep items open; a blank-start item
-                        // tolerates at most one following blank (§5.2 rule
-                        // 3), after which it is inert.
-                        if (c.blank_start) c.inert = true;
+                        // Blank lines match list items without requiring the
+                        // full content indentation. Still consume as much of
+                        // that structural indentation as is present: an open
+                        // fenced leaf observes excess spaces as literal code,
+                        // but never the list item's own prefix.
+                        if (c.initial_blank_pending) c.inert = true;
+                        view = advance(view, @min(countIndent(view.text), c.content_indent));
                     } else {
                         const indent = countIndent(view.text);
                         if (indent < c.content_indent) break;
                         view = advance(view, c.content_indent);
+                        // Rule 3 limits only the blank prefix before the
+                        // item's first block. Once nonblank content matches,
+                        // later blank lines are ordinary item content.
+                        c.initial_blank_pending = false;
                     }
                 },
                 else => unreachable,
             }
             matched += 1;
         }
+
+        // An open fenced-code leaf owns every line while its containing
+        // containers still match. Its contents are literal: no blank-line,
+        // lazy-continuation, block-start, or inline rule runs here. If a
+        // containing block ends, finalize without backtracking and reprocess
+        // this same physical line normally outside the container.
+        if (fenced) |*active| {
+            if (matched == active.container_depth) {
+                if (isFenceClose(view, active.marker, active.fence_len)) {
+                    active.node.span.end = @intCast(view.content_end);
+                    finishFencedCode(&fenced);
+                    extendContainerSpans(&containers, view);
+                    continue;
+                }
+                try appendFencedContentLine(doc, active, view);
+                active.node.span.end = @intCast(view.content_end);
+                extendContainerSpans(&containers, view);
+                continue;
+            }
+            std.debug.assert(matched < active.container_depth);
+            finishFencedCode(&fenced);
+        }
+
+        // The same physical line can be re-examined at many nested list
+        // depths. Summarize its thematic-break suffixes once so precedence
+        // checks stay O(1) per consumed container marker. Literal fenced-code
+        // content bypasses this work above.
+        const thematic_facts = ThematicLineFacts.init(line);
 
         // B. Blank line: close the leaf and any container whose marker was
         // absent. Blank lines keep block quotes (marker-blank) and list
@@ -263,7 +294,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 try containers.append(doc.allocator(), .{
                     .node = item,
                     .content_indent = m.content_indent,
-                    .blank_start = m.blank_start,
+                    .initial_blank_pending = m.blank_start,
                 });
                 view = m.rest;
                 continue;
@@ -275,6 +306,26 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // container, not an empty paragraph.
         if (isBlank(view.text)) {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            extendContainerSpans(&containers, view);
+            continue;
+        }
+        if (tryFenceOpen(view)) |opening| {
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            const info = if (opening.info.isEmpty())
+                null
+            else
+                try resolveEscapes(doc, opening.info);
+            const node = try doc.createNode(.code_block, view.contentSpan(), .{
+                .code_block = .{ .content = &.{}, .info = info },
+            });
+            try doc.appendChild(leafParent(doc, &containers), node);
+            fenced = .{
+                .node = node,
+                .marker = opening.marker,
+                .fence_len = opening.fence_len,
+                .indent = opening.indent,
+                .container_depth = containers.items.len,
+            };
             extendContainerSpans(&containers, view);
             continue;
         }
@@ -316,6 +367,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         try appendParagraphLine(doc, &paragraph, view);
         extendContainerSpans(&containers, view);
     }
+    finishFencedCode(&fenced);
     try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
 
     // Phase 2: inline pass, with the full definitions map available.
@@ -335,10 +387,10 @@ const ContainerState = struct {
     /// N, §5.2 rules 1–3), in spaces — how far a continuation line must be
     /// indented to stay in the item.
     content_indent: u32 = 0,
-    /// For `.list_item`: the item began with a blank line (rule 3); its
-    /// required content indentation is W+1 regardless of the marker's
-    /// trailing spaces.
-    blank_start: bool = false,
+    /// For `.list_item`: no nonblank block has followed a marker-only start
+    /// yet. A second blank while this is true makes the item inert (§5.2
+    /// rule 3); the flag clears when the first nonblank content line matches.
+    initial_blank_pending: bool = false,
     /// For `.list_item`: dead after its second blank line ("A list item can
     /// begin with at most one blank line"); matches nothing.
     inert: bool = false,
@@ -664,6 +716,7 @@ fn isParagraphContinuationText(
 ) bool {
     if (tryStripBlockQuoteMarker(line) != null) return false;
     if (tryAtxHeading(line) != null) return false;
+    if (tryFenceOpen(line) != null) return false;
     if (isThematicBreak(line, thematic_facts)) return false;
     if (tryListMarker(line)) |m| return !m.can_interrupt;
     return true;
@@ -719,6 +772,97 @@ fn appendParagraphLine(doc: *document.Document, paragraph: *?Paragraph, line: so
         .content = line.contentSpan(),
         .terminator = line.terminatorSpan(),
     });
+}
+
+/// A recognized CommonMark §4.5 opening fence. `info` is the trimmed source
+/// range after the fence; an empty range means no info string.
+const FenceOpen = struct {
+    marker: u8,
+    fence_len: usize,
+    indent: u8,
+    info: source.Span,
+};
+
+/// The one open fenced-code leaf. Content is normalized incrementally into
+/// the document arena; the node is appended at open time so container order
+/// is fixed without buffering sibling blocks.
+const FencedCode = struct {
+    node: *document.Node,
+    marker: u8,
+    fence_len: usize,
+    indent: u8,
+    container_depth: usize,
+    content: std.ArrayList(u8) = .empty,
+};
+
+fn tryFenceOpen(line: source.Line) ?FenceOpen {
+    const text = line.text;
+    var i: usize = 0;
+    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
+    if (i > 3 or i >= text.len) return null;
+
+    const indent: u8 = @intCast(i);
+    const marker = text[i];
+    if (marker != '`' and marker != '~') return null;
+    const fence_start = i;
+    while (i < text.len and text[i] == marker) : (i += 1) {}
+    const fence_len = i - fence_start;
+    if (fence_len < 3) return null;
+
+    // Backticks anywhere in a backtick fence's info string reject the whole
+    // opener. Tilde info strings deliberately allow both marker characters.
+    if (marker == '`' and std.mem.indexOfScalar(u8, text[i..], '`') != null) return null;
+
+    var info_start = i;
+    while (info_start < text.len and (text[info_start] == ' ' or text[info_start] == '\t')) : (info_start += 1) {}
+    var info_end = text.len;
+    while (info_end > info_start and (text[info_end - 1] == ' ' or text[info_end - 1] == '\t')) : (info_end -= 1) {}
+
+    return .{
+        .marker = marker,
+        .fence_len = fence_len,
+        .indent = indent,
+        .info = .{
+            .start = @intCast(line.start + info_start),
+            .end = @intCast(line.start + info_end),
+        },
+    };
+}
+
+fn isFenceClose(line: source.Line, marker: u8, opening_len: usize) bool {
+    const text = line.text;
+    var i: usize = 0;
+    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
+    if (i > 3 or i >= text.len or text[i] != marker) return false;
+
+    const fence_start = i;
+    while (i < text.len and text[i] == marker) : (i += 1) {}
+    if (i - fence_start < opening_len) return false;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
+    return i == text.len;
+}
+
+fn appendFencedContentLine(
+    doc: *document.Document,
+    fenced: *FencedCode,
+    line: source.Line,
+) ParseError!void {
+    var strip: usize = 0;
+    while (strip < fenced.indent and strip < line.text.len and line.text[strip] == ' ') : (strip += 1) {}
+    try fenced.content.appendSlice(doc.allocator(), line.text[strip..]);
+    try fenced.content.append(doc.allocator(), '\n');
+}
+
+/// Publishes the arena-backed normalized payload. No deinit is required: the
+/// document arena owns both the content allocation and optional info copy.
+fn finishFencedCode(fenced: *?FencedCode) void {
+    const active = fenced.* orelse return;
+    const info = active.node.data.code_block.info;
+    active.node.data = .{ .code_block = .{
+        .content = active.content.items,
+        .info = info,
+    } };
+    fenced.* = null;
 }
 
 /// A Setext heading underline (§4.3): one or more `=` or `-` bytes, with up
@@ -3381,6 +3525,58 @@ test "markdown: source spans" {
     try testing.expectEqual(source.Span{ .start = 0, .end = 7 }, h.span);
     const t = h.children.items[0];
     try testing.expectEqual(source.Span{ .start = 2, .end = 7 }, t.span);
+}
+
+test "markdown: fenced code exposes normalized payload and exact span" {
+    const oliver = @import("oliver.zig");
+    const input = "  ``` zig\\+lang extra\r\n  <tag>\r x\n   ````";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+
+    const code = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.code_block, code.tag);
+    try testing.expectEqual(source.Span{ .start = 0, .end = @as(u32, @intCast(input.len)) }, code.span);
+    try testing.expectEqual(@as(usize, 0), code.children.items.len);
+    try testing.expectEqualStrings("<tag>\nx\n", code.data.code_block.content);
+    try testing.expectEqualStrings("zig+lang extra", code.data.code_block.info.?);
+}
+
+test "markdown: unclosed fences end at their containing block" {
+    const oliver = @import("oliver.zig");
+    const input = "> ```\n> aaa\n\nbbb\n\n- ~~~ lang\n  <x>\n  ~~~";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 3), root.children.items.len);
+
+    const quote_code = root.children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.code_block, quote_code.tag);
+    try testing.expectEqualStrings("aaa\n", quote_code.data.code_block.content);
+    try testing.expectEqual(@as(?[]const u8, null), quote_code.data.code_block.info);
+
+    try testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+    const list_code = root.children.items[2].children.items[0].children.items[0];
+    try testing.expectEqual(document.Tag.code_block, list_code.tag);
+    try testing.expectEqualStrings("<x>\n", list_code.data.code_block.content);
+    try testing.expectEqualStrings("lang", list_code.data.code_block.info.?);
+}
+
+test "markdown: fenced blanks preserve excess list indentation without ending a blank-start item" {
+    const oliver = @import("oliver.zig");
+    const input = "-\n  ```\n    \n\n  more\n  ```";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+
+    const list = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.list, list.tag);
+    const item = list.children.items[0];
+    try testing.expectEqual(@as(usize, 1), item.children.items.len);
+    const code = item.children.items[0];
+    try testing.expectEqual(document.Tag.code_block, code.tag);
+    // Two of the four spaces belong to the list item. A wholly unindented
+    // blank also remains literal content and does not make the item inert.
+    try testing.expectEqualStrings("  \n\nmore\n", code.data.code_block.content);
 }
 
 test "markdown: thematic breaks precede lists and interrupt paragraphs" {
