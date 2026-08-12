@@ -124,7 +124,7 @@ plain text until a dialect-specific raw-HTML decision is made.
 `emphasis`/`strong`
 carry no special data — nesting already expresses it. `code_span`,
 `link`, `image`, and `autolink` are the implemented inlines whose
-payloads are **arena-owned**: `data.code_span` is the §6.1-normalized
+payloads are **arena-owned**: `data.code_span` is the dialect-normalized
 content,
 `data.link` is the escape-resolved href/title, `data.image` is the
 escape-resolved src/title plus the flattened plain-string alt, and
@@ -132,7 +132,16 @@ escape-resolved src/title plus the flattened plain-string alt, and
 escape-resolved, unlike `data.link`; the `mailto:` prefix is a copy)
 (copies,
 unlike `data.text` which borrows the source), because normalization
-cannot be expressed as a source slice. Reference links and
+cannot be expressed as a source slice.
+The `code_span` payload is the one shared IR whose bytes differ by
+dialect: Markdown content is normalized per §6.1 (line endings become
+spaces, one ASCII space stripped per side when the content begins and
+ends with space but is not all spaces, tabs never stripped, backticks
+dropped), while Textile `@code@` content is a verbatim arena copy —
+Textile does not normalize spaces or line endings
+(docs/TEXTILE-INLINE-CODE.md §3). The renderer is identical for both:
+it HTML-escapes the payload as text, so each frontend's payload reaches
+it already in its own dialect's final form. Reference links and
 reference-style images (§4.7 + §6.3 reference forms) produce the same
 `link` / `image` nodes as their inline forms — the definitions map is
 parser-internal state, not a model concept, so the model is unchanged
@@ -152,7 +161,7 @@ emit them in a fixed documented order.
 | thematic break | (planned) | `.thematic_break` |
 | fenced code block | `bc.` / `pre.` (planned) | `.code_block` (owned content/info) |
 | `emphasis` / `strong` | (Textile inline markers: later) | `.emphasis` / `.strong` |
-| `` `code span` `` | (Textile `@code@`: later) | `.code_span` (arena-owned content) |
+| `` `code span` `` | `@code@` | `.code_span` (arena-owned payload: Markdown §6.1-normalized vs Textile-verbatim) |
 | `[x](url "title")` | (Textile `"text":url`: later) | `.link` (arena-owned href/title) |
 | `![alt](url "title")` | (Textile `!url(alt)!`: later) | `.image` (arena-owned src/alt/title) |
 | `<scheme:...>` / `<a@b.c>` | (Textile has no autolink; literal) | `.autolink` (arena-owned href/label) |
