@@ -31,8 +31,10 @@ definitions collected in the block pass; full, collapsed, and shortcut
 forms resolved against a Unicode case-folded label map — for `[text]`
 links and `![alt]` images alike), block quotes (§5.1 on the
 container-block stack with nesting, laziness, and interruption — the
-architecture for lists), plain inline text, a shared document model, a
-deterministic HTML renderer, Markdown (ATX) and Textile (`hN.`)
+architecture for lists), autolinks (§6.8, URI and email forms with
+`mailto:` hrefs, escapes inert, linear recognition), plain inline text, a
+shared document model, a deterministic HTML renderer, Markdown (ATX) and
+Textile (`hN.`)
 frontends, structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
@@ -40,8 +42,10 @@ implemented, planned, and deferred. The emphasis/strong algorithm contract
 is [docs/INLINE-PARSING.md](docs/INLINE-PARSING.md), derived from the
 CommonMark spec's flanking rules (§6.2); the image algorithm contract is
 [docs/IMAGES-PARSING.md](docs/IMAGES-PARSING.md); the reference-style
-image contract is [docs/REFERENCE-IMAGES.md](docs/REFERENCE-IMAGES.md).
-Code spans, links, and images ride the same scan → match → emit seam.
+image contract is [docs/REFERENCE-IMAGES.md](docs/REFERENCE-IMAGES.md);
+the autolink contract is [docs/AUTOLINKS.md](docs/AUTOLINKS.md).
+Code spans, links, images, and autolinks ride the same
+scan → match → emit seam.
 
 ## Building and testing
 

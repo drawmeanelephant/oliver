@@ -755,6 +755,132 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/ref-image-first-wins.md"),
         .expected = @embedFile("fixtures/markdown/ref-image-first-wins.html"),
     },
+    // --- autolinks (docs/AUTOLINKS.md §6.8) ---
+    .{
+        .name = "autolink-uri",
+        .input = @embedFile("fixtures/markdown/autolink-uri.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-uri.html"),
+    },
+    .{
+        .name = "autolink-uri-query",
+        .input = @embedFile("fixtures/markdown/autolink-uri-query.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-uri-query.html"),
+    },
+    .{
+        .name = "autolink-uri-port",
+        .input = @embedFile("fixtures/markdown/autolink-uri-port.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-uri-port.html"),
+    },
+    .{
+        .name = "autolink-uri-scheme-case",
+        .input = @embedFile("fixtures/markdown/autolink-uri-scheme-case.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-uri-scheme-case.html"),
+    },
+    .{
+        .name = "autolink-uri-plus",
+        .input = @embedFile("fixtures/markdown/autolink-uri-plus.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-uri-plus.html"),
+    },
+    .{
+        .name = "autolink-uri-scheme-hyphen",
+        .input = @embedFile("fixtures/markdown/autolink-uri-scheme-hyphen.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-uri-scheme-hyphen.html"),
+    },
+    .{
+        .name = "autolink-uri-dotdot",
+        .input = @embedFile("fixtures/markdown/autolink-uri-dotdot.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-uri-dotdot.html"),
+    },
+    .{
+        .name = "autolink-uri-localhost",
+        .input = @embedFile("fixtures/markdown/autolink-uri-localhost.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-uri-localhost.html"),
+    },
+    .{
+        .name = "autolink-space",
+        .input = @embedFile("fixtures/markdown/autolink-space.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-space.html"),
+    },
+    .{
+        .name = "autolink-escaped-backslash",
+        .input = @embedFile("fixtures/markdown/autolink-escaped-backslash.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-escaped-backslash.html"),
+    },
+    .{
+        .name = "autolink-email",
+        .input = @embedFile("fixtures/markdown/autolink-email.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-email.html"),
+    },
+    .{
+        .name = "autolink-email-plus",
+        .input = @embedFile("fixtures/markdown/autolink-email-plus.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-email-plus.html"),
+    },
+    .{
+        .name = "autolink-email-escaped-plus",
+        .input = @embedFile("fixtures/markdown/autolink-email-escaped-plus.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-email-escaped-plus.html"),
+    },
+    .{
+        .name = "autolink-empty",
+        .input = @embedFile("fixtures/markdown/autolink-empty.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-empty.html"),
+    },
+    .{
+        .name = "autolink-space-padded",
+        .input = @embedFile("fixtures/markdown/autolink-space-padded.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-space-padded.html"),
+    },
+    .{
+        .name = "autolink-short-scheme",
+        .input = @embedFile("fixtures/markdown/autolink-short-scheme.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-short-scheme.html"),
+    },
+    .{
+        .name = "autolink-bare-domain",
+        .input = @embedFile("fixtures/markdown/autolink-bare-domain.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-bare-domain.html"),
+    },
+    .{
+        .name = "autolink-bare-url",
+        .input = @embedFile("fixtures/markdown/autolink-bare-url.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-bare-url.html"),
+    },
+    .{
+        .name = "autolink-bare-email",
+        .input = @embedFile("fixtures/markdown/autolink-bare-email.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-bare-email.html"),
+    },
+    .{
+        .name = "autolink-in-sentence",
+        .input = @embedFile("fixtures/markdown/autolink-in-sentence.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-in-sentence.html"),
+    },
+    .{
+        .name = "autolink-in-emphasis",
+        .input = @embedFile("fixtures/markdown/autolink-in-emphasis.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-in-emphasis.html"),
+    },
+    .{
+        .name = "autolink-adjacent",
+        .input = @embedFile("fixtures/markdown/autolink-adjacent.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-adjacent.html"),
+    },
+    .{
+        .name = "autolink-link-text",
+        .input = @embedFile("fixtures/markdown/autolink-link-text.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-link-text.html"),
+    },
+    .{
+        .name = "autolink-email-uppercase",
+        .input = @embedFile("fixtures/markdown/autolink-email-uppercase.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-email-uppercase.html"),
+    },
+    .{
+        .name = "autolink-image-alt",
+        .input = @embedFile("fixtures/markdown/autolink-image-alt.md"),
+        .expected = @embedFile("fixtures/markdown/autolink-image-alt.html"),
+    },
 };
 
 const TextileFixture = struct {
@@ -1018,6 +1144,28 @@ test "adversarial smoke: hostile input never crashes or leaks" {
     defer image_near_miss.deinit(gpa);
     for (0..30_000) |_| try image_near_miss.appendSlice(gpa, "![ALPHA!] ");
 
+    // Autolink bombs: repeated URI/email autolinks and near-misses. The
+    // recognizer stays linear because `<` and space are forbidden inside
+    // the content, so every failed scan is bounded by the next `<` — but
+    // a single `<` followed by a huge run of content with no `>` is the
+    // worst single scan, so exercise both shapes (docs/AUTOLINKS.md §6).
+    var autolink_uri_bomb = std.ArrayList(u8).empty;
+    defer autolink_uri_bomb.deinit(gpa);
+    for (0..30_000) |_| try autolink_uri_bomb.appendSlice(gpa, "<http://a.com> ");
+    var autolink_email_bomb = std.ArrayList(u8).empty;
+    defer autolink_email_bomb.deinit(gpa);
+    for (0..20_000) |_| try autolink_email_bomb.appendSlice(gpa, "<foo@bar.example.com> ");
+    var autolink_near_miss = std.ArrayList(u8).empty;
+    defer autolink_near_miss.deinit(gpa);
+    for (0..10_000) |_| try autolink_near_miss.appendSlice(gpa, "<ab:abcdefghij ");
+    var autolink_huge_content = std.ArrayList(u8).empty;
+    defer autolink_huge_content.deinit(gpa);
+    try autolink_huge_content.appendSlice(gpa, "<ab:");
+    for (0..200_000) |_| try autolink_huge_content.append(gpa, 'a');
+    var autolink_mixed = std.ArrayList(u8).empty;
+    defer autolink_mixed.deinit(gpa);
+    for (0..20_000) |_| try autolink_mixed.appendSlice(gpa, "<http://a.com> [x](u) ![i](v) *em* ");
+
     // The inactive-bracket marking shape: every `]` forms a link whose
     // opener leaves a dead `[` below on the stack (the monotone check
     // keeps this linear; naive re-marking would be quadratic).
@@ -1070,6 +1218,11 @@ test "adversarial smoke: hostile input never crashes or leaks" {
         image_collapsed_bomb.items,
         image_full_bomb.items,
         image_near_miss.items,
+        autolink_uri_bomb.items,
+        autolink_email_bomb.items,
+        autolink_near_miss.items,
+        autolink_huge_content.items,
+        autolink_mixed.items,
         nested_link_marks.items,
         deep_quotes.items,
         lazy_flood.items,

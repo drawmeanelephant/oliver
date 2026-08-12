@@ -131,6 +131,17 @@ fn writeOpen(
             try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = node });
         },
+        .autolink => {
+            // Leaf tag: one <a> with the raw label as its text. The href
+            // follows the link href policy (percent-encode + HTML-escape);
+            // the label is the raw content HTML-escaped like text
+            // (docs/AUTOLINKS.md §3). No title, fixed attribute order.
+            try writer.writeAll("<a href=\"");
+            try writeEscapedHref(writer, node.data.autolink.href);
+            try writer.writeAll("\">");
+            try writeEscaped(writer, node.data.autolink.label);
+            try writer.writeAll("</a>");
+        },
         .image => {
             // Void element: the whole tag is written on enter and no exit
             // frame is pushed (leaf tag, no children). `src` follows the
@@ -174,7 +185,7 @@ fn writeClose(writer: anytype, node: *const document.Node, options: RenderOption
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .text, .image, .soft_break, .hard_break => unreachable,
+        .text, .image, .autolink, .soft_break, .hard_break => unreachable,
     }
 }
 

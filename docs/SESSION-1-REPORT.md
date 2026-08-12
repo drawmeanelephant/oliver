@@ -337,6 +337,53 @@ and degrades malformed input to null).
 - 115 Markdown fixtures (24 new on top of the images milestone's 91),
   62 library tests, 68/68 total; `zig fmt --check` clean; build clean.
 
+## Addendum: autolinks (session 8)
+
+- **Implemented §6.8 (autolinks)** on the same scan → match → emit seam,
+  per the design contract docs/AUTOLINKS.md (written from the spec and
+  committed before any autolink code). A `<` is a recognizer in the
+  scan: URI autolinks (scheme 2–32 chars followed by `:`, then content
+  up to the first `>`; content forbids ASCII control, space, and `<`)
+  and email autolinks (the non-normative HTML5 email regex, anchored),
+  tried in that order. Recognition runs ahead of bracket discovery, so
+  an autolink swallows what looks like link syntax (spec example 526:
+  `<https://example.com/?search=](uri)>` keeps `](uri)` in its href),
+  and code spans bind more tightly than `<` as before.
+- **Model/renderer:** `.autolink` joined the leaf inlines — `data.autolink
+  = { href, label }` — and DOCUMENT-MODEL invariants 4/5/8 were updated
+  (it is the first leaf inline whose payload is *not* escape-resolved:
+  backslash escapes are inert inside autolinks, so the label is the raw
+  content verbatim, unlike `data.link`; the `mailto:` prefix makes the
+  href an arena copy rather than a source slice). The renderer emits
+  `<a href="...">label</a>`: href percent-encoded under the shared link
+  policy (`&` → `&amp;`, `\` → `%5C`, `[` → `%5B`), label HTML-escaped
+  like text.
+- **One bug found during verification:** the content span initially
+  excluded the scheme (the href/label must be the *whole* text between
+  the angle brackets — `<m:abc>` fails only because the scheme is 1
+  char, not because schemes are omitted from content). Fixed to span
+  from after `<` to the `>`, inclusive of scheme and colon.
+- **Verified** byte-for-byte against all 19 §6.8 spec examples 567–585
+  via the spec-conformance harness (Autolinks 8/19 → 19/19), and the
+  scorecard moved 360/652 → 377/652 overall with no regressions — the
+  extra +6 come from autolinks now recognized inside link text (spec
+  examples 526, 538), emphasis, code-span, and backslash-escape
+  contexts in other sections.
+- **Fixtures/tests:** 25 new `autolink-*` Markdown fixtures (153
+  Markdown total; 19 spec-pure, byte-for-byte, plus composite shapes:
+  in-sentence, in-emphasis, adjacent pairs, link-text precedence,
+  uppercase email, image-alt flattening); 6 new unit tests (URI
+  structure/spans/payloads, email `mailto:` hrefs, inert-escape
+  payloads, literal negatives incl. the escape-resolved `\+` case,
+  nesting inside emphasis/link text, alt flattening). Smoke extended
+  with 30k URI, 20k email, 10k near-miss `<ab:...` scans, one 200 KB
+  no-`>` content run, and a 20k mixed autolink/link/image/emphasis
+  workload — all linear. 73 library tests, 79/79 total; `zig fmt
+  --check` clean; build clean.
+- Next slice: entities (§2.5 — unblocks several recorded divergences)
+  or raw HTML (the `<` recognizer is the seam raw HTML must share;
+  HTML blocks remain 0/44).
+
 ## Addendum: reference-style images (session 7)
 
 - **Implemented the deferred image reference forms** (§6.4/§6.7) on top

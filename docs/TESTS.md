@@ -2,7 +2,7 @@
 
 Tests are the contract. `zig build test` runs two suites:
 
-1. **Library module tests** — `test` blocks inside `src/*.zig` (74 tests):
+1. **Library module tests** — `test` blocks inside `src/*.zig` (75 tests):
    unit tests for `source`, `document`, `diagnostic`, `markdown` (including
    the emphasis/strong span, mod-3, escape, nesting, code-span
    run-length/trim/opacity, link precedence/nesting/escape/span,
@@ -10,16 +10,14 @@ Tests are the contract. `zig build test` runs two suites:
    reference-image full/collapsed/shortcut resolution and alt
    flattening, image structure/alt-flattening/nesting/escape/precedence,
    and blockquote structure/span/laziness/interruption/blank-separation
-   assertions), `unicode` (case-fold), `textile`, `html` (including
-   hand-built emphasis/strong/code-span/link/image rendering), and the
-   public API. (The html.zig tests also run standalone via
+   assertions; autolink URI/email structure, spans, mailto hrefs,
+   inert-escape payloads, literal negatives, nesting inside emphasis/link
+   text, and alt flattening), `unicode` (case-fold), `textile`, `html`
+   (including hand-built emphasis/strong/code-span/link/image rendering),
+   and the public API. (The html.zig tests also run standalone via
    `zig test src/html.zig`; see the build wiring note below.)
-   `unicode` (case-fold), `textile`, `html` (including hand-built
-   emphasis/strong/code-span/link/image rendering), and the public API.
-   (The html.zig tests also run standalone via `zig test src/html.zig`;
-   see the build wiring note below.)
 2. **Fixture tests** — `tests/fixtures_test.zig` (6 tests): byte-exact
-   fixture rendering for both dialects (146 Markdown fixtures, of which
+   fixture rendering for both dialects (171 Markdown fixtures, of which
    19 cover emphasis/strong per docs/INLINE-PARSING.md §15, 12 cover
    code spans per §6.6, 22 cover inline links per §6.6, 17 cover inline
    images per docs/IMAGES-PARSING.md §7, 18 cover block quotes per
@@ -33,15 +31,14 @@ Tests are the contract. `zig build test` runs two suites:
    per docs/REFERENCE-IMAGES.md — full/collapsed/shortcut, case-folded
    labels, emphasis in the description flattening to alt, image inside
    reference-link text, inline-beats-reference, first-wins, unmatched →
-   literal, and definition-after-use), the
-   whitespace normalization, first-definition-wins, definitions after
-   use, definitions in headings/paragraphs, escaped labels,
-   cannot-interrupt behavior, and the failed-inline fall-through — and
-   13 cover reference-style images per docs/REFERENCE-IMAGES.md —
-   full/collapsed/shortcut, case-folded labels, emphasis in the
-   description flattening to alt, image inside reference-link text,
-   inline-beats-reference, first-wins, unmatched → literal, and
-   definition-after-use), the
+   literal, and definition-after-use — and 25 cover autolinks per
+   docs/AUTOLINKS.md —
+   all 19 §6.8 spec examples byte-for-byte (URI schemes incl. `+`/`-`/
+   digits, ports, query strings with `&`, uppercase schemes, escaped
+   backslashes in content, emails with `+` and hyphenated domains,
+   `mailto:` hrefs, and the five literal negatives), plus autolinks in
+   sentences, emphasis, adjacent pairs, link text (spec example 526's
+   precedence), and image alt flattening), the
    shared-model convergence proof, NUL policy, adversarial smoke (100 KB
    delimiter/backtick/bracket runs, 10k-deep open chains, 50k
    alternating `*`/`_` runs, 50k alternating `` ` ``/`*` runs, 20k
@@ -51,11 +48,13 @@ Tests are the contract. `zig build test` runs two suites:
    failed-inline fall-throughs, a 20k-definition storm with interleaved
    uses, a 200 KB label against the definitions map, a 100k-deep nested
    block-quote stack, a 50k-line lazy-continuation flood, 50k
-   quote/blank alternations, and reference-image bombs — 30k
-   `![alpha]` shortcuts, 20k collapsed and 20k full forms, 30k
-   near-miss labels — completion in ~2s, no crash/leak; the link/image
-   bombs are what forced the §6.6 paren-depth and scan-length DoS
-   guards), and diagnostics.
+   quote/blank alternations, reference-image bombs — 30k `![alpha]`
+   shortcuts, 20k collapsed and 20k full forms, 30k near-miss labels —
+   and autolink bombs — 30k URI and 20k email autolinks, 10k near-miss
+   `<ab:...` scans, one 200 KB content run with no `>`, and a 20k mixed
+   autolink/link/image/emphasis workload — completion in ~2s, no
+   crash/leak; the link/image bombs are what forced the §6.6 paren-depth
+   and scan-length DoS guards), and diagnostics.
 
 ## Fixture convention
 

@@ -1,9 +1,9 @@
 # Oliver Inline Parsing: Emphasis and Strong Emphasis
 
 **Status: implemented (Markdown), with code spans (§6.6), inline links
-(§6.6), inline images (§6.7), reference links, and reference-style
-images (§4.7 + §6.6 reference forms) landed on the same
-scan → match → emit seam.** This
+(§6.6), inline images (§6.7), autolinks (§6.8), reference links, and
+reference-style images (§4.7 + §6.6 reference forms) landed on the
+same scan → match → emit seam.** This
 document waswritten *before* any delimiter code existed, as the design contract; the
 implementation in `src/markdown.zig` (scan → match → emit,
 `openers_bottom` pruning) follows it, and the §15 fixture corpus plus the
@@ -564,9 +564,10 @@ only reading consistent with the spec text; it is pinned with a fixture.
   *before* emphasis matching; delimiters inside them are inert (e.g.
   `` `*` `` is a code span, not an opener). Code spans (backtick discovery
   in scan) and links (bracket discovery between scan and match) are
-  implemented; autolinks and raw HTML are future recognizers inserted the
-  same way, which is why the scan must remain a real tokenizer rather than
-  a tower of regexes.
+  implemented; autolinks now land as a `<` recognizer in the same scan
+  (docs/AUTOLINKS.md), and raw HTML remains a future recognizer inserted
+  the same way, which is why the scan must remain a real tokenizer rather
+  than a tower of regexes.
 - **Textile:** the roadmap maps Textile `_`/`*`/`**`/`__` onto the same
   document nodes. The scan → match → emit pipeline and the stack are
   dialect-agnostic; the *classification rules* (flanking, intraword policy)
