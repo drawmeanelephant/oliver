@@ -1,15 +1,17 @@
 # Oliver tests and fixtures
 
-Tests are product contracts. `zig build test` runs two suites:
+Tests are product contracts. `zig build test` runs three suites:
 
-1. **Library module tests** — 105 `test` blocks inside `src/*.zig` covering
+1. **Library module tests** — 114 `test` blocks inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
    frontends, Unicode case folding, the HTML renderer, and the public API.
    Markdown tests pin the container stack, thematic-break/list precedence,
    multiline Setext transformation, reference-definition interaction,
-   terminal-backslash behavior, every implemented inline family, exact AST
-   shapes, and exact spans. Renderer tests construct documents directly so
-   renderer behavior is verified without a dialect parser.
+   terminal-backslash behavior, fenced-code payload/spans, every implemented
+   inline family, exact AST shapes, and exact spans. Textile tests pin
+   `p.`/`hN.`/`bq.` structure, hard-break terminators, and `@code@` payloads.
+   Renderer tests construct documents directly so renderer behavior is
+   verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
    The explicit index contains 242 Markdown and 10 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
@@ -18,14 +20,21 @@ Tests are product contracts. `zig build test` runs two suites:
    ordered starts and near misses, empty items, interruption, nesting,
    marker/delimiter separation, tight/loose propagation, and quote/list
    composition), reference links, autolinks, raw HTML, thematic breaks,
-   Setext headings, and fenced code blocks. It also verifies shared-model
-   convergence, hostile-input completion and leak freedom, NUL policy,
-   diagnostics, and deterministic repeat rendering (list stress: 2k nested
-   items, 10k same-marker items, 15k alternating markers, 12k variably
-   indented markers, and 8k valid plus 8k near-miss ordered markers, each
-   rendered twice).
+   Setext headings, and fenced code blocks; the Textile wall covers `bq.`
+   quotes and `@code@` spans. It also verifies shared-model convergence,
+   hostile-input completion and leak freedom, NUL policy, diagnostics, and
+   deterministic repeat rendering (list stress: 2k nested items, 10k
+   same-marker items, 15k alternating markers, 12k variably indented
+   markers, and 8k valid plus 8k near-miss ordered markers, each rendered
+   twice).
+3. **Conformance-harness tests** — 7 tests in `tools/spec_conformance.zig`:
+   synthetic corpus extraction (CRLF, tab arrows), malformed-corpus
+   rejection, official byte/example-count and SHA-256 identity checks,
+   complete/nonoverlapping manifest validation, malformed divergence-record
+   rejection, outcome classification, and the single-trailing-newline
+   comparison. These tests need no downloaded corpus.
 
-The current complete result is **114/114 tests passing** with Zig 0.16.0.
+The current complete result is **130/130 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
@@ -131,14 +140,24 @@ curl -O https://spec.commonmark.org/0.31.2/spec.txt
 
 zig build spec-conformance -- spec.txt
 zig build spec-conformance -- spec.txt --section "Setext headings"
-zig build spec-conformance -- spec.txt --section "Code spans" --gate
+zig build spec-conformance -- spec.txt --gate
+zig build spec-conformance-test
 ```
 
-The harness converts the spec's tab-arrow marker to a real tab and ignores one
-renderer-owned final newline. Report mode exits zero while showing failures;
-`--gate` exits nonzero on any mismatch in the selected corpus.
+The harness is bound to the exact official 0.31.2 corpus (byte count,
+example count, and SHA-256, recorded in `tools/commonmark_expectations.zig`)
+and rejects a different file before running Oliver. Every example is
+classified in a reviewed manifest (`docs/COMMONMARK-EXPECTATIONS.md`):
+**supported** (must match byte-for-byte), **not-yet** (a new pass must be
+reviewed, not silently counted), or a named **divergence** with pinned
+Oliver output. The classified `--gate` fails on a supported regression, an
+unexpected not-yet pass, or a changed divergence — in either direction. It
+requires the complete corpus: `--section` is report-only and cannot be
+combined with `--gate`. The harness converts the spec's tab-arrow marker to
+a real tab and ignores exactly one renderer-owned final newline.
 
-Current canonical baseline: **546/652 examples pass**.
+Current canonical baseline: **546/652 examples pass** (546 supported,
+106 not-yet, 0 named divergences).
 
 - Thematic breaks: 18/19; the remaining example is indented code.
 - Setext headings: 25/27; both remaining examples are indented code.
@@ -147,12 +166,14 @@ Current canonical baseline: **546/652 examples pass**.
 - Backslash escapes: 11/13; fenced info-string escapes are implemented.
 - Link reference definitions: 25/27.
 - Block quotes: 22/25.
-- List items: 33/48; Lists: 24/27.
+- List items: 33/48; Lists: 23/26.
 - Code spans, emphasis/strong, images, autolinks, inline raw HTML, hard/soft
   breaks, and textual content: 100%.
 
-Failures are not silently skipped. Scores for implemented sections can be
-strictly gated; unfinished sections remain visible in the full report.
+The former ATX trailing-backslash divergence (example 646) was resolved to
+the normative output by the thematic-break/Setext milestone; no named
+divergences remain. Failures are not silently skipped: the classified gate
+makes the whole 0.31.2 corpus a regression wall.
 
 ## Commands
 
