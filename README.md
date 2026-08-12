@@ -58,13 +58,19 @@ scan → match → emit seam.
 
 ## Building and testing
 
-Requires Zig 0.16.0. `zig build test` runs the unit and fixture suites;
-`zig build spec-conformance -- spec.txt` scores Oliver against every
-normative example in a CommonMark spec (see docs/TESTS.md for the current
-546/652 CommonMark 0.31.2 scorecard and how to fetch the spec).
+Requires Zig 0.16.0. `zig build test` runs the unit, fixture, and
+conformance-harness suites; `zig build spec-conformance -- spec.txt` scores
+Oliver against every normative example in the exact official CommonMark
+0.31.2 corpus (byte count, example count, and SHA-256 are verified first)
+and prints a per-section scorecard. Every example is classified in a
+reviewed manifest (docs/COMMONMARK-EXPECTATIONS.md) as supported,
+not-yet, or a named divergence; `--gate` fails on any supported regression,
+unexpected pass, or changed divergence, so the full corpus is a regression
+wall (see docs/TESTS.md for the current 546/652 scorecard and how to fetch
+the spec).
 
 ```bash
-zig build test    # run all tests (114 tests)
+zig build test    # run all tests (130 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 

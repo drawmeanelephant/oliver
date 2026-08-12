@@ -30,10 +30,16 @@ partition of official example numbers:
   a name, repository rationale, and exact pinned Oliver output. Conforming or
   changing to some third output both require review.
 
-At `cb9ea53`, the partition is **472 supported, 179 not-yet, and 1 named
-divergence**. The divergence is example 646, the recorded ATX
-trailing-backslash choice in `docs/FEATURE-MATRIX.md` ambiguity 10. Example 644 remains
-`not_yet`; it is not declared a product divergence.
+At the integrated thematic-break/Setext, fenced-code, and list milestones
+(merge `561c810`), the partition is **546 supported, 106 not-yet, and 0
+named divergences**. The former divergence — example 646, the recorded ATX
+trailing-backslash choice in `docs/FEATURE-MATRIX.md` ambiguity 10 — was
+resolved to the normative output by the thematic-break/Setext milestone:
+both example 644 and example 646 now render the literal trailing backslash
+and were moved to `supported`. The `divergences` table is empty by design;
+a future deliberate divergence must add a named record with its rationale
+and exact pinned Oliver output, and the expectation tests pin the current
+partition.
 
 The classified `--gate` fails on any supported regression, unexpected not-yet
 pass, or changed divergence. Report mode prints the same mismatches but exits

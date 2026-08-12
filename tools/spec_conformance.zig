@@ -547,8 +547,14 @@ test "official identity rejects wrong byte count, example count, and digest" {
 test "expectation partition is complete and named divergences are exact" {
     const counts = try validateManifest(expectations.example_count);
     try std.testing.expectEqual(expectations.example_count, counts.supported + counts.not_yet + counts.divergence);
-    try std.testing.expectEqual(@as(usize, 1), counts.divergence);
-    try std.testing.expectEqual(expectations.Class.divergence, expectations.classFor(646).?);
+    // Steady state after the thematic-break/Setext, fenced-code, and list
+    // milestones: 546 supported, 106 not-yet, and the former ATX
+    // trailing-backslash divergence (example 646) now conforms. These pins
+    // move only with a reviewed manifest change.
+    try std.testing.expectEqual(@as(usize, 546), counts.supported);
+    try std.testing.expectEqual(@as(usize, 106), counts.not_yet);
+    try std.testing.expectEqual(@as(usize, 0), counts.divergence);
+    try std.testing.expectEqual(expectations.Class.supported, expectations.classFor(646).?);
     try std.testing.expect(expectations.classFor(0) == null);
     try std.testing.expect(expectations.classFor(expectations.example_count + 1) == null);
 }
@@ -590,9 +596,14 @@ test "classification exposes regressions unexpected passes and changed divergenc
     try std.testing.expectEqual(Outcome.regression, classify(.supported, false, "", 1));
     try std.testing.expectEqual(Outcome.expected_not_yet, classify(.not_yet, false, "", 1));
     try std.testing.expectEqual(Outcome.unexpected_pass, classify(.not_yet, true, "", 1));
-    const divergence = expectations.divergenceFor(646).?;
-    try std.testing.expectEqual(Outcome.expected_divergence, classify(.divergence, false, divergence.actual, 646));
-    try std.testing.expectEqual(Outcome.changed_divergence, classify(.divergence, true, divergence.actual, 646));
+    // No named divergences remain (example 646 now conforms), so a
+    // `.divergence` class is always a change: a spec-matching output must
+    // not be classified divergence, and with no pinned record any other
+    // output is a change too. The expected_divergence outcome is asserted
+    // by whichever future milestone reintroduces a divergence record.
+    try std.testing.expect(expectations.divergenceFor(646) == null);
+    try std.testing.expectEqual(Outcome.changed_divergence, classify(.divergence, true, "", 646));
+    try std.testing.expectEqual(Outcome.changed_divergence, classify(.divergence, false, "<h3>foo\\</h3>\n", 646));
     try std.testing.expectEqual(Outcome.changed_divergence, classify(.divergence, false, "different", 646));
 }
 
