@@ -1,7 +1,8 @@
 # Oliver Inline Parsing: Autolinks (§6.8)
 
-**Status: design note (written before any code).** This document is the
-contract for the autolinks slice of Oliver's Markdown frontend: URI
+**Status: implemented (Markdown).** This document began as the design
+note (written before any code) and is now the contract record for the
+autolinks slice of Oliver's Markdown frontend: URI
 autolinks (`<scheme:...>`) and email autolinks (`<user@host>`). It is
 derived entirely from the CommonMark specification (0.31.2) and Oliver's
 own docs, and it is written *before* implementation, like
@@ -153,3 +154,11 @@ content").
 5. Quality gate: `zig fmt --check`, `zig build`, `zig build test` green;
    the whole pre-existing suite must pass unchanged, and the spec
    scorecard's Autolinks row must go 8/19 → 19/19.
+
+**Completed (session 8):** all five items above landed. Autolinks 8/19 →
+19/19 byte-for-byte; 25 `autolink-*` fixtures (19 spec-pure, byte-for-byte
+against the spec, plus six composite shapes incl. spec example 526's
+link-text precedence and image-alt flattening); six unit tests; smoke
+additions (30k URI, 20k email, 10k near-miss scans, one 200 KB
+content run, 20k mixed workload — all linear). The whole prior suite
+passes unchanged (73 module + 6 fixture tests).
