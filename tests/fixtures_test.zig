@@ -1930,6 +1930,31 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/footnote-literal.textile"),
         .expected = @embedFile("fixtures/textile/footnote-literal.html"),
     },
+    // The character-replacement battery: the Hobix examples byte-for-byte
+    // (curly quotes, em/en dashes, ellipsis, dimension sign, (TM)/(R)/(C))
+    // plus the current docs' case-insensitive (c)/(r)/(tm), the fraction/
+    // degree/plus-minus macros, and the apostrophe rules
+    // (docs/TEXTILE-PARITY.md §13).
+    .{
+        .name = "char-replace-basic",
+        .input = @embedFile("fixtures/textile/char-replace-basic.textile"),
+        .expected = @embedFile("fixtures/textile/char-replace-basic.html"),
+    },
+    // Replacements apply inside phrase content and link display text;
+    // HTML-looking `<...>` regions and `@code@` payloads stay verbatim.
+    .{
+        .name = "char-replace-context",
+        .input = @embedFile("fixtures/textile/char-replace-context.textile"),
+        .expected = @embedFile("fixtures/textile/char-replace-context.html"),
+    },
+    // Literal fallbacks: letter-touching hyphens, `x` not between digits,
+    // `---`/`....` runs (left-to-right), and paren forms that are not the
+    // documented macros.
+    .{
+        .name = "char-replace-literal",
+        .input = @embedFile("fixtures/textile/char-replace-literal.textile"),
+        .expected = @embedFile("fixtures/textile/char-replace-literal.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {
