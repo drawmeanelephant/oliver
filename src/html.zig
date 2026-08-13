@@ -361,6 +361,18 @@ fn writeOpen(
             try writer.writeAll("<sub>");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
+        .footnote_ref => {
+            // Textile `[N]` reference (Textile 2 "Footnotes"):
+            // `<sup class="footnote"><a href="#fnN">N</a></sup>`.
+            const n = node.data.footnote_ref;
+            var buf: [16]u8 = undefined;
+            const num = try std.fmt.bufPrint(&buf, "{d}", .{n});
+            try writer.writeAll("<sup class=\"footnote\"><a href=\"#fn");
+            try writer.writeAll(num);
+            try writer.writeAll("\">");
+            try writer.writeAll(num);
+            try writer.writeAll("</a></sup>");
+        },
         .span => {
             // Textile `%x%` renders `<span>` without attributes; the
             // attribute-bearing forms are a later milestone.
@@ -478,7 +490,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .raw_html, .soft_break, .hard_break => unreachable,
+        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => unreachable,
     }
 }
 
