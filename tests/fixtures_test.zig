@@ -2161,6 +2161,59 @@ const textile_fixtures = [_]TextileFixture{
     },
 };
 
+const CooklangFixture = struct {
+    name: []const u8,
+    input: []const u8,
+    expected: []const u8,
+};
+
+// Cooklang fixture pairs (docs/COOKLANG.md §Tests, docs/TESTS.md): inputs
+// are `.cook` files; expected outputs are the exact bytes of Oliver's own
+// deterministic HTML policy (src/cooklang_html.zig).
+const cooklang_fixtures = [_]CooklangFixture{
+    .{
+        .name = "cooklang-basic",
+        .input = @embedFile("fixtures/cooklang/cooklang-basic.cook"),
+        .expected = @embedFile("fixtures/cooklang/cooklang-basic.html"),
+    },
+    .{
+        .name = "cooklang-sections",
+        .input = @embedFile("fixtures/cooklang/cooklang-sections.cook"),
+        .expected = @embedFile("fixtures/cooklang/cooklang-sections.html"),
+    },
+    .{
+        .name = "cooklang-frontmatter",
+        .input = @embedFile("fixtures/cooklang/cooklang-frontmatter.cook"),
+        .expected = @embedFile("fixtures/cooklang/cooklang-frontmatter.html"),
+    },
+    .{
+        .name = "cooklang-literal",
+        .input = @embedFile("fixtures/cooklang/cooklang-literal.cook"),
+        .expected = @embedFile("fixtures/cooklang/cooklang-literal.html"),
+    },
+};
+
+fn renderCooklangHtml(input: []const u8) !std.ArrayList(u8) {
+    var result = try oliver.cooklang.parse(std.testing.allocator, input, .{});
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.cooklang_html.render(std.testing.allocator, &aw.writer, &result.recipe, .{});
+    return aw.toArrayList();
+}
+
+fn checkCooklangFixture(name: []const u8, input: []const u8, expected: []const u8) !void {
+    var out = try renderCooklangHtml(input);
+    defer out.deinit(std.testing.allocator);
+    if (!std.mem.eql(u8, expected, out.items)) {
+        std.debug.print(
+            "cooklang fixture [{s}] mismatch\n--- expected ({d} bytes) ---\n{s}\n--- actual ({d} bytes) ---\n{s}\n",
+            .{ name, expected.len, expected, out.items.len, out.items },
+        );
+        return error.FixtureMismatch;
+    }
+}
+
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {
     var result = try oliver.parse(std.testing.allocator, input, dialect, .{});
     defer result.deinit();
@@ -2191,6 +2244,12 @@ test "markdown fixtures" {
 test "textile fixtures" {
     for (textile_fixtures) |f| {
         try checkFixture(f.name, .textile, f.input, f.expected);
+    }
+}
+
+test "cooklang fixtures" {
+    for (cooklang_fixtures) |f| {
+        try checkCooklangFixture(f.name, f.input, f.expected);
     }
 }
 
@@ -2664,5 +2723,68 @@ test "diagnostics: fixtures parse without diagnostics" {
         var result = try oliver.parse(std.testing.allocator, f.input, .textile, .{});
         defer result.deinit();
         try std.testing.expectEqual(@as(usize, 0), result.diagnostics.len);
+    }
+    for (cooklang_fixtures) |f| {
+        var result = try oliver.cooklang.parse(std.testing.allocator, f.input, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(@as(usize, 0), result.diagnostics.len);
+    }
+}
+
+test "cooklang adversarial: delimiter storms stay bounded and deterministic" {
+    const gpa = std.testing.allocator;
+
+    // Huge runs of markers, braces, and comment delimiters; thousands of
+    // adjacent ingredients; deep repetition of preparations; an unterminated
+    // block comment; a single enormous step; many steps and sections. Each
+    // case must parse twice to the same bytes (determinism) without
+    // pathological rescanning (the scanner is single-pass per line).
+    var at_run = std.ArrayList(u8).empty;
+    defer at_run.deinit(gpa);
+    for (0..5_000) |_| try at_run.append(gpa, '@');
+    try at_run.appendSlice(gpa, "\n");
+
+    var brace_run = std.ArrayList(u8).empty;
+    defer brace_run.deinit(gpa);
+    for (0..5_000) |_| try brace_run.appendSlice(gpa, "@x{");
+    try brace_run.append(gpa, '}');
+
+    var prep_storm = std.ArrayList(u8).empty;
+    defer prep_storm.deinit(gpa);
+    try prep_storm.appendSlice(gpa, "@x{1}");
+    for (0..2_000) |_| try prep_storm.appendSlice(gpa, "(chopped)");
+
+    var unclosed_block = std.ArrayList(u8).empty;
+    defer unclosed_block.deinit(gpa);
+    try unclosed_block.appendSlice(gpa, "Mix [- never closed\n");
+    for (0..10_000) |_| try unclosed_block.appendSlice(gpa, "@flour{1%kg} more\n");
+
+    var many_steps = std.ArrayList(u8).empty;
+    defer many_steps.deinit(gpa);
+    for (0..5_000) |_| {
+        try many_steps.appendSlice(gpa, "Step with @ing{2} and #pot.\n\n");
+    }
+    try many_steps.appendSlice(gpa, "= Last\n\n");
+
+    var long_line = std.ArrayList(u8).empty;
+    defer long_line.deinit(gpa);
+    try long_line.append(gpa, '@');
+    for (0..100_000) |_| try long_line.append(gpa, 'a');
+    try long_line.append(gpa, '\n');
+
+    const cases = [_][]const u8{
+        at_run.items,
+        brace_run.items,
+        prep_storm.items,
+        unclosed_block.items,
+        many_steps.items,
+        long_line.items,
+    };
+    for (cases) |input| {
+        var first = try renderCooklangHtml(input);
+        defer first.deinit(gpa);
+        var second = try renderCooklangHtml(input);
+        defer second.deinit(gpa);
+        try std.testing.expectEqualSlices(u8, first.items, second.items);
     }
 }

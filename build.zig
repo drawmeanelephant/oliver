@@ -59,6 +59,28 @@ pub fn build(b: *std.Build) void {
     const spec_step = b.step("spec-conformance", "Run the CommonMark spec-conformance scorecard");
     spec_step.dependOn(&spec_run.step);
 
+    // Cooklang canonical conformance harness: runs the official cooklang/spec
+    // corpus (bound by digest) through oliver.cooklang.parse. Development
+    // tool only (reads files; the library core does not).
+    const cook_tool = b.addExecutable(.{
+        .name = "cooklang-conformance",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/cooklang_conformance.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "oliver", .module = oliver_mod },
+            },
+        }),
+    });
+    const cook_run = b.addRunArtifact(cook_tool);
+    // Default to the vendored corpus (pinned, digest-bound) so a bare
+    // `zig build cooklang-conformance` runs the wall; pass a path to
+    // check a freshly fetched copy instead.
+    if (b.args) |args| cook_run.addArgs(args) else cook_run.addArg("tests/cooklang/canonical.yaml");
+    const cook_step = b.step("cooklang-conformance", "Run the Cooklang canonical conformance scorecard");
+    cook_step.dependOn(&cook_run.step);
+
     // Synthetic unit tests for corpus parsing, identity checks, the complete
     // expectation partition, and outcome classification. These do not need a
     // downloaded spec.txt and therefore run as part of the ordinary test gate.
