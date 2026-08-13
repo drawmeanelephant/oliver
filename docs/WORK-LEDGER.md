@@ -32,7 +32,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T21 phrase attributes on all operators | Hobix "Phrase Attributes" extended to the whole family: `*{color:red}x*` → `<strong style="color:red;">`, `_(big)x_` → `<em class="big">`, doubled/long operators included, via the shared `.phrase` payload + a combined renderer arm; same fallbacks as the span forms; a `{` after an opener is a style (macros only unattached); `--` em-dash interplay intact; Markdown untouched | after T20 | merged on main (PR #36) |
 | Textile worker | T22 citation + acronyms | Hobix's `??citation??` → `<cite>` (a doubled `?` joins the phrase family with attrs + nesting) and `ABC(def)` → `<acronym title="def">`; the both-flag delimiter fix (a run that is open and close tries close first, then opens); the acronym whole-run skip keeps the scan linear; Markdown untouched | after T21 | merged on main (PR #37) |
 | Textile worker | T23 dl. definition lists | Textile 2's `dl. term:definition` → `<dl>`/`<dt>`/`<dd>`, converging on the shared list model (a `.definition` kind + role-bearing `.list_item` payload); multi-line definitions, `dl<mods>.` attrs, the term-run rule, literal signature fallbacks; Markdown untouched | after T22 | merged on main (PR #38) |
-| Textile worker | T24 clear. marker | Textile 2's lone `clear.`/`clear<.`/`clear>.` line parks a CSS fragment (`clear:both`/`left`/`right`) that the next block folds ahead of its own style via the §8 block-attribute machinery; applies to every block family, closes open extended blocks, literal lookalikes; Markdown untouched | after T23 | in flight (T24) |
+| Textile worker | T24 clear. marker | Textile 2's lone `clear.`/`clear<.`/`clear>.` line parks a CSS fragment (`clear:both`/`left`/`right`) that the next block folds ahead of its own style via the §8 block-attribute machinery; applies to every block family, closes open extended blocks, literal lookalikes; Markdown untouched | after T23 | merged on main (PR #40) |
+| Textile worker | T25 notextile. raw passthrough | the audit's last deferral: `notextile.`/`notextile..` (current Textile docs "No formatting"; Textile 2 uses `==` instead) opens a raw block emitted as one `.html_block` leaf — unformatted, unescaped, CRLF preserved — the signature form of the `==` escape; single-period blank termination, extended runs to the next signature, bare-marker blocks, literal lookalikes; Markdown untouched | after T24 | in flight (T25) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -878,7 +879,46 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   Textile fixture pairs (`clear-basic`, `clear-literal`).
 - **Parallelism:** yes; Textile-only, Markdown untouched.
 - **Integration:** after T23 (the 652/652 gate is re-verified).
-- **State:** in flight (T24). 201/201 tests green; canonical scorecard
+- **State:** merged on main (PR #40). 201/201 tests green; canonical
+  scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T25 — `notextile.` raw passthrough
+
+- **Objective:** close the audit's last deferral — the `notextile.`/
+  `notextile..` block form that skips Textile processing entirely.
+- **Normative source:** current Textile Markup Language Documentation
+  "No formatting (override Textile)" — "For blocks of elements add a
+  notextile. or notextile.. at the start of the block", with the example
+  `notextile. This line <em>will not</em> be *Textilised*.` (the `<em>`
+  stays a real tag, `*Textilised*` stays literal). Textile 2 does not
+  document the form — its Escaping section presents `==` as the way to
+  "let you put some regular HTML markup in your document" — recorded in
+  clean-room session 20.
+- **Dependencies:** the block-level `==` escape machinery (T16): the raw
+  block is the signature form of the same `.html_block` payload.
+- **Seams:** `src/textile.zig` only — `tryNoTextileMarker` (the
+  single/double-period contract, bare markers allowed),
+  `RawBlockState` + `openRawBlock`/`appendRawLine`/`closeRawBlock` (the
+  contiguous-source-slice `.html_block` emission, CRLF preserved), the
+  parse-loop wiring (a raw-owns branch next to the code branch, the
+  blank-line handling for both forms, the marker branch, `trySignature`
+  coverage, and the escape-delimiter/clear/EOF close points). No model
+  or renderer change.
+- **Acceptance:** the current-docs example byte-for-byte; bare-marker
+  blocks; CRLF preserved; single-period ends at the first blank line;
+  extended keeps blank lines and runs to the next block signature;
+  `==` interrupts an open raw block; `notextile.` inside a single `bc.`
+  is code content; closes open extended `bq..`/dlist; a pending
+  `clear.` is dropped (no attribute list to land on); unterminated at
+  EOF renders; lookalikes (`notextiles.`, `notextile.extra`, missing
+  period, mid-paragraph) and empty blocks stay literal/nothing; the
+  652/652 gate is untouched.
+- **Tests:** 2 unit tests (the block contract + interactions; the
+  literal shapes and empty-block drop), 2 new Textile fixture pairs
+  (`notextile-basic`, `notextile-literal`).
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T24 (the 652/652 gate is re-verified).
+- **State:** in flight (T25). 203/203 tests green; canonical scorecard
   still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

@@ -31,7 +31,7 @@ Tests are product contracts. `zig build test` runs three suites:
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 104 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 106 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -124,7 +124,12 @@ Tests are product contracts. `zig build test` runs three suites:
    `clear.`/`clear<.`/`clear>.` line parking a CSS fragment the next
    block folds ahead of its own style — across paragraphs, headings,
    and lists — plus the literal shapes and the dangling-marker drop;
-   docs/TEXTILE-PARITY.md §22), and the
+   docs/TEXTILE-PARITY.md §22), the `notextile.`/`notextile..` raw
+   block (the current-docs example byte-for-byte — `<em>` stays a
+   real tag, `*Textilised*` stays literal — the single-period blank
+   termination, the extended form's blank-line content through the
+   next signature, CRLF preservation, and the literal lookalikes and
+   empty-block drop; docs/TEXTILE-PARITY.md §23), and the
    `{...}` character macros (the documented table byte-for-byte with
    mirrored orders, inside link display text, the brace-edge rule
    that keeps `{*}`/`{-L}` whole, and the literal fallbacks;
@@ -143,7 +148,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **201/201 tests passing** with Zig 0.16.0.
+The current complete result is **203/203 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 

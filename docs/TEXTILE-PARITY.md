@@ -115,10 +115,12 @@ implemented (T18) — see §16.
   §19 — and the citation and acronym forms are implemented (T22) — see
   §20.
 - **Definition lists** (`dl.`) are implemented (T23) — see §21. **`clear`**
-  is implemented (T24) — see §22. **`notextile.`** (Textile 2-only) is
-  the audit's last remaining deferral.
+  is implemented (T24) — see §22. **`notextile.`** is implemented (T25) —
+  see §23. With it, every signature the audit's references document is
+  implemented: the deferral pile is empty.
 - **Textile raw HTML** — Textile keeps `<...>` as plain text (no `.raw_html`
-  recognition); documented in the model convergence table.
+  recognition); documented in the model convergence table. The
+  `notextile.` block is the documented way to drop real HTML in (see §23).
 - **Bracket/brace forcing** (`c[*oo*]l`) — documented by Textile 2 as a way
   to force intraword formatting; not inferred by this slice (same position
   as docs/TEXTILE-INLINE-CODE.md §2 for `@code@`).
@@ -1061,4 +1063,58 @@ tree and any open table — the fragment parks and the next block
 carries it. Inside a single-period `bc.`/`pre.` block the marker is
 code content like any other non-blank line (the leaf owns every
 line until a blank line). Pinned by `clear-basic`.
+
+## 23. The `notextile.` raw block (current Textile docs "No formatting")
+
+The audit's last deferral, implemented (T25): `notextile.` (or the
+extended `notextile..`) at the start of a block skips Textile
+processing entirely. It is the signature form of the `==` escape —
+content passes through as one raw `.html_block` leaf, byte-for-byte
+from the source (CRLF preserved), no inline formatting, no character
+replacements: `notextile. This line <em>will not</em> be
+*Textilised*.` renders `This line <em>will not</em> be
+*Textilised*.`, the `<em>` a real tag.
+
+**Provenance.** Only the current Textile Markup Language
+Documentation documents the form ("No formatting (override
+Textile)": "For blocks of elements add a notextile. or notextile..
+at the start of the block"); Textile 2 does not — its Escaping
+section presents the `==` mechanism as the way to "just get out of
+the way and let you put some regular HTML markup in your document"
+(see CLEANROOM session 20). The slice implements the current-docs
+form and converges it on the `==` machinery.
+
+**The marker contract.** The marker must be the whole word at the
+line start, followed by one period (or two for the extended form)
+and then separator whitespace or end of line — a **bare marker** is
+allowed, since "for blocks of elements" the content follows on
+later lines. Any other shape is ordinary text: a word merely
+starting with `notextile` (`notextiles.`), a missing period
+(`notextile with no dot`), a non-space directly after the period
+(`notextile.extra`), or a mid-paragraph occurrence. Block modifiers
+are not documented for the form, so `notextile{...}.` stays literal
+(the same conservatism as `==`). A bare marker with nothing after
+it (a blank line or end of input) renders nothing. Pinned by
+`notextile-literal`.
+
+**The block contract.** The single-period form owns every following
+non-blank line, ending at the first blank line — the same rule
+`bc.` uses, so signature-shaped lines stay raw content. The
+extended form keeps blank lines as content and runs until the next
+recognized block signature (like `bc..`); the trailing blank lines
+before the signature stay in the payload. Same-line content after
+the marker joins the block's first line. Pinned by
+`notextile-basic`.
+
+**Interactions.** The marker is a block signature: it closes an
+open extended `bq..`/`bc..`/`pre..` and a definition list, and
+interrupts the list tree and any open table. Inside a single-period
+`bc.`/`pre.` block the marker is code content like any other
+non-blank line (the leaf owns everything until a blank line). A
+`==` delimiter interrupts an open raw block, as it interrupts every
+block (the escape check runs before all other rules). A pending
+`clear.` has no attribute list to land on (the `.html_block` leaf
+carries none), so the fragment is dropped rather than leaking onto
+the next block. An unterminated block at end of input still
+renders, like an unterminated `==` region.
 
