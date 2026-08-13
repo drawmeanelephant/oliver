@@ -851,9 +851,9 @@ literal — the same conservatism as a malformed block modifier. The
 scan treats the run as opaque (a `%` inside a style value like
 `%{width:50%}x%` cannot close the span), and a run with no content
 after it (`%(x)%`, `%{color:red}%`) falls back to a **plain span**
-whose content includes the run bytes. The other operators' attribute
-forms (`*{color:red}x*`, `_(big)x_`) are documented by Hobix but stay
-**deferred** — the span is this milestone's scope.
+whose content includes the run bytes. The same machinery extends to
+every other operator's attribute forms (`*{color:red}x*`, `_(big)x_`,
+…), composing onto the phrase's own HTML tag (§19).
 
 **The macro table.** The documented forms — each with its mirrored
 order where Textile 2 shows one — map to a single character:
@@ -875,6 +875,43 @@ closer before `}`) therefore render literally.
 documented forms above are implemented — `{a'}` (lowercase acute),
 `{E'}`, and `{C|}` stay literal text (with the standard replacements,
 so `{a'}` renders `{a'}` → `{a’}`). The full table is the reference
-implementations' data, outside the clean-room rule. Non-span phrase
-attributes and image `[lang]` remain recorded deferrals.
+implementations' data, outside the clean-room rule. Image `[lang]`
+remains a recorded deferral.
+
+## 19. Phrase attributes on every operator (T21): pinned behaviors
+
+Hobix "Phrase Attributes" extends the span milestone to the whole
+family: "all block attributes can be applied to phrases as well by
+placing them just inside the opening modifier", with the examples
+`*{color:red}blushed*` → `<strong style="color:red;">blushed</strong>`,
+`_(big)sprouted_` → `<em class="big">sprouted</em>`, and
+`%[es]cabeza%` → `<span lang="es">cabeza</span>`. Any opener — single,
+doubled (`**{...}x**` → `<b style="…">x</b>`, `--{...}x--` → `<small
+style="…">x</small>`), or the long operators (`^[fr]x^` → `<sup
+lang="fr">x</sup>`, `~[de]x~`) — accepts the same
+`{style}(class#id)[lang]` run through the exact span machinery,
+composing onto the phrase's **own** HTML tag via the shared `.phrase`
+payload (Markdown phrase nodes keep `.none` and render without attrs).
+
+**The same fallback contract as the span forms, pinned by
+`phrase-attr-literal`.** A malformed run (an unclosed or empty spec)
+makes the operator a non-opener — the whole construct stays literal. A
+run followed by whitespace or empty content is not an opener. A run
+with no content after it (`*{color:red}*`) falls back to a **plain
+phrase** whose content includes the run bytes. An operator character
+inside a style value (`*{width:50%}x*`) cannot close the phrase — the
+run is opaque to the scan.
+
+**Interaction with the `{...}` macros.** A `{` directly after an opener
+is a style token, so `*{c|}bold*` renders `<strong
+style="c|;">bold</strong>` — the macro table only sees `{...}` regions
+not attached to a phrase opener (the `char-macro-literal` fixture's
+line 4 was updated to keep a genuine survival case: `x{*}y` and
+`* {c|} bold` still macro). The brace-edge rule (§18) is unchanged:
+`{*}` and `{-L}` stay whole.
+
+**Em-dash interplay.** The `--` small operator consumes a paired run as
+a delimiter, so `--{color:red}small--` → `<small
+style="color:red;">small</small>`; a `--` that cannot form a pair still
+em-dashes through the replacement pass (§17 unchanged).
 

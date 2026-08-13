@@ -75,8 +75,9 @@ smileys), `==` escaping
 line attributes (the pipe-delimited form of the block-attribute set,
 converging byte-identically with `p<mods>.`), image modifiers
 (alignment, sizing `10x20`/`10w 20h`/`20%`, and style/class/padding
-on `!url!` images), and span phrase attributes
-(`%{style}(class#id)[lang]x%` on `%x%` spans),
+on `!url!` images), and phrase attributes on every operator
+(`*{color:red}x*` → `<strong style="color:red;">`, `_(big)x_` →
+`<em class="big">`, `%{style}(class#id)[lang]x%` on `%x%` spans),
 structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
