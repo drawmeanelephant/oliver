@@ -1,7 +1,8 @@
 //! Provisional CLI: a thin adapter over the library for shell integration.
 //!
 //!     oliver render --from markdown < document.md > document.html
-//!     oliver render --from textile < document.textile
+//!     oliver render --from textile  < document.textile
+//!     oliver render --from cooklang < recipe.cook
 //!
 //! All parser and renderer semantics live in the library; this file only
 //! handles arguments and stdio. It uses the Zig 0.16 `std.process.Init`
@@ -18,6 +19,7 @@ pub fn main(init: std.process.Init) !u8 {
     _ = it.next(); // program name
 
     var dialect: ?oliver.Dialect = null;
+    var cooklang = false;
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--from")) {
             const value = it.next() orelse return usage();
@@ -25,6 +27,8 @@ pub fn main(init: std.process.Init) !u8 {
                 dialect = .markdown;
             } else if (std.mem.eql(u8, value, "textile")) {
                 dialect = .textile;
+            } else if (std.mem.eql(u8, value, "cooklang")) {
+                cooklang = true;
             } else return usage();
         } else if (std.mem.eql(u8, arg, "render")) {
             // Subcommand; the dialect flag is what matters.
@@ -32,7 +36,7 @@ pub fn main(init: std.process.Init) !u8 {
             return usage();
         } else return usage();
     }
-    const d = dialect orelse return usage();
+    if (!cooklang and dialect == null) return usage();
 
     // Read all of stdin into memory.
     var input = std.ArrayList(u8).empty;
@@ -48,26 +52,39 @@ pub fn main(init: std.process.Init) !u8 {
         try input.appendSlice(gpa, buf[0..n]);
     }
 
-    var result = oliver.parse(gpa, input.items, d, .{}) catch |err| {
-        std.debug.print("oliver: {s}\n", .{@errorName(err)});
-        return 1;
-    };
-    defer result.deinit();
-
     // Render directly to stdout through a buffered writer.
     var out_buf: [4096]u8 = undefined;
     var out_writer = std.Io.File.stdout().writer(init.io, &out_buf);
-    oliver.html.render(gpa, &out_writer.interface, &result.document, .{}) catch |err| {
-        std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
-        return 1;
-    };
+
+    if (cooklang) {
+        var result = oliver.cooklang.parse(gpa, input.items, .{}) catch |err| {
+            std.debug.print("oliver: {s}\n", .{@errorName(err)});
+            return 1;
+        };
+        defer result.deinit();
+        oliver.cooklang_html.render(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
+            std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
+            return 1;
+        };
+    } else {
+        const d = dialect.?;
+        var result = oliver.parse(gpa, input.items, d, .{}) catch |err| {
+            std.debug.print("oliver: {s}\n", .{@errorName(err)});
+            return 1;
+        };
+        defer result.deinit();
+        oliver.html.render(gpa, &out_writer.interface, &result.document, .{}) catch |err| {
+            std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
+            return 1;
+        };
+    }
     out_writer.flush() catch {};
     return 0;
 }
 
 fn usage() u8 {
     std.debug.print(
-        \\usage: oliver render --from <markdown|textile>
+        \\usage: oliver render --from <markdown|textile|cooklang>
         \\
         \\Reads a document from stdin and writes rendered HTML to stdout.
         \\
