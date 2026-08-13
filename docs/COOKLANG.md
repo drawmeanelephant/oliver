@@ -298,11 +298,12 @@ Vocabulary (as implemented):
 ## 9. Explicitly deferred (documented, not built)
 
 Richer generic HTML recipe renderer; `.menu` profile support beyond "it
-already parses"; a pure `scaleRecipe()` semantic operation; and all of
-conventions.md's application features (shopping lists, pantry, aisles,
-image discovery, search, meal scheduling, publication). These are
-consumer/ecosystem responsibilities, per §1. (The canonical Cooklang
-serializer was the first stretch goal and is now implemented — §10.)
+already parses"; and all of conventions.md's application features
+(shopping lists, pantry, aisles, image discovery, search, meal
+scheduling, publication). These are consumer/ecosystem
+responsibilities, per §1. (The canonical serializer — §10 — and the
+pure scaling operation — §11 — were the first two stretch goals and
+are now implemented.)
 
 ## 10. Canonical serializer (Oliver-owned, not byte-identical round-trip)
 
@@ -356,3 +357,62 @@ Contract, verified by tests:
   shapes that must round-trip unchanged.
 - **Parser fix carried**: empty front matter (`---\n---`) — the
   zero-payload case — parses correctly (no panic) and round-trips.
+
+## 11. Scaling (pure semantic operation)
+
+`src/cooklang_scale.zig` derives a new `Recipe` from an existing one by
+scaling its ingredient quantities: `oliver.cooklang_scale.scaleRecipe(
+allocator, &recipe, by)`, or `oliver scale --from cooklang (--factor
+<num[/den]> | --servings <n>)` on the CLI. It is pure and deterministic:
+no filesystem, network, or global state; the input recipe is never
+mutated. Semantics follow the official conventions' "Scaling and
+Servings" section (https://cooklang.org/docs/conventions/; provenance
+in docs/CLEANROOM.md session 22).
+
+What scales, what does not (per the conventions):
+
+- Ingredient quantities scale **linearly** by an exact rational factor.
+- **Fixed quantities** — a leading `=` (`@salt{=1%tsp}`) — stay
+  byte-for-byte unchanged.
+- **Recipe references** (`@./path{2}`) are never touched: their
+  quantities are directives for scaling the *referenced* recipe, which
+  Oliver does not resolve (consumer concern).
+- **Timers and cookware never scale** (cooking times and pan sizes do
+  not follow portion size).
+- **Non-numeric quantities** (`@salt`, `@x{}`, `@x{two small}`) are
+  unchanged — there is nothing numeric to scale.
+
+Two modes (`ScaleBy`): `.factor` multiplies by an exact rational
+`num/den`; `.servings` scales to a target serving count, reading the
+current count from the frontmatter `servings`/`serves`/`yield` key
+(leading number only, per the conventions; default 1 when absent,
+zero, or non-numeric). Oliver does not parse YAML — this is a
+conservative line-oriented read of the raw payload only. A zero
+`den` or a zero target is `error.InvalidScaleFactor`.
+
+Arithmetic and formatting policy:
+
+- Quantities are read as **exact rationals** directly from their source
+  text (never through f64), multiplied, and reduced. A whole result
+  emits an integer; a non-whole result emits a reduced fraction
+  `num/den`, except a **decimal-family source** whose reduced
+  denominator has only 2 and 5 factors, which emits the exact
+  terminating decimal (bounded at 12 fractional digits). Results whose
+  exact representation would overflow 128-bit arithmetic are left
+  unchanged. Examples: `1/2 × 2 = 1`, `1/2 × 3 = 3/2`, `1.5 × 3 =
+  4.5`, `0.1 × 4/3 = 2/15` (fraction, since 15 has a 3 factor).
+- The frontmatter is passed through raw and unmodified: Oliver does not
+  rewrite metadata, and the input recipe is never changed. Re-scaling
+  the derived recipe is therefore the caller's responsibility.
+- The scaled `Recipe` owns a fresh arena; synthesized quantity text
+  lives in it and everything else is a shallow copy, so the input
+  recipe (and its source bytes) must outlive the scaled result. Spans
+  of synthesized quantities still point at the source quantity region
+  (derived recipes are not re-parses).
+
+Verification: 10 unit tests pin the families above (exactness,
+servings-mode metadata keys, invalid-factor rejection, sections/notes,
+numeric-view recomputation, empty input), and `scale-basic` /
+`scale-servings` fixture pairs pin the canonical scaled output
+byte-for-byte. The scaled output is valid `.cook` by construction
+(the serializer is the emission path) and re-parses consistently.
