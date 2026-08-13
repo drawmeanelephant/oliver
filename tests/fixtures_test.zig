@@ -1869,6 +1869,35 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/extended-literal.textile"),
         .expected = @embedFile("fixtures/textile/extended-literal.html"),
     },
+    // The Hobix footnote battery: `[N]` references and `fnN.` blocks, with
+    // the Textile 2 `class="footnote"` on both sides (docs/TEXTILE-PARITY.md
+    // §11).
+    .{
+        .name = "footnote-basic",
+        .input = @embedFile("fixtures/textile/footnote-basic.textile"),
+        .expected = @embedFile("fixtures/textile/footnote-basic.html"),
+    },
+    // Multiple footnotes in one line and numbered blocks stay in order.
+    .{
+        .name = "footnote-multi",
+        .input = @embedFile("fixtures/textile/footnote-multi.textile"),
+        .expected = @embedFile("fixtures/textile/footnote-multi.html"),
+    },
+    // The §8 block modifiers apply to footnote signatures; the structural
+    // `class="footnote" id="fnN"` always come first and user style/lang
+    // follow them.
+    .{
+        .name = "footnote-attr",
+        .input = @embedFile("fixtures/textile/footnote-attr.textile"),
+        .expected = @embedFile("fixtures/textile/footnote-attr.html"),
+    },
+    // Non-digit brackets, a letter after digits, empty `fnN.`/`fnN<mods>.`
+    // signatures, and `fnx.` all stay literal.
+    .{
+        .name = "footnote-literal",
+        .input = @embedFile("fixtures/textile/footnote-literal.textile"),
+        .expected = @embedFile("fixtures/textile/footnote-literal.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {
