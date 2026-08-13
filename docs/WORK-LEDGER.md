@@ -35,7 +35,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T24 clear. marker | Textile 2's lone `clear.`/`clear<.`/`clear>.` line parks a CSS fragment (`clear:both`/`left`/`right`) that the next block folds ahead of its own style via the §8 block-attribute machinery; applies to every block family, closes open extended blocks, literal lookalikes; Markdown untouched | after T23 | merged on main (PR #40) |
 | Textile worker | T25 notextile. raw passthrough | the audit's last deferral: `notextile.`/`notextile..` (current Textile docs "No formatting"; Textile 2 uses `==` instead) opens a raw block emitted as one `.html_block` leaf — unformatted, unescaped, CRLF preserved — the signature form of the `==` escape; single-period blank termination, extended runs to the next signature, bare-marker blocks, literal lookalikes; Markdown untouched | after T24 | merged on main (PR #41) |
 | Cooklang worker | CK1 Cooklang frontend | a first-class `*.cook` frontend: a typed Recipe model (blocks/steps/ingredients/cookware/timers/notes/sections/preps/recipe-refs/frontmatter) with exact spans, built from the official spec + EBNF + canonical corpus (pinned revision, MIT) under clean-room rules; canonical conformance harness; Oliver-owned tests; deterministic HTML policy; `--from cooklang` CLI; Markdown/Textile untouched | after the Textile audit (T1–T25) | merged (PR #43) |
-| Cooklang worker | CK2 canonical serializer | `src/cooklang_serialize.zig`: semantic Recipe → valid `.cook`, deterministic and idempotent (canonical, not byte-identical round-tripping — docs/COOKLANG.md §10); front-matter passthrough; empty-front-matter parser fix (`---\n---` no longer panics); `oliver serialize --from cooklang` CLI; the conformance harness asserts the fixed point over every corpus source; serialize fixture pairs; Cooklang unit tests wired into `zig build test` (they had been skipped by lazy analysis); Cooklang gate added to CI; Markdown/Textile untouched | after CK1 (first stretch goal) | merged (PR #44) |
+| Cooklang worker | CK2 canonical serializer | `src/cooklang_serialize.zig`: semantic Recipe → valid `.cook`, deterministic and idempotent (canonical, not byte-identical round-tripping — docs/COOKLANG.md §10); front-matter passthrough; empty-front-matter parser fix (`---\n---` no longer panics); `oliver serialize --from cooklang` CLI; the conformance harness asserts the fixed point over every corpus source; serialize fixture pairs; Cooklang unit tests wired into `zig build test` (they had been skipped by lazy analysis); Cooklang gate added to CI; Markdown/Textile untouched | after CK1 (first stretch goal) | merged (PR #45) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1001,7 +1001,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes; Markdown/Textile untouched; parser change is a
   narrow fix in `tryFrontmatter` (adjacent fences → empty payload).
 - **Integration:** after CK1; the 652/652 gate is re-verified.
-- **State:** merged on main (PR #44). 231/231 tests green (212 lib —
+- **State:** merged on main (PR #45). 231/231 tests green (212 lib —
   now including the Cooklang parser/serializer unit tests, which lazy
   analysis had been skipping — + 12 fixtures + 7 harness); Cooklang
   canonical conformance 60/60 with the round-trip phase clean;
