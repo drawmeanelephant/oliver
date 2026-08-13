@@ -64,9 +64,11 @@ class/id, lang, alignment, padding — see docs/TEXTILE-PARITY.md),
 extended `bq..`/`bc..`/`pre..` signatures that stay active across
 blank lines, footnotes (`[N]` references + `fnN.` blocks with
 `class="footnote"` links), `bq.:URL` block-quote citations
-(rendered as the blockquote's `cite` attribute), and the character
+(rendered as the blockquote's `cite` attribute), the character
 replacements (curly quotes, em/en dashes, ellipsis, `(c)`/`(r)`/`(tm)`,
-fractions, degree, plus/minus, dimension sign),
+fractions, degree, plus/minus, dimension sign), and `==` escaping
+(a lone `==` line passes raw HTML through unformatted; inline
+`==...==` suspends all formatting and replacements),
 structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
