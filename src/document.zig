@@ -10,7 +10,10 @@
 //! Invariants:
 //! - The root node is always a `.document` whose children are blocks.
 //! - Block tags contain block or inline children as documented per tag;
-//!   `thematic_break`, `code_block`, and `html_block` are childless leaves.
+//!   `thematic_break`, `code_block`, and `html_block` are childless leaves;
+//!   `table` children are `table_row` blocks, `table_row` children are
+//!   `table_cell` blocks, and `table_cell` children are inlines (a cell
+//!   behaves like a paragraph: inline content only, no blocks).
 //! - `emphasis`/`strong`/`bold`/`italic`/`deleted`/`inserted`/
 //!   `superscript`/`subscript`/`span`/`link` contain inline children; the
 //!   leaf inline tags (`text`, `code_span`, `image`, `autolink`, `raw_html`,
@@ -58,6 +61,21 @@ pub const Tag = enum {
     /// A list item (Markdown §5.2). Container: children are blocks.
     /// Span covers its content lines (marker stripped).
     list_item,
+    /// A table (GFM §4.10 extension, Markdown frontend only). Container:
+    /// children are `table_row` blocks — the first is the header row, the
+    /// rest are body rows. `data.table` holds the per-column alignment.
+    /// Span covers the header line through the last row line.
+    table,
+    /// One row of a `table` (GFM §4.10). Container: children are
+    /// `table_cell` blocks. No payload: the row's role (header vs body)
+    /// is its position under the table, and each cell carries its own
+    /// header/alignment flags.
+    table_row,
+    /// One cell of a `table_row` (GFM §4.10). Container: children are
+    /// inlines. `data.table_cell` carries the header flag and the column
+    /// alignment (resolved at parse time so the renderer never indexes
+    /// across nodes).
+    table_cell,
     /// Plain text. `data.text` is a slice of the source.
     text,
     /// Emphasized inline content (Markdown `*x*`, `_x_`; Textile `_x_`).
@@ -121,7 +139,7 @@ pub const Tag = enum {
 
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
-            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item => true,
+            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => true,
             .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => false,
         };
     }
@@ -129,7 +147,7 @@ pub const Tag = enum {
     pub fn isInline(self: Tag) bool {
         return switch (self) {
             .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => true,
-            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item => false,
+            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => false,
         };
     }
 };
@@ -175,6 +193,14 @@ pub const Data = union(enum) {
     /// loose iff any item pair is separated by a blank line or any item
     /// directly contains two blocks separated by one).
     list: List,
+    /// `.table`: the per-column alignment, in order, one entry per column
+    /// (GFM §4.10). Arena-owned copy (columns are extracted from the
+    /// delimiter row).
+    table: Table,
+    /// `.table_cell`: the header flag (true for the table's first row) and
+    /// the column alignment, resolved at parse time from the table's
+    /// `data.table.align` so the renderer never indexes across nodes.
+    table_cell: TableCell,
 };
 
 /// The payload of a `.code_block` leaf. `content` uses `\n` line endings and
@@ -214,6 +240,32 @@ pub const List = struct {
     /// Tight (false) vs loose (true). Paragraphs directly in a tight
     /// list's items render without `<p>`.
     loose: bool = false,
+};
+
+/// Column alignment of a GFM table (§4.10), from the delimiter row:
+/// `---` unaligned, `:---` left, `---:` right, `:---:` center. `none`
+/// renders without an `align` attribute.
+pub const TableAlign = enum {
+    none,
+    left,
+    center,
+    right,
+};
+
+/// The payload of a `.table` node: the per-column alignment, one entry
+/// per column, in column order (GFM §4.10). The column count is
+/// `alignment.len`; body rows pad or truncate their cells to it.
+pub const Table = struct {
+    alignment: []const TableAlign,
+};
+
+/// The payload of a `.table_cell` node: `header` selects `<th>` vs
+/// `<td>`, and `alignment` selects the optional `align` attribute. Both
+/// are resolved at parse time from the row's position and the table's
+/// column alignment, so rendering needs no cross-node lookup.
+pub const TableCell = struct {
+    header: bool,
+    alignment: TableAlign,
 };
 
 /// The payload of a `.image` node: the resolved src, the flattened

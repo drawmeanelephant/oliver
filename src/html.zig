@@ -26,7 +26,11 @@
 //!   paragraphs omit `<p>`, while loose-list paragraphs retain it.
 //! - Thematic breaks render as `<hr />` by default (or `<hr>` when the void
 //!   trailing-slash option is disabled).
-//! - Tables: not yet implemented (no tags exist).
+//! - Tables (GFM §4.10) render `<table>` with `<thead>` and `<tbody>`
+//!   sections; the first row is the header (`<th>`), the rest body
+//!   (`<td>`). Aligned columns carry an `align` attribute
+//!   (left/center/right). `<tbody>` is omitted when the table has no body
+//!   rows. Cells render inline content like a paragraph.
 //! - Generated line endings in output are always `\n`; raw HTML source spans
 //!   retain their original line-ending bytes by design.
 //! - Every block-level element is followed by exactly one `\n`, so nonempty
@@ -71,6 +75,7 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
                 try writeOpen(gpa, writer, &stack, f.node, f.suppress_p, options, doc.src.bytes);
                 try pushChildren(gpa, &stack, f.node, f.tight_item);
             },
+            .marker => |text| try writer.writeAll(text),
             .exit => |f| try writeClose(writer, f.node, f.suppress_p, options),
         }
     }
@@ -92,6 +97,9 @@ const Frame = union(enum) {
         /// block in a loose item also starts on the line after `<li>`.
         prefix_newline: bool,
     },
+    /// Literal output emitted when popped, used for the `<thead>`/`<tbody>`
+    /// transitions between a table's header row and its body rows.
+    marker: []const u8,
     /// `suppress_p` mirrors the decision made at open time, so the close
     /// tag matches.
     exit: struct { node: *const document.Node, suppress_p: bool },
@@ -103,6 +111,33 @@ fn pushChildren(
     node: *const document.Node,
     node_tight_item: bool,
 ) !void {
+    // A table's children are rows; the first is the header row, the rest
+    // body rows. The `<thead>`/`<tbody>` split is emitted between them as
+    // marker frames (GFM §4.10 output; no `<tbody>` with no body rows).
+    // The table's own exit frame was already pushed by `writeOpen`.
+    if (node.tag == .table) {
+        const n = node.children.items.len;
+        const has_body = n >= 2;
+        var i = n;
+        while (i > 1) {
+            i -= 1;
+            try stack.append(gpa, .{ .enter = .{
+                .node = node.children.items[i],
+                .tight_item = false,
+                .suppress_p = false,
+                .prefix_newline = false,
+            } });
+        }
+        try stack.append(gpa, .{ .marker = if (has_body) "</thead>\n<tbody>\n" else "</thead>\n" });
+        try stack.append(gpa, .{ .enter = .{
+            .node = node.children.items[0],
+            .tight_item = false,
+            .suppress_p = false,
+            .prefix_newline = false,
+        } });
+        try stack.append(gpa, .{ .marker = "<thead>\n" });
+        return;
+    }
     var i = node.children.items.len;
     while (i > 0) {
         i -= 1;
@@ -152,6 +187,29 @@ fn writeOpen(
         },
         .block_quote => {
             try writer.writeAll("<blockquote>\n");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .table => {
+            try writer.writeAll("<table>\n");
+            // Children (rows with thead/tbody markers) are pushed by
+            // `pushChildren`; only the exit frame is set here.
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .table_row => {
+            try writer.writeAll("<tr>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .table_cell => {
+            const cell = node.data.table_cell;
+            try writer.writeAll("\n<");
+            try writer.writeAll(if (cell.header) "th" else "td");
+            switch (cell.alignment) {
+                .none => {},
+                .left => try writer.writeAll(" align=\"left\""),
+                .center => try writer.writeAll(" align=\"center\""),
+                .right => try writer.writeAll(" align=\"right\""),
+            }
+            try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .list => {
@@ -324,6 +382,16 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
     switch (node.tag) {
         .document => {},
         .block_quote => try writer.writeAll("</blockquote>\n"),
+        .table => {
+            // The thead/tbody split is emitted by marker frames between the
+            // rows; only the tail (tbody close, table close) is written here.
+            if (node.children.items.len >= 2) try writer.writeAll("</tbody>\n");
+            try writer.writeAll("</table>\n");
+        },
+        .table_row => try writer.writeAll("\n</tr>\n"),
+        .table_cell => {
+            try writer.writeAll(if (node.data.table_cell.header) "</th>" else "</td>");
+        },
         .list => {
             switch (node.data.list.kind) {
                 .bullet => try writer.writeAll("</ul>\n"),
@@ -784,6 +852,63 @@ test "html: mixed blocks render independently of dialect" {
     var out = try renderDoc(&doc);
     defer out.deinit(testing.allocator);
     try testing.expectEqualStrings("<h2></h2>\n<p></p>\n", out.items);
+}
+
+test "html: table renders thead/tbody sections and alignment attributes" {
+    // Renderer-only: a hand-built table — the renderer consumes the model,
+    // never the dialect (docs/DOCUMENT-MODEL.md). Row 0 is the header row;
+    // each cell carries its own header/alignment flags.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const table = try doc.createNode(.table, .{ .start = 0, .end = 0 }, .{
+        .table = .{ .alignment = &.{ .none, .center, .right } },
+    });
+    try doc.appendChild(doc.root, table);
+
+    // Header row: three cells (plain, center-aligned, right-aligned).
+    const header = try doc.createNode(.table_row, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(table, header);
+    const h1 = try doc.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = true, .alignment = .none } });
+    try doc.appendChild(header, h1);
+    try addText(&doc, h1, "foo");
+    const h2 = try doc.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = true, .alignment = .center } });
+    try doc.appendChild(header, h2);
+    try addText(&doc, h2, "bar");
+    const h3 = try doc.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = true, .alignment = .right } });
+    try doc.appendChild(header, h3);
+    try addText(&doc, h3, "baz");
+
+    // One body row: padded to the table's three columns (an empty cell
+    // renders <td></td>).
+    const body = try doc.createNode(.table_row, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(table, body);
+    const b1 = try doc.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = false, .alignment = .none } });
+    try doc.appendChild(body, b1);
+    try addText(&doc, b1, "quux");
+    const b2 = try doc.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = false, .alignment = .center } });
+    try doc.appendChild(body, b2);
+    try doc.appendChild(body, try doc.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = false, .alignment = .right } }));
+
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<table>\n<thead>\n<tr>\n<th>foo</th>\n<th align=\"center\">bar</th>\n<th align=\"right\">baz</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>quux</td>\n<td align=\"center\"></td>\n<td align=\"right\"></td>\n</tr>\n</tbody>\n</table>\n",
+        out.items,
+    );
+
+    // No body rows: no <tbody> section is emitted.
+    var doc2 = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc2.deinit();
+    const t2 = try doc2.createNode(.table, .{ .start = 0, .end = 0 }, .{ .table = .{ .alignment = &.{.none} } });
+    try doc2.appendChild(doc2.root, t2);
+    const h = try doc2.createNode(.table_row, .{ .start = 0, .end = 0 }, .none);
+    try doc2.appendChild(t2, h);
+    const c = try doc2.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = true, .alignment = .none } });
+    try doc2.appendChild(h, c);
+    try addText(&doc2, c, "only");
+    var out2 = try renderDoc(&doc2);
+    defer out2.deinit(testing.allocator);
+    try testing.expectEqualStrings("<table>\n<thead>\n<tr>\n<th>only</th>\n</tr>\n</thead>\n</table>\n", out2.items);
 }
 
 test "html: thematic break follows the void-element profile" {
