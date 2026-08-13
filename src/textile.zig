@@ -75,6 +75,10 @@
 //!   next block signature (Textile 2 "Extended Blocks"): `bq..` becomes
 //!   one blockquote of blank-line-separated paragraphs, and `bc..`/`pre..`
 //!   keep blank lines as code content.
+//! - Footnotes: `[N]` inline becomes `<sup class="footnote"><a
+//!   href="#fnN">N</a></sup>`, and an `fnN.` paragraph renders
+//!   `<p class="footnote" id="fnN"><sup>N</sup> …</p>` (Textile 2
+//!   "Footnotes"; the Hobix form lacks the classes).
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -214,6 +218,12 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try appendBlockContent(doc, &block, .block_quote, sig.attrs, sig.content, line.terminatorSpan());
             continue;
         }
+        if (try tryFootnoteMarker(doc, line)) |sig| {
+            try closeBlock(doc, &block, &defs);
+            closeLists(&lists);
+            try appendFootnoteContent(doc, &block, sig, line.terminatorSpan());
+            continue;
+        }
         if (tryListMarker(line)) |lm| {
             try closeBlock(doc, &block, &defs);
             try appendListItem(doc, &lists, lm, &defs);
@@ -249,6 +259,13 @@ const ActiveBlock = struct {
     /// The already-created blockquote node for an extended `bq..`; null
     /// for single-period blocks, which create their nodes at close.
     quote: ?*document.Node = null,
+    /// A `fnN.` footnote block's number; null for ordinary paragraphs. The
+    /// close-time paragraph gains `class="footnote" id="fnN"` and a
+    /// leading `<sup>N</sup>` (Textile 2 "Footnotes").
+    footnote: ?u16 = null,
+    /// The `fnN.` marker's span (through the digits), the leading sup's
+    /// span.
+    footnote_span: source.Span = .{ .start = 0, .end = 0 },
 
     const LineRef = struct {
         content: source.Span,
@@ -314,6 +331,21 @@ fn closeBlock(doc: *document.Document, block: *?ActiveBlock, defs: *const AliasT
     }
     const paragraph = try doc.createNode(.paragraph, span, .{ .paragraph = .{ .attrs = para_attrs } });
     try doc.appendChild(parent, paragraph);
+    if (active.footnote) |n| {
+        // A `fnN.` block opens with the leading footnote number in a plain
+        // `<sup>` (Textile 2's `<p class="footnote" id="fn1"><sup>1</sup>
+        // …`); only the inline `[N]` reference carries the class.
+        var buf: [16]u8 = undefined;
+        const num = std.fmt.bufPrint(&buf, "{d}", .{n}) catch unreachable; // u16 fits in 16 bytes
+        const sup = try doc.createNode(.superscript, active.footnote_span, .none);
+        const text = try doc.createNode(.text, active.footnote_span, .{ .text = try doc.allocator().dupe(u8, num) });
+        try doc.appendChild(sup, text);
+        try doc.appendChild(paragraph, sup);
+        // Both references render the sup followed by a space, so the
+        // number never collides with the content ("1Down here").
+        const space = try doc.createNode(.text, active.footnote_span, .{ .text = " " });
+        try doc.appendChild(paragraph, space);
+    }
 
     for (lines, 0..) |ref, i| {
         if (i > 0) {
@@ -556,13 +588,109 @@ fn openExtendedQuote(doc: *document.Document, block: *?ActiveBlock, sig: BlockSi
     });
 }
 
+// ---------------------------------------------------------------------------
+// Footnotes (`[N]` references and `fnN.` blocks).
+//
+// Both references agree on the structure: a `[N]` marker inline becomes a
+// superscript link to `#fnN` (Hobix: `<sup><a href="#fn1">1</a></sup>`;
+// Textile 2 adds `class="footnote"`), and an `fnN.` paragraph provides
+// the footnote's content, rendered with `id="fnN"` and a leading `<sup>`
+// (Textile 2 adds `class="footnote"` to the paragraph too). Oliver
+// follows the Textile 2 form — the classes are the newer, documented
+// rendering and are pinned by the fixtures (docs/TEXTILE-PARITY.md §11).
+// ---------------------------------------------------------------------------
+
+/// The parsed result of a `fnN.` footnote signature line.
+const FootnoteSig = struct {
+    /// The footnote number (the digits between `fn` and the period).
+    number: u16,
+    /// `class="footnote" id="fnN"` in the fixed render order.
+    attrs: []const document.Attribute,
+    /// The marker's span: `fn` through the digits (the leading sup's span).
+    marker: source.Span,
+    /// Content span after the marker and its separator whitespace.
+    content: source.Span,
+};
+
+/// Recognizes a `fnN.` footnote signature: `fn` + a digit run, optionally
+/// followed by the §8 block modifiers (`fn1{color:blue}.`, `fn2>.`), then
+/// `.` + a space/tab + non-empty content (Hobix: "begin a new paragraph
+/// with fn and the footnote's number, followed by a dot and a space";
+/// Textile 2: "You add a number following the fn keyword"). Empty content
+/// stays literal, like the other block signatures.
+fn tryFootnoteMarker(doc: *document.Document, line: source.Line) ParseError!?FootnoteSig {
+    const t = line.text;
+    if (t.len < 5) return null;
+    if (t[0] != 'f' or t[1] != 'n') return null;
+    var k: usize = 2;
+    var number: u16 = 0;
+    while (k < t.len and t[k] >= '0' and t[k] <= '9') : (k += 1) {
+        const d = t[k] - '0';
+        if (number > (std.math.maxInt(u16) - @as(u16, d)) / 10) return null;
+        number = number * 10 + d;
+    }
+    if (k == 2) return null; // a digit run is required
+
+    var buf: [24]u8 = undefined;
+    const id = std.fmt.bufPrint(&buf, "fn{d}", .{number}) catch unreachable; // u16 fits
+    var attrs: []const document.Attribute = undefined;
+    var content: source.Span = undefined;
+    if (t[k] == '.') {
+        if (k + 1 >= t.len or (t[k + 1] != ' ' and t[k + 1] != '\t')) return null;
+        var i = k + 2;
+        while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+        if (i == t.len) return null; // empty content stays literal
+        attrs = try composeAttrs(doc, null, "footnote", try doc.allocator().dupe(u8, id), null);
+        content = .{ .start = @intCast(line.start + i), .end = @intCast(line.content_end) };
+    } else {
+        const sig = (try parseBlockSignature(doc, line, k)) orelse return null;
+        if (sig.content.start >= sig.content.end) return null;
+        // The structural class/id always win; user modifiers contribute
+        // their style and lang (the renderer writes attrs in order, so a
+        // user class/id would otherwise duplicate the structural ones).
+        var list = std.ArrayList(document.Attribute).empty;
+        errdefer list.deinit(doc.allocator());
+        try list.append(doc.allocator(), .{ .name = "class", .value = try doc.allocator().dupe(u8, "footnote") });
+        try list.append(doc.allocator(), .{ .name = "id", .value = try doc.allocator().dupe(u8, id) });
+        for (sig.attrs) |a| {
+            if (std.mem.eql(u8, a.name, "style") or std.mem.eql(u8, a.name, "lang"))
+                try list.append(doc.allocator(), a); // arena-owned already
+        }
+        attrs = try list.toOwnedSlice(doc.allocator());
+        content = sig.content;
+    }
+    return .{
+        .number = number,
+        .attrs = attrs,
+        .marker = .{ .start = @intCast(line.start), .end = @intCast(line.start + k) },
+        .content = content,
+    };
+}
+
+/// Opens a `fnN.` footnote block: a paragraph whose close-time payload
+/// carries `class="footnote" id="fnN"` plus a leading superscript number.
+fn appendFootnoteContent(doc: *document.Document, block: *?ActiveBlock, sig: FootnoteSig, terminator: source.Span) ParseError!void {
+    block.* = .{
+        .kind = .paragraph,
+        .start = sig.content.start,
+        .end = sig.content.end,
+        .attrs = sig.attrs,
+        .footnote = sig.number,
+        .footnote_span = sig.marker,
+    };
+    try block.*.?.lines.append(doc.allocator(), .{
+        .content = sig.content,
+        .terminator = terminator,
+    });
+}
+
 /// True when the line opens any recognized block-level construct that
 /// terminates an open extended block (Textile 2: extended signatures stay
 /// active "until the next signature is found"): a `table<mods>.`
 /// signature, an extended or single-period `bq.`/`bc.`/`pre.` signature,
-/// an `hN.` heading, or a `p.` paragraph marker. List markers and table
-/// rows are not block signatures and remain content inside an extended
-/// block.
+/// an `hN.` heading, a `p.` paragraph marker, or a `fnN.` footnote
+/// signature. List markers and table rows are not block signatures and
+/// remain content inside an extended block.
 fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryTableSignature(doc, line) != null) return true;
     if (try tryExtendedMarker(doc, line) != null) return true;
@@ -570,6 +698,7 @@ fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryParagraphMarker(doc, line) != null) return true;
     if (try tryBlockQuoteMarker(doc, line) != null) return true;
     if (try tryCodeMarker(doc, line) != null) return true;
+    if (try tryFootnoteMarker(doc, line) != null) return true;
     return false;
 }
 
@@ -1429,6 +1558,13 @@ const ImageData = struct {
     link_href: ?Range,
 };
 
+/// A `[N]` footnote reference (Textile 2 "Footnotes").
+const FootnoteRefData = struct {
+    /// Full construct: `[` through `]` (relative offsets).
+    span: Range,
+    number: u16,
+};
+
 const InlineItem = union(enum) {
     /// Maximal text run between constructs (relative offsets into the line).
     text: Range,
@@ -1448,6 +1584,7 @@ const InlineItem = union(enum) {
     },
     link: LinkData,
     image: ImageData,
+    footnote: FootnoteRefData,
 };
 
 const PhraseOp = struct {
@@ -1543,6 +1680,17 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                 i += 1;
                 continue;
             }
+            if (b == '[') {
+                if (scanFootnoteRef(bytes, i)) |ref| {
+                    try appendTextItem(doc.allocator(), items, run_start, i);
+                    try items.append(doc.allocator(), .{ .footnote = ref });
+                    run_start = ref.span.end;
+                    i = run_start;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
             if (phraseOpFor(bytes, i)) |op| {
                 const open_ok = canOpenPhrase(bytes, i, op.len);
                 const close_ok = canClosePhrase(bytes, i, op.len);
@@ -1631,6 +1779,23 @@ fn scanLink(doc: *const document.Document, bytes: []const u8, i: usize, defs: *c
         .alias_href = defs.get(bytes[url_start..url_end]),
         .title = title,
     };
+}
+
+/// Recognizes a `[N]` footnote reference: `[` + at least one digit + `]`
+/// (Hobix "Footnotes"; Textile 2 "Footnotes": "the brackets with a number
+/// inside"). Any other bracketed shape stays literal text. Multi-digit
+/// numbers are allowed; numbers beyond `u16` stay literal (conservative).
+fn scanFootnoteRef(bytes: []const u8, i: usize) ?FootnoteRefData {
+    var j = i + 1;
+    var number: u16 = 0;
+    while (j < bytes.len and bytes[j] >= '0' and bytes[j] <= '9') : (j += 1) {
+        const d = bytes[j] - '0';
+        if (number > (std.math.maxInt(u16) - @as(u16, d)) / 10) return null;
+        number = number * 10 + d;
+    }
+    if (j == i + 1) return null; // at least one digit
+    if (j >= bytes.len or bytes[j] != ']') return null;
+    return .{ .span = .{ .start = i, .end = j + 1 }, .number = number };
 }
 
 /// Recognizes `!url!`, `!url(alt)!` (Hobix) / `!url (alt)!` (Textile 2), and
@@ -1830,6 +1995,11 @@ fn emitItems(doc: *document.Document, parent: *document.Node, content: source.Sp
                     const display = subSpan(content, l.display.start, l.display.end);
                     const text_node = try doc.createNode(.text, display, .{ .text = doc.text(display) });
                     try doc.appendChild(link, text_node);
+                    i += 1;
+                },
+                .footnote => |f| {
+                    const node = try doc.createNode(.footnote_ref, subSpan(content, f.span.start, f.span.end), .{ .footnote_ref = f.number });
+                    try doc.appendChild(scope.parent, node);
                     i += 1;
                 },
                 .image => |im| {
@@ -2954,9 +3124,10 @@ test "textile: link alias shapes, precedence, and literal fallbacks" {
         defer result.deinit();
         try std.testing.expectEqual(@as(usize, 2), result.document.root.children.items.len);
     }
-    // Non-definition shapes stay ordinary text (no links anywhere).
+    // Non-definition shapes stay ordinary text (no links anywhere). `[x]`
+    // is used rather than `[1]`, which is now a footnote reference (T13).
     {
-        var result = try oliver.parse(std.testing.allocator, "[1] See footnote\n[]http://x\n[x]\n[x] url with space\n", .textile, .{});
+        var result = try oliver.parse(std.testing.allocator, "[x] See note\n[]http://x\n[x]\n[x] url with space\n", .textile, .{});
         defer result.deinit();
         const p = result.document.root.children.items[0];
         try std.testing.expectEqual(document.Tag.paragraph, p.tag);
@@ -2965,7 +3136,7 @@ test "textile: link alias shapes, precedence, and literal fallbacks" {
         var text_found = false;
         while (try it.next()) |n| {
             if (n.tag == .link) return error.unexpected_link;
-            if (n.tag == .text and std.mem.indexOf(u8, n.data.text, "[1]") != null) text_found = true;
+            if (n.tag == .text and std.mem.indexOf(u8, n.data.text, "[x]") != null) text_found = true;
         }
         try std.testing.expect(text_found);
     }
@@ -3369,4 +3540,128 @@ test "textile: extended-block ownership and literal fallbacks" {
     try std.testing.expectEqual(document.Tag.paragraph, root.children.items[2].tag);
     try std.testing.expectEqual(document.Tag.paragraph, root.children.items[3].tag);
     try std.testing.expectEqual(document.Tag.block_quote, root.children.items[4].tag);
+}
+
+test "textile: fnN. footnote block structure" {
+    const oliver = @import("oliver.zig");
+
+    // The Textile 2 rendered form: `<p class="footnote" id="fn1"><sup>1</sup>
+    // content</p>` — the paragraph carries the class/id attrs, a leading
+    // plain sup with the number, a separating space, then inline content.
+    {
+        var result = try oliver.parse(std.testing.allocator, "fn1. Down here, in fact.\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.paragraph, p.tag);
+        try std.testing.expectEqual(@as(usize, 2), p.data.paragraph.attrs.len);
+        try std.testing.expectEqualStrings("class", p.data.paragraph.attrs[0].name);
+        try std.testing.expectEqualStrings("footnote", p.data.paragraph.attrs[0].value);
+        try std.testing.expectEqualStrings("id", p.data.paragraph.attrs[1].name);
+        try std.testing.expectEqualStrings("fn1", p.data.paragraph.attrs[1].value);
+        try std.testing.expectEqual(@as(usize, 3), p.children.items.len); // sup + space + text
+        const sup = p.children.items[0];
+        try std.testing.expectEqual(document.Tag.superscript, sup.tag);
+        try std.testing.expectEqualStrings("1", sup.children.items[0].data.text);
+        try std.testing.expectEqualStrings(" ", p.children.items[1].data.text);
+        try std.testing.expectEqualStrings("Down here, in fact.", p.children.items[2].data.text);
+    }
+    // A footnote block is a paragraph: continuation lines join with hard
+    // breaks, a blank line or signature ends it.
+    {
+        var result = try oliver.parse(std.testing.allocator, "fn2. first\nsecond\n\np. after\n", .textile, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+        const p = root.children.items[0];
+        try std.testing.expectEqualStrings("fn2", p.data.paragraph.attrs[1].value);
+        // sup, space, text, hard_break, text
+        try std.testing.expectEqual(@as(usize, 5), p.children.items.len);
+        try std.testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+    }
+    // Multi-digit numbers.
+    {
+        var result = try oliver.parse(std.testing.allocator, "fn12. Twelfth.\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqualStrings("fn12", p.data.paragraph.attrs[1].value);
+        try std.testing.expectEqualStrings("12", p.children.items[0].children.items[0].data.text);
+    }
+}
+
+test "textile: [N] footnote references in every inline context" {
+    const oliver = @import("oliver.zig");
+
+    // A `[N]` marker becomes a footnote_ref leaf; no boundary is required
+    // (Hobix: "elsewhere[1].").
+    {
+        var result = try oliver.parse(std.testing.allocator, "This is covered elsewhere[1].\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 3), p.children.items.len); // text + ref + text
+        const ref = p.children.items[1];
+        try std.testing.expectEqual(document.Tag.footnote_ref, ref.tag);
+        try std.testing.expectEqual(@as(u16, 1), ref.data.footnote_ref);
+    }
+    // Refs resolve in headings, list items, and table cells (the shared
+    // inline seam).
+    {
+        var result = try oliver.parse(
+            std.testing.allocator,
+            "h2. Head [3]\n\n* item[4]\n\n| cell[5] |\n\nfn3. Third.\n\nfn4. Fourth.\n\nfn5. Fifth.\n",
+            .textile,
+            .{},
+        );
+        defer result.deinit();
+        var it = try document.Document.Iterator.init(std.testing.allocator, result.document.root);
+        defer it.deinit();
+        var ref_count: usize = 0;
+        while (try it.next()) |n| {
+            if (n.tag == .footnote_ref) ref_count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 3), ref_count);
+    }
+    // Multi-digit refs carry the whole number.
+    {
+        var result = try oliver.parse(std.testing.allocator, "Note[12].\n", .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(@as(u16, 12), result.document.root.children.items[0].children.items[1].data.footnote_ref);
+    }
+}
+
+test "textile: footnote literal fallbacks and marker edges" {
+    const oliver = @import("oliver.zig");
+
+    // Bracketed shapes that are not `[digits]` stay text; `fn` markers
+    // without a digit run, a period+space, or content stay literal.
+    var result = try oliver.parse(
+        std.testing.allocator,
+        "[x] letter\n\n[ 1] space\n\nfn1 no period\n\nfnx. no digit\n\nfn1. \n\nfn1.. double\n",
+        .textile,
+        .{},
+    );
+    defer result.deinit();
+    for (result.document.root.children.items) |node| {
+        try std.testing.expectEqual(document.Tag.paragraph, node.tag);
+        try std.testing.expectEqual(@as(usize, 0), node.data.paragraph.attrs.len);
+    }
+
+    // `[0]` is a digit run and resolves like any other (both references
+    // accept "a number inside" without a lower bound).
+    {
+        var result2 = try oliver.parse(std.testing.allocator, "fn0. Zero.\n\nsee[0]\n", .textile, .{});
+        defer result2.deinit();
+        const root = result2.document.root;
+        try std.testing.expectEqual(document.Tag.footnote_ref, root.children.items[1].children.items[1].tag);
+        try std.testing.expectEqual(@as(u16, 0), root.children.items[1].children.items[1].data.footnote_ref);
+    }
+
+    // A `fnN.` signature terminates an open extended quote.
+    {
+        var result3 = try oliver.parse(std.testing.allocator, "bq.. quote\nfn1. ends it\n", .textile, .{});
+        defer result3.deinit();
+        const root = result3.document.root;
+        try std.testing.expectEqual(document.Tag.block_quote, root.children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+        try std.testing.expectEqualStrings("fn1", root.children.items[1].data.paragraph.attrs[1].value);
+    }
 }
