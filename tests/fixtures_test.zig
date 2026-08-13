@@ -2193,6 +2193,43 @@ const cooklang_fixtures = [_]CooklangFixture{
     },
 };
 
+// Canonical-serialization fixture pairs (docs/COOKLANG.md §10): input
+// `.cook` files whose canonical serialization must equal the expected
+// `.out.cook` bytes exactly.
+const cooklang_serialize_fixtures = [_]CooklangFixture{
+    .{
+        .name = "serialize-basic",
+        .input = @embedFile("fixtures/cooklang/serialize-basic.cook"),
+        .expected = @embedFile("fixtures/cooklang/serialize-basic.out.cook"),
+    },
+    .{
+        .name = "serialize-literal",
+        .input = @embedFile("fixtures/cooklang/serialize-literal.cook"),
+        .expected = @embedFile("fixtures/cooklang/serialize-literal.out.cook"),
+    },
+};
+
+fn serializeCooklang(input: []const u8) !std.ArrayList(u8) {
+    var result = try oliver.cooklang.parse(std.testing.allocator, input, .{});
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.cooklang_serialize.serialize(std.testing.allocator, &aw.writer, &result.recipe, .{});
+    return aw.toArrayList();
+}
+
+fn checkCooklangSerialize(name: []const u8, input: []const u8, expected: []const u8) !void {
+    var out = try serializeCooklang(input);
+    defer out.deinit(std.testing.allocator);
+    if (!std.mem.eql(u8, expected, out.items)) {
+        std.debug.print(
+            "cooklang serialize fixture [{s}] mismatch\n--- expected ({d} bytes) ---\n{s}\n--- actual ({d} bytes) ---\n{s}\n",
+            .{ name, expected.len, expected, out.items.len, out.items },
+        );
+        return error.FixtureMismatch;
+    }
+}
+
 fn renderCooklangHtml(input: []const u8) !std.ArrayList(u8) {
     var result = try oliver.cooklang.parse(std.testing.allocator, input, .{});
     defer result.deinit();
@@ -2250,6 +2287,20 @@ test "textile fixtures" {
 test "cooklang fixtures" {
     for (cooklang_fixtures) |f| {
         try checkCooklangFixture(f.name, f.input, f.expected);
+    }
+}
+
+test "cooklang serialize fixtures" {
+    for (cooklang_serialize_fixtures) |f| {
+        try checkCooklangSerialize(f.name, f.input, f.expected);
+    }
+    // Round-trip: re-serializing the canonical output is a fixed point.
+    for (cooklang_serialize_fixtures) |f| {
+        var once = try serializeCooklang(f.input);
+        defer once.deinit(std.testing.allocator);
+        var twice = try serializeCooklang(once.items);
+        defer twice.deinit(std.testing.allocator);
+        try std.testing.expectEqualSlices(u8, once.items, twice.items);
     }
 }
 
