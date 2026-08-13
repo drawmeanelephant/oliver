@@ -398,4 +398,17 @@ not recognized) is Oliver's conservative deterministic choice so the
 `{*}`/`{-L}` macros stay whole; no Textile parser implementation
 source was consulted.
 
+Session 16 (T21 phrase attributes on every operator) finding:
+Hobix "Phrase Attributes" — "All block attributes can be applied to
+phrases as well by placing them just inside the opening modifier",
+with the examples `*{color:red}blushed*` →
+`<strong style="color:red;">blushed</strong>`, `_(big)sprouted_` →
+`<em class="big">sprouted</em>`, and `%[es]cabeza%` →
+`<span lang="es">cabeza</span>` — extends the T20 span machinery to
+the whole phrase family, with the same Textile 2 inline modifier list
+(style, lang, class/id). The `{`-after-opener reading (`*{c|}bold*`
+is a style token, not a macro) is the deterministic consequence of
+"all block attributes ... just inside the opening modifier"; no
+Textile parser implementation source was consulted.
+
 No Markdown or Textile parser implementation source was consulted.

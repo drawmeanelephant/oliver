@@ -1993,6 +1993,24 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/span-attr-literal.textile"),
         .expected = @embedFile("fixtures/textile/span-attr-literal.html"),
     },
+    // The same phrase-attribute machinery on the other operators (Hobix
+    // "Phrase Attributes": "all block attributes can be applied to phrases
+    // as well by placing them just inside the opening modifier"):
+    // `*{color:red}x*` → `<strong style="color:red;">`, `_(big)x_` →
+    // `<em class="big">`, and the doubled/long operators, with the same
+    // fallbacks as the span forms — malformed runs, whitespace/empty
+    // content — plus the em-dash interplay where an unpaired `--` still
+    // em-dashes (docs/TEXTILE-PARITY.md §19).
+    .{
+        .name = "phrase-attr-basic",
+        .input = @embedFile("fixtures/textile/phrase-attr-basic.textile"),
+        .expected = @embedFile("fixtures/textile/phrase-attr-basic.html"),
+    },
+    .{
+        .name = "phrase-attr-literal",
+        .input = @embedFile("fixtures/textile/phrase-attr-literal.textile"),
+        .expected = @embedFile("fixtures/textile/phrase-attr-literal.html"),
+    },
     // Inline `==...==` escaping (Textile 2 "Escaping"): phrase delimiters
     // and the character replacements inside the region stay literal, while
     // formatting outside still applies — the current docs' quote example

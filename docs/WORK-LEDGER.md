@@ -29,6 +29,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T18 image modifiers | the documented image family — alignment (`!<x!`…`!~x!`), sizing (`10x20`, `10w 20h`, `20%x40%`, `20%`), `{style}`/`(class#id)`/padding — composes onto `.image.attrs`/width/height through the §8 machinery; shared model + renderer gain defaulted width/height/attrs; Markdown untouched | after T17 | merged on main (PR #33) |
 | Textile worker | T19 big/small phrases | Textile 2's `++bigger++`/`--smaller--` → `<big>`/`<small>` slot into the phrase machinery as doubled `+`/`-` runs; a matched `--` pair is consumed (never em-dashed) while space-adjacent/intraword/numeric/unmatched `--` still em-dash; Tag gains big/small; Markdown untouched | after T18 | merged on main (PR #34) |
 | Textile worker | T20 span attrs + `{...}` macros | `%{style}(class#id)[lang]x%` phrase attributes compose onto `.span` attrs (Hobix "Phrase Attributes"; malformed runs literal, empty-content runs fall back to a plain span, a `%` inside a style cannot close the span); Textile 2's documented `{...}` macro table with mirrored orders; the brace-edge phrase rule keeps `{*}`/`{-L}` whole for the macro pass; Markdown untouched | after T19 | merged on main (PR #35) |
+| Textile worker | T21 phrase attributes on all operators | Hobix "Phrase Attributes" extended to the whole family: `*{color:red}x*` → `<strong style="color:red;">`, `_(big)x_` → `<em class="big">`, doubled/long operators included, via the shared `.phrase` payload + a combined renderer arm; same fallbacks as the span forms; a `{` after an opener is a style (macros only unattached); `--` em-dash interplay intact; Markdown untouched | after T20 | in flight (T21) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -734,6 +735,47 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Integration:** after T19 (the 652/652 gate is re-verified).
 - **State:** integrated on main (PR #35). 193/193 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T21 — Phrase attributes on every operator
+
+- **Objective:** extend the T20 span-attribute machinery to the other
+  phrase operators, implementing Hobix's `*{color:red}x*` and
+  `_(big)x_` forms — the recorded T20 deferral.
+- **Normative source:** Hobix "Phrase Attributes" — "all block
+  attributes can be applied to phrases as well by placing them just
+  inside the opening modifier", with the examples
+  `*{color:red}blushed*` → `<strong style="color:red;">blushed</strong>`,
+  `_(big)sprouted_` → `<em class="big">sprouted</em>`, and
+  `%[es]cabeza%` → `<span lang="es">cabeza</span>` — the same
+  Textile 2 inline modifier list (style, lang, class/id) as T20.
+- **Dependencies:** the T20 span-attribute machinery (SpanMods +
+  scanSpanMods, the opaque run skip, the emit composition), the
+  block-attribute machinery (T10), the phrase machinery (T4), the
+  character-replacement pass (T15).
+- **Seams:** `src/document.zig` + `src/html.zig` (a shared `.phrase`
+  payload for non-span phrase tags; the ten phrase-tag renderer cases
+  collapse into one combined arm writing attrs; Markdown phrase nodes
+  keep `.none` and render without attrs) and `src/textile.zig` (the
+  scan's modifier gate drops its `%`-only condition, the opaque skip
+  generalizes, the emit composes `.phrase` attrs for any phrase tag
+  with a run).
+- **Acceptance:** Hobix's example line byte-for-byte; every operator
+  single, doubled (`**{...}x**`, `--{...}x--`), and long (`^[fr]x^`,
+  `~[de]x~`) composes onto its own tag; the same fallback contract as
+  the span forms (malformed run literal, whitespace-after not an
+  opener, empty-content falls back to a plain phrase with the run
+  bytes); an operator char inside a style value cannot close the
+  phrase; `--` em-dash interplay intact; a `{` directly after an
+  opener is a style token (the `*{c|}bold*` macro pin becomes a style
+  pin; the `char-macro-literal` fixture keeps a genuine survival
+  case); the 652/652 gate is untouched.
+- **Tests:** 2 unit tests (model attrs + spans + Hobix's line, the
+  fallbacks), 2 new Textile fixture pairs (`phrase-attr-basic`,
+  `phrase-attr-literal`) plus the `char-macro-literal` pin update.
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T20 (the 652/652 gate is re-verified).
+- **State:** in flight (T21). 195/195 tests green; canonical
+  scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations
 

@@ -104,8 +104,9 @@ pub const Tag = enum {
     superscript,
     /// Subscript inline content (Textile `~x~`). Children: inlines.
     subscript,
-    /// A generic inline span (Textile `%x%`). Children: inlines. No payload:
-    /// attribute-bearing forms (`%{style}x%` etc.) are a later milestone.
+    /// A generic inline span (Textile `%x%`). Children: inlines. The
+    /// attribute-bearing forms (`%{style}(class#id)[lang]x%`) carry their
+    /// composed attrs in `data.span` (Hobix "Phrase Attributes").
     span,
     /// Inline code (Markdown backtick span; Textile `@x@`). No
     /// children; `data.code_span` is the normalized content, one of the text
@@ -226,11 +227,25 @@ pub const Data = union(enum) {
     /// Hobix "Phrase Attributes"), empty for a plain span. Markdown never
     /// produces span nodes.
     span: Span,
+    /// `.phrase`: the Textile phrase attributes on a non-span phrase node
+    /// (`*{style}x*`, `_(class)x_`, …), written on the phrase's own tag.
+    /// Markdown phrase nodes keep `.none` and render without attrs.
+    phrase: Phrase,
 };
 
 /// The payload of a `.span` node: the Textile phrase attributes in the
 /// fixed render order (style/class/id/lang; docs/TEXTILE-PARITY.md §18).
 pub const Span = struct {
+    attrs: []const Attribute = &.{},
+};
+
+/// The payload of a non-span phrase node (`*x*`, `_x_`, `-x-`, …) that
+/// carries Textile phrase attributes: the composed attrs in the fixed
+/// render order, written on the phrase's own HTML tag
+/// (`*{color:red}x*` → `<strong style="color:red;">`, Hobix "Phrase
+/// Attributes"). Markdown phrase nodes carry `.none` instead and render
+/// without attrs.
+pub const Phrase = struct {
     attrs: []const Attribute = &.{},
 };
 
