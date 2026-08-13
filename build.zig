@@ -4,8 +4,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // The core library. Consumers import it by name (see build.zig.zon).
-    const oliver_mod = b.createModule(.{
+    // The core library. Consumers import it by name (see build.zig.zon);
+    // `addModule` registers it as the package's "oliver" module.
+    const oliver_mod = b.addModule("oliver", .{
         .root_source_file = b.path("src/oliver.zig"),
         .target = target,
         .optimize = optimize,
