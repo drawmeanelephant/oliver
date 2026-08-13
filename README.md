@@ -177,7 +177,7 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (231 tests)
+zig build test    # run all tests (242 tests)
 zig build         # build the static library and CLI into zig-out/
 zig build cooklang-conformance   # Cooklang canonical corpus (vendored)
 ```
@@ -208,6 +208,16 @@ try oliver.cooklang_html.render(allocator, &aw.writer, &cooked.recipe, .{});
 // Canonical serialization: semantic Recipe -> valid .cook (idempotent;
 // docs/COOKLANG.md §10).
 try oliver.cooklang_serialize.serialize(allocator, &aw.writer, &cooked.recipe, .{});
+
+// Pure scaling: Recipe -> scaled Recipe (exact rationals; fixed `=1`
+// quantities, timers, cookware, and recipe references stay untouched;
+// docs/COOKLANG.md §11).
+var scaled = try oliver.cooklang_scale.scaleRecipe(
+    allocator,
+    &cooked.recipe,
+    .{ .servings = 4 },
+);
+defer scaled.deinit();
 ```
 
 The caller supplies the allocator; the document (or recipe) owns an arena and
@@ -222,6 +232,8 @@ oliver render --from markdown  < document.md
 oliver render --from textile   < document.textile
 oliver render --from cooklang  < recipe.cook
 oliver serialize --from cooklang < recipe.cook   # canonical .cook
+oliver scale --from cooklang --factor 2 < recipe.cook   # scaled .cook
+oliver scale --from cooklang --servings 4 < recipe.cook  # via servings
 ```
 
 A thin stdin/stdout adapter — all semantics live in the library.

@@ -2209,6 +2209,54 @@ const cooklang_serialize_fixtures = [_]CooklangFixture{
     },
 };
 
+// Scaling fixture pairs (docs/COOKLANG.md §11): input `.cook` files
+// whose canonical scaled serialization must equal the expected
+// `.out.cook` bytes exactly.
+const CooklangScaleFixture = struct {
+    name: []const u8,
+    by: oliver.cooklang_scale.ScaleBy,
+    input: []const u8,
+    expected: []const u8,
+};
+
+const cooklang_scale_fixtures = [_]CooklangScaleFixture{
+    .{
+        .name = "scale-basic",
+        .by = .{ .factor = .{ .num = 2, .den = 1 } },
+        .input = @embedFile("fixtures/cooklang/scale-basic.cook"),
+        .expected = @embedFile("fixtures/cooklang/scale-basic.out.cook"),
+    },
+    .{
+        .name = "scale-servings",
+        .by = .{ .servings = 4 },
+        .input = @embedFile("fixtures/cooklang/scale-servings.cook"),
+        .expected = @embedFile("fixtures/cooklang/scale-servings.out.cook"),
+    },
+};
+
+fn scaleCooklang(input: []const u8, by: oliver.cooklang_scale.ScaleBy) !std.ArrayList(u8) {
+    var result = try oliver.cooklang.parse(std.testing.allocator, input, .{});
+    defer result.deinit();
+    var scaled = try oliver.cooklang_scale.scaleRecipe(std.testing.allocator, &result.recipe, by);
+    defer scaled.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.cooklang_serialize.serialize(std.testing.allocator, &aw.writer, &scaled, .{});
+    return aw.toArrayList();
+}
+
+fn checkCooklangScale(name: []const u8, input: []const u8, by: oliver.cooklang_scale.ScaleBy, expected: []const u8) !void {
+    var out = try scaleCooklang(input, by);
+    defer out.deinit(std.testing.allocator);
+    if (!std.mem.eql(u8, expected, out.items)) {
+        std.debug.print(
+            "cooklang scale fixture [{s}] mismatch\n--- expected ({d} bytes) ---\n{s}\n--- actual ({d} bytes) ---\n{s}\n",
+            .{ name, expected.len, expected, out.items.len, out.items },
+        );
+        return error.FixtureMismatch;
+    }
+}
+
 fn serializeCooklang(input: []const u8) !std.ArrayList(u8) {
     var result = try oliver.cooklang.parse(std.testing.allocator, input, .{});
     defer result.deinit();
@@ -2297,6 +2345,20 @@ test "cooklang serialize fixtures" {
     // Round-trip: re-serializing the canonical output is a fixed point.
     for (cooklang_serialize_fixtures) |f| {
         var once = try serializeCooklang(f.input);
+        defer once.deinit(std.testing.allocator);
+        var twice = try serializeCooklang(once.items);
+        defer twice.deinit(std.testing.allocator);
+        try std.testing.expectEqualSlices(u8, once.items, twice.items);
+    }
+}
+
+test "cooklang scale fixtures" {
+    for (cooklang_scale_fixtures) |f| {
+        try checkCooklangScale(f.name, f.input, f.by, f.expected);
+    }
+    // Scaled output is stable: serializing it again is a fixed point.
+    for (cooklang_scale_fixtures) |f| {
+        var once = try scaleCooklang(f.input, f.by);
         defer once.deinit(std.testing.allocator);
         var twice = try serializeCooklang(once.items);
         defer twice.deinit(std.testing.allocator);

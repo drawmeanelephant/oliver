@@ -4,6 +4,9 @@
 //!     oliver render    --from textile  < document.textile
 //!     oliver render    --from cooklang < recipe.cook
 //!     oliver serialize --from cooklang < recipe.cook > canonical.cook
+//!     oliver scale --from cooklang --factor 2 < recipe.cook > doubled.cook
+//!     oliver scale --from cooklang --factor 3/2 < recipe.cook
+//!     oliver scale --from cooklang --servings 4 < recipe.cook
 //!
 //! All parser and renderer semantics live in the library; this file only
 //! handles arguments and stdio. It uses the Zig 0.16 `std.process.Init`
@@ -22,6 +25,10 @@ pub fn main(init: std.process.Init) !u8 {
     var dialect: ?oliver.Dialect = null;
     var cooklang = false;
     var serialize = false;
+    var scale = false;
+    var factor_num: ?u32 = null;
+    var factor_den: ?u32 = null;
+    var servings_target: ?u32 = null;
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--from")) {
             const value = it.next() orelse return usage();
@@ -36,14 +43,32 @@ pub fn main(init: std.process.Init) !u8 {
             // Subcommand; the dialect flag is what matters.
         } else if (std.mem.eql(u8, arg, "serialize")) {
             serialize = true;
+        } else if (std.mem.eql(u8, arg, "scale")) {
+            scale = true;
+        } else if (std.mem.eql(u8, arg, "--factor")) {
+            const value = it.next() orelse return usage();
+            var parts = std.mem.splitScalar(u8, value, '/');
+            const num = parts.next() orelse return usage();
+            factor_num = std.fmt.parseUnsigned(u32, num, 10) catch return usage();
+            if (parts.next()) |den| {
+                factor_den = std.fmt.parseUnsigned(u32, den, 10) catch return usage();
+                if (factor_den.? == 0) return usage();
+            }
+            if (parts.next() != null) return usage();
+        } else if (std.mem.eql(u8, arg, "--servings")) {
+            const value = it.next() orelse return usage();
+            servings_target = std.fmt.parseUnsigned(u32, value, 10) catch return usage();
+            if (servings_target.? == 0) return usage();
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return usage();
         } else return usage();
     }
     if (!cooklang and dialect == null) return usage();
-    // Serialization is a Cooklang capability only (Markdown/Textile have
-    // no canonical form; the shared renderer is the output for those).
-    if (serialize and !cooklang) return usage();
+    // Serialization and scaling are Cooklang capabilities only
+    // (Markdown/Textile have no canonical form; the shared renderer is
+    // the output for those). Scaling needs exactly one mode.
+    if ((serialize or scale) and !cooklang) return usage();
+    if (scale and (factor_num == null) == (servings_target == null)) return usage();
 
     // Read all of stdin into memory.
     var input = std.ArrayList(u8).empty;
@@ -74,6 +99,20 @@ pub fn main(init: std.process.Init) !u8 {
                 std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
                 return 1;
             };
+        } else if (scale) {
+            const by: oliver.cooklang_scale.ScaleBy = if (factor_num) |n|
+                .{ .factor = .{ .num = n, .den = factor_den orelse 1 } }
+            else
+                .{ .servings = servings_target.? };
+            var scaled = oliver.cooklang_scale.scaleRecipe(gpa, &result.recipe, by) catch |err| {
+                std.debug.print("oliver: scale failed: {s}\n", .{@errorName(err)});
+                return 1;
+            };
+            defer scaled.deinit();
+            oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &scaled, .{}) catch |err| {
+                std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
+                return 1;
+            };
         } else {
             oliver.cooklang_html.render(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
                 std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
@@ -100,9 +139,10 @@ fn usage() u8 {
     std.debug.print(
         \\usage: oliver render --from <markdown|textile|cooklang>
         \\       oliver serialize --from cooklang
+        \\       oliver scale --from cooklang (--factor <num[/den]> | --servings <n>)
         \\
         \\Reads a document from stdin and writes rendered HTML (or, for
-        \\serialize, canonical Cooklang text) to stdout.
+        \\serialize/scale, canonical Cooklang text) to stdout.
         \\
     , .{});
     return 1;

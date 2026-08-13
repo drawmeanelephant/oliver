@@ -36,6 +36,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T25 notextile. raw passthrough | the audit's last deferral: `notextile.`/`notextile..` (current Textile docs "No formatting"; Textile 2 uses `==` instead) opens a raw block emitted as one `.html_block` leaf — unformatted, unescaped, CRLF preserved — the signature form of the `==` escape; single-period blank termination, extended runs to the next signature, bare-marker blocks, literal lookalikes; Markdown untouched | after T24 | merged on main (PR #41) |
 | Cooklang worker | CK1 Cooklang frontend | a first-class `*.cook` frontend: a typed Recipe model (blocks/steps/ingredients/cookware/timers/notes/sections/preps/recipe-refs/frontmatter) with exact spans, built from the official spec + EBNF + canonical corpus (pinned revision, MIT) under clean-room rules; canonical conformance harness; Oliver-owned tests; deterministic HTML policy; `--from cooklang` CLI; Markdown/Textile untouched | after the Textile audit (T1–T25) | merged (PR #43) |
 | Cooklang worker | CK2 canonical serializer | `src/cooklang_serialize.zig`: semantic Recipe → valid `.cook`, deterministic and idempotent (canonical, not byte-identical round-tripping — docs/COOKLANG.md §10); front-matter passthrough; empty-front-matter parser fix (`---\n---` no longer panics); `oliver serialize --from cooklang` CLI; the conformance harness asserts the fixed point over every corpus source; serialize fixture pairs; Cooklang unit tests wired into `zig build test` (they had been skipped by lazy analysis); Cooklang gate added to CI; Markdown/Textile untouched | after CK1 (first stretch goal) | merged (PR #45) |
+| Cooklang worker | CK3 pure scaling | `src/cooklang_scale.zig`: `scaleRecipe` derives a scaled Recipe — exact-rational linear scaling (no f64), `.servings` mode reading frontmatter `servings`/`serves`/`yield` (leading number, default 1), `=`-fixed quantities locked, timers/cookware/references never scaled, non-numeric unchanged, frontmatter untouched; `oliver scale --from cooklang (--factor | --servings)` CLI; 10 unit tests + 2 fixture pairs; per the conventions' "Scaling and Servings" (clean-room session 22); Markdown/Textile untouched | after CK2 (second stretch goal) | merged (PR #46) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1007,6 +1008,43 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   canonical conformance 60/60 with the round-trip phase clean;
   CommonMark gate still 652/652 with 0 mismatches; Textile suite
   untouched; Cooklang conformance gate added to CI.
+
+## CK3 — Pure Cooklang scaling
+
+- **Objective:** second stretch goal — a pure `scaleRecipe()` semantic
+  operation on the Recipe model, preserving fixed quantities and
+  leaving referenced recipes untouched, per the conventions' "Scaling
+  and Servings" section.
+- **Normative sources:** the official Cooklang conventions
+  (https://cooklang.org/docs/conventions/, "Scaling and Servings",
+  fetched 2026-08-13) — conventions material (source-hierarchy level
+  5); the language spec defines no scaling. Provenance and chosen
+  behaviors in docs/CLEANROOM.md session 22.
+- **Dependencies:** `src/cooklang.zig` model + `parseQuantity` (now
+  public) + the serializer for the emission path. No filesystem,
+  network, or global state; the input recipe is never mutated.
+- **Seams:** `src/cooklang_scale.zig` (new: `scaleRecipe`, `ScaleBy`
+  factor/servings, exact rationals, terminating-decimal formatting),
+  `src/main.zig` (`scale --from cooklang --factor num[/den] |
+  --servings n`), `src/oliver.zig` (export + test wiring),
+  `tests/fixtures/cooklang/scale-*.cook` (pairs), `tests/fixtures_test.zig`.
+- **Acceptance:** linear scaling of ingredient quantities; `=`-fixed
+  quantities locked; timers/cookware/references/non-numeric unchanged;
+  servings mode reads frontmatter `servings`/`serves`/`yield`
+  (leading number, default 1); exact arithmetic (whole → integer,
+  fractions reduced, decimal family → exact terminating decimal when
+  den is 2^a·5^b, else fraction); invalid factors rejected; scaled
+  output re-parses with consistent numeric views.
+- **Tests:** 10 unit tests (families, exactness, servings metadata,
+  invalid factors, sections/notes, empty inputs) + 2 fixture pairs
+  (`scale-basic` factor 2, `scale-servings` via frontmatter) with
+  fixed-point stability.
+- **Parallelism:** yes; Markdown/Textile untouched; `parseQuantity`
+  change is visibility-only.
+- **Integration:** after CK2; the 652/652 gate is re-verified.
+- **State:** merged on main (PR #46). 242/242 tests green (222 lib + 13
+  fixtures + 7 harness); Cooklang conformance 60/60; CommonMark gate
+  still 652/652 with 0 mismatches; Textile suite untouched.
 
 ## C1 — Classified conformance expectations
 

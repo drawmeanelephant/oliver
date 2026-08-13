@@ -996,8 +996,9 @@ fn findScalar(bytes: []const u8, from: usize, to: usize, c: u8) ?usize {
 /// (`0` or no leading zero), a decimal, or a fraction of two canonical
 /// integers with a non-zero denominator (so `01/2` stays text, per the
 /// corpus). Everything else stays a string; the source text is always
-/// preserved by the model.
-fn parseQuantity(text: []const u8) ?Quantity {
+/// preserved by the model. Public so derived operations (scaling,
+/// conformance comparisons) share one acceptance rule.
+pub fn parseQuantity(text: []const u8) ?Quantity {
     if (canonicalInt(text)) |v| return .{ .int = v };
     if (findScalar(text, 0, text.len, '.')) |d| {
         const ip = text[0..d];

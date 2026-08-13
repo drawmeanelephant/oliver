@@ -2,10 +2,11 @@
 
 Tests are product contracts. `zig build test` runs three suites:
 
-1. **Library module tests** — 212 `test` blocks inside `src/*.zig` covering
+1. **Library module tests** — 222 `test` blocks inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
-   frontends, the Cooklang frontend (parser + canonical serializer),
-   Unicode case folding, the HTML renderers, and the public API.
+   frontends, the Cooklang frontend (parser + canonical serializer +
+   pure scaling), Unicode case folding, the HTML renderers, and the
+   public API.
    Markdown tests pin the container stack, thematic-break/list precedence,
    multiline Setext transformation, reference-definition interaction,
    terminal-backslash behavior, fenced-code payload/spans, every implemented
@@ -144,7 +145,10 @@ Tests are product contracts. `zig build test` runs three suites:
    `cooklang-literal`; docs/COOKLANG.md) and the canonical serializer
    round-trip pairs (`serialize-basic`, `serialize-literal` — input
    `.cook` → expected canonical `.cook`, pinning the fixed-point and
-   literal/degraded round trips; docs/COOKLANG.md §10) plus adversarial storms
+   literal/degraded round trips; docs/COOKLANG.md §10) and the scaling
+   pairs (`scale-basic` factor 2, `scale-servings` via frontmatter
+   servings — input `.cook` → expected scaled canonical `.cook`;
+   docs/COOKLANG.md §11) plus adversarial storms
    (huge marker/brace runs, thousands of adjacent ingredients, deep
    preparations, an unterminated block comment, 5,000 steps, a 100 KB
    single line) that must render twice to identical bytes. The suite also
@@ -161,8 +165,8 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **231/231 tests passing** with Zig 0.16.0
-(212 library module tests + 12 fixture/adversarial tests + 7
+The current complete result is **242/242 tests passing** with Zig 0.16.0
+(222 library module tests + 13 fixture/adversarial tests + 7
 conformance-harness tests). On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the
 Textile wall stays fully green, and the Cooklang canonical corpus passes

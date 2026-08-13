@@ -530,3 +530,25 @@ policy, four stable codes); (6) frontmatter requires both fences at
 the file start.
 
 No Markdown or Textile parser implementation source was consulted.
+
+Session 22 (CK3 pure scaling) provenance record: the scaling operation
+uses only the official Cooklang conventions, "Scaling and Servings"
+(https://cooklang.org/docs/conventions/, fetched 2026-08-13), which is
+conventions material (source-hierarchy level 5) — the language spec
+itself defines no scaling. No parser implementation source was
+consulted. The chosen behaviors, all narrowest-defensible from that
+page and pinned by Oliver-owned tests: (1) linear scaling of
+ingredient quantities; (2) fixed quantities use a leading `=`
+(`@salt{=1%tsp}`) and never scale; (3) timers and cookware never
+scale; (4) referenced recipes are not scaled — their `{quantity}` is a
+directive for scaling the referenced recipe (an Oliver consumer
+concern), so `is_recipe_reference` tokens pass through untouched; (5)
+servings metadata keys are `servings`/`serves`/`yield`, the leading
+number is the count, and the default is 1; (6) non-numeric quantities
+cannot scale and stay unchanged. Formatting policy (whole results as
+integers, fractions otherwise, terminating decimals for decimal-family
+sources) is Oliver's own canonical choice, documented in
+src/cooklang_scale.zig and docs/COOKLANG.md §11, not claimed to be
+convention behavior.
+
+No Markdown or Textile parser implementation source was consulted.

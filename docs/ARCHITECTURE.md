@@ -42,10 +42,12 @@ The two boundaries that matter:
   source; nothing is copied.
 - **Document/Recipe → renderer**: rendering is dialect-independent and
   never reparses source. The renderer is the only place HTML bytes are
-  decided. `src/html.zig` renders the Document; `src/cooklang_html.zig`
-  renders the Recipe under its own documented policy, and
+  decided. `src/html.zig` renders the Document;  `src/cooklang_html.zig`
+  renders the Recipe under its own documented policy,
   `src/cooklang_serialize.zig` writes canonical `.cook` (semantic, not
-  byte-identical round-trip — docs/COOKLANG.md §10).
+  byte-identical round-trip — docs/COOKLANG.md §10), and
+  `src/cooklang_scale.zig` derives scaled Recipes purely from the
+  model — no filesystem resolution, ever (docs/COOKLANG.md §11).
 
 ## Module map
 
@@ -61,6 +63,7 @@ The two boundaries that matter:
 | `src/html.zig` | deterministic HTML renderer (Document) |
 | `src/cooklang_html.zig` | deterministic Cooklang HTML policy (Recipe) |
 | `src/cooklang_serialize.zig` | canonical Cooklang serializer (Recipe → valid `.cook`) |
+| `src/cooklang_scale.zig` | pure Cooklang scaling (Recipe → scaled Recipe, exact rationals) |
 | `src/main.zig` | provisional CLI: arguments + stdio only; no parser semantics |
 | `tools/cooklang_conformance.zig` | Cooklang canonical-corpus harness (`zig build cooklang-conformance`) |
 | `tests/fixtures_test.zig` | fixture-driven tests + adversarial smoke tests |
