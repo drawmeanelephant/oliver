@@ -12,21 +12,37 @@ source bytes
 dialect parser (markdown | textile)
     |
     v
-normalized typed document
+normalized typed document ──────> renderer (html) ─> output bytes
+
+source bytes (cooklang)
     |
     v
-renderer (html)
+cooklang parser
     |
     v
-output bytes
+typed Recipe ───────────────────> cooklang_html policy ─> output bytes
 ```
+
+Two document families, deliberately separate:
+
+- **Markdown/Textile → Document**: both dialects converge into one typed
+  model. Textual payloads are spans/slices into the source; nothing is
+  copied.
+- **Cooklang → Recipe**: Cooklang is semantically richer than prose markup
+  (ingredients, cookware, timers, preparations, recipe references), so it
+  gets its own typed model (`src/cooklang.zig`) rather than being deformed
+  through the Document IR. It reuses Oliver's infrastructure — spans,
+  diagnostics, arenas, byte borrowing, `source.Lines`, unicode predicates,
+  writers. Full contract: docs/COOKLANG.md.
 
 The two boundaries that matter:
 
-- **Parser → document**: dialects converge into one typed model. Textual
-  payloads are spans/slices into the source; nothing is copied.
-- **Document → renderer**: rendering is dialect-independent and never
-  reparses source. The renderer is the only place HTML bytes are decided.
+- **Parser → document/recipe**: textual payloads are spans/slices into the
+  source; nothing is copied.
+- **Document/Recipe → renderer**: rendering is dialect-independent and
+  never reparses source. The renderer is the only place HTML bytes are
+  decided. `src/html.zig` renders the Document; `src/cooklang_html.zig`
+  renders the Recipe under its own documented policy.
 
 ## Module map
 
@@ -38,8 +54,11 @@ The two boundaries that matter:
 | `src/diagnostic.zig` | structured diagnostics (severity, code, offset, line, column, span, message) |
 | `src/markdown.zig` | Markdown frontend (block pass + inline pass) |
 | `src/textile.zig` | Textile frontend (block pass + inline pass) |
-| `src/html.zig` | deterministic HTML renderer |
+| `src/cooklang.zig` | Cooklang frontend: typed Recipe model + parser |
+| `src/html.zig` | deterministic HTML renderer (Document) |
+| `src/cooklang_html.zig` | deterministic Cooklang HTML policy (Recipe) |
 | `src/main.zig` | provisional CLI: arguments + stdio only; no parser semantics |
+| `tools/cooklang_conformance.zig` | Cooklang canonical-corpus harness (`zig build cooklang-conformance`) |
 | `tests/fixtures_test.zig` | fixture-driven tests + adversarial smoke tests |
 
 Frontends are deliberately independent files: they share the document model

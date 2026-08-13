@@ -135,6 +135,36 @@ below).
 | character replacements | implemented | Applied to plain text in the Textile inline pass: straight `"`/`'` become curly (direction by the surrounding source bytes), `--` → em dash (a `--` that forms a matched phrase pair is consumed by the phrase scanner instead — see the big/small row), a space-surrounded `-` → en dash, `...` → ellipsis, a digit-adjacent `x` → dimension sign (×), and the documented parenthesized symbols `(c)`/`(r)`/`(tm)` (case-insensitive) → ©/®/™, `(1/4)`/`(1/2)`/`(3/4)` → ¼/½/¾, `(o)` → °, `(+/-)` → ±. HTML-looking `<...>` regions and verbatim payloads (`@code@`, code blocks, link/image src/alt/title) are exempt; the replacements apply inside phrase content and link display text (Hobix renders `it's` inside a link as a curly apostrophe). Replaced text is an arena-owned payload; untouched text still borrows the source. A run of 3+ hyphens/periods is replaced left-to-right (`---` → `—` + `-`). **Textile 2's `{...}` character-macro table is implemented (T20):** the documented forms with their mirrored orders (`{c|}`/`{|c}` → ¢, `{L-}`/`{-L}` → £, `{Y=}`/`{=Y}` → ¥, `{A'}`/`{'A}` → Á, `{a"}`/`{"a}` → ä, `{1/4}` → ¼, `{*}` → •, `{:)}` → ☺, `{:(}` → ☹); phrase operators at a brace edge are not recognized, so the brace region stays whole; every other `{...}` shape stays literal (the general letter+accent pattern beyond the documented examples is deferred). Pinned in docs/TEXTILE-PARITY.md §18. |
 | whitespace sensitivity | implemented | Textile 2: inline operators need whitespace before/after to be recognized; brackets/braces can force recognition. The boundary rule (Unicode whitespace or punctuation/symbol before an opener and after a closer, non-whitespace content edges) is implemented uniformly for `@code@`, every phrase operator, links, and images (docs/TEXTILE-PARITY.md §3). Bracket/brace forcing stays planned. |
 
+## Cooklang
+
+Cooklang (`*.cook`) is a first-class Oliver frontend (CK1) with its **own
+typed Recipe model** (`src/cooklang.zig`): it does not converge on the
+Markdown/Textile `document.Document` IR because recipe semantics
+(ingredients, quantities, units, cookware, timers, preparations, recipe
+references, sections, notes, metadata) must survive parsing as typed
+data. It reuses Oliver's infrastructure: spans, diagnostics, arena
+ownership, byte borrowing, `source.Lines`, and the unicode predicates.
+The full design contract, source hierarchy, provenance, and chosen
+behaviors are in docs/COOKLANG.md and CLEANROOM session 21. The
+canonical corpus (`cooklang/spec` `tests/canonical.yaml` v7, pinned
+commit, MIT) is the executable conformance wall
+(`zig build cooklang-conformance`).
+
+| feature | status | Oliver behavior / notes |
+| --- | --- | --- |
+| ingredients `@name` / `@multi word{}` | implemented | the name region runs to the first `{` on the line but stops early at a following token marker (`@`/`#`/`~`), at P-category punctuation, or at a non-`-`/`.`/`/` boundary — so the spec's own `@salt and @ground black pepper{}` is two ingredients (pinned; the raw EBNF reading would name the whole run, and the corpus never distinguishes it); single-word names end at Unicode whitespace or P-category punctuation (symbols like `🧂` stay in names — canonical `testIngredientWithEmoji`); quantity/units are source text inside `{}`/`%` (never coerced; a derived numeric view exists for pure numeric forms); empty braces and absent braces leave `quantity: null` (canonical defaults `"some"`/`1`/`""` applied by the conformance harness per type); invalid tokens (`@ example`) degrade to text. |
+| cookware `#name` / `#multi word{}` | implemented | same name/quantity contract as ingredients; quantity present in braces (`#frying pan{2}`, `{three}`, `{two small}`). |
+| timers `~{...}` / `~name{...}` / `~name` | implemented | named (`~eggs{3%minutes}`) and unnamed (`~{25%minutes}`) forms; single-word named timers without braces (`~rest`); quantity/units preserved as source text; invalid forms (`~ {5}`) degrade to text. |
+| steps | implemented | paragraphs separated by blank lines; a step is a list of parts (text/ingredient/cookware/timer/line-break); multi-line steps join with a single space (canonical); a line ending in `\` forces a line break. |
+| comments `--` / `[- -]` | implemented | line comments run to end of line, block comments may span lines; both are omitted from the semantic tree (canonical `testComments`); an unclosed `[-` degrades to literal text with an `unclosed-block-comment` warning. |
+| notes `> text` | implemented | a `>`-prefixed paragraph (proposal 0005, Released); continuation lines may or may not carry `>`; content is plain text (not scanned for tokens); one paragraph per note block; no nesting. |
+| sections `= Name` / `== Name ==` | implemented | 1+ leading `=`, optional name, 0+ trailing `=`; title is plain text; steps after a header belong to that section until the next header or EOF (proposal 0006, Released). |
+| shorthand preparations `@x{1}(peeled)` | implemented | the `(...)` after the braces stays associated with its ingredient. |
+| recipe references `@./path{2}` | implemented | an `@` token whose name starts with `./` is flagged `is_recipe_reference`; the path is preserved as the name; Oliver never resolves it (filesystem resolution is a consumer responsibility). `.menu` files use sections + references and parse through this frontend. |
+| YAML front matter | implemented (boundary only) | `---` fences at the very start of the file; the raw payload is preserved with exact spans as `Frontmatter`; Oliver does not parse arbitrary YAML (no fake subset); a missing closing fence degrades to step text with an `unclosed-frontmatter` warning. |
+| HTML rendering | Oliver policy | a deterministic, Oliver-owned vocabulary (`src/cooklang_html.zig`), separate from the Markdown/Textile renderer; explicitly **not** "Cooklang-conformant" (the spec defines no HTML). Frontmatter is not rendered (data, not content). |
+| application features (scaling logic, shopping lists, pantry, aisles, images, search, meal plans, `.menu` logic, publication) | deferred | documented as ecosystem conventions (conventions.md), not language; consumers (e.g. Boris) own them. |
+
 ## Recorded ambiguities and chosen behaviors
 
 1. **Textile line breaks.** Hobix prose says newlines become `<br />` but its
