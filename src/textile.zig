@@ -1,7 +1,10 @@
 //! Textile frontend.
 //!
 //! Blocks: paragraphs, `h1.`–`h6.` headings, single-period `bq.` block
-//! quotes, and `*`/`#` lists with marker-depth nesting. Inlines: plain text,
+//! quotes, `*`/`#` lists with marker-depth nesting, and `|a|b|` tables
+//! (single-line rows with cell modifiers, an optional `table<mods>.`
+//! signature, colspan/rowspan, and Textile 2's header-alignment
+//! propagation). Inlines: plain text,
 //! hard line breaks, same-line `@code@` phrases, the phrase-modifier family
 //! (`*strong*`, `_emphasis_`, `**bold**`, `__italic__`, `-deleted-`,
 //! `+inserted+`, `^superscript^`, `~subscript~`, `%span%`), `"text":url`
@@ -43,6 +46,17 @@
 //!   lines compose a tree of tight lists; a blank line, a block signature,
 //!   or a non-marker text line closes all open lists (docs/TEXTILE-PARITY.md
 //!   §6).
+//! - A table is its own block: consecutive row lines (`|a|b|`, or rows with
+//!   leading modifiers) compose one table until a blank line or any other
+//!   block-level line. An optional `table<mods>.` signature opens one, with
+//!   the first row on the same line (Textile 2) or on following lines
+//!   (Hobix). A row must start with `|` (after modifiers) and end with `|`;
+//!   every `|` splits (Textile has no pipe escape). Cell modifiers are
+//!   terminated by a period followed by a space (the documented contract);
+//!   row modifiers end at the first `|` (Textile 2) or after `. ` (Hobix).
+//!   A header cell's alignment becomes the default for the cells below it
+//!   in the same column (Textile 2); cells render as flat `<tr>` rows with
+//!   no thead/tbody (docs/TEXTILE-PARITY.md §7).
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -61,10 +75,36 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var block: ?ActiveBlock = null;
     var lists = std.ArrayList(ListEntry).empty;
     defer lists.deinit(doc.allocator());
+    var table: ?TableState = null;
     while (lines.next()) |line| {
         if (isBlank(line.text)) {
             try closeBlock(doc, &block);
             closeLists(&lists);
+            try closeTable(doc, &table);
+            continue;
+        }
+        // An open table owns every row-shaped line (`|...|` or a
+        // modifier-prefixed row); any other line closes it and is handled
+        // below as its own block (docs/TEXTILE-PARITY.md §7).
+        if (table != null) {
+            if (try parseTableRow(doc, line, 0)) |row| {
+                try appendTableRow(doc, &table.?, row);
+                continue;
+            }
+            try closeTable(doc, &table);
+        }
+        if (try tryTableSignature(doc, line)) |sig| {
+            try closeBlock(doc, &block);
+            closeLists(&lists);
+            try openTable(doc, &table, sig.attrs);
+            if (sig.row) |row| try appendTableRow(doc, &table.?, row);
+            continue;
+        }
+        if (try parseTableRow(doc, line, 0)) |row| {
+            try closeBlock(doc, &block);
+            closeLists(&lists);
+            try openTable(doc, &table, &.{});
+            try appendTableRow(doc, &table.?, row);
             continue;
         }
         if (tryHeading(line)) |heading| {
@@ -99,6 +139,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     }
     try closeBlock(doc, &block);
     closeLists(&lists);
+    try closeTable(doc, &table);
 }
 
 const BlockKind = enum { paragraph, block_quote };
@@ -269,6 +310,503 @@ fn appendSiblingItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), 
 /// reconciliation stack is dropped.
 fn closeLists(lists: *std.ArrayList(ListEntry)) void {
     lists.clearRetainingCapacity();
+}
+
+// ---------------------------------------------------------------------------
+// Tables.
+//
+// A table is its own block: consecutive row lines compose one table until a
+// blank line or any other block-level line. Rows are `|a|b|` lines (with an
+// optional leading modifier run: `_` header, `<`/`>`/`=`/`<>` alignment,
+// `^`/`~` valign, `{style}`, `(class#id)`, `[lang]`, `(`/`)` padding — row
+// modifiers end at the first `|` per Textile 2 or after `. ` per Hobix). An
+// optional `table<mods>.` signature opens the table (Hobix: alone on its
+// own line; Textile 2: followed by the first row). Cell modifiers follow
+// the same tokens plus `\n` colspan and `/n` rowspan, and must be
+// terminated by a period followed by a space (the documented contract);
+// every other shape keeps the whole cell verbatim. Alignment propagates:
+// a header cell's alignment becomes the default for the cells below it in
+// the same column (Textile 2), resolved at close time when the whole table
+// is visible. Cells render as flat `<tr>` rows — the references show no
+// thead/tbody (docs/TEXTILE-PARITY.md §7).
+// ---------------------------------------------------------------------------
+
+/// The open table block: parsed rows are held until close so the
+/// alignment-propagation pass can see the whole table before any cell
+/// style resolves.
+const TableState = struct {
+    /// Table-level attributes from a `table<mods>.` signature.
+    attrs: []const document.Attribute,
+    rows: std.ArrayList(TableRow) = .empty,
+    /// Column count (cell-colspan sum over the widest row): the metadata
+    /// length of `table.alignment`.
+    col_count: u32 = 0,
+};
+
+/// One parsed (but not yet emitted) table row.
+const TableRow = struct {
+    /// Full line span.
+    span: source.Span,
+    /// Row-level `_` modifier: every cell is a header cell.
+    header: bool,
+    /// Row attributes (composed at parse time; the row style needs no
+    /// propagation).
+    attrs: []const document.Attribute,
+    cells: std.ArrayList(TableCellInfo) = .empty,
+};
+
+/// One parsed cell. Modifier pieces are kept separate so close time can
+/// resolve the propagated horizontal alignment and compose the final
+/// style string once.
+const TableCellInfo = struct {
+    /// Content span (after the modifier terminator), the cell node's span.
+    content: source.Span,
+    header: bool = false,
+    colspan: u8 = 1,
+    rowspan: u8 = 1,
+    /// Explicit horizontal alignment modifier (`<`, `>`, `=`, `<>`).
+    halign: document.TableAlign = .none,
+    /// `vertical-align:top` / `vertical-align:bottom` style fragment.
+    valign: ?[]const u8 = null,
+    user_style: ?[]const u8 = null,
+    class: ?[]const u8 = null,
+    id: ?[]const u8 = null,
+    lang: ?[]const u8 = null,
+    pad_left: u8 = 0,
+    pad_right: u8 = 0,
+};
+
+/// The parsed result of a `table<mods>.` signature line.
+const TableSignature = struct {
+    attrs: []const document.Attribute,
+    /// The first row when the signature line carries one (Textile 2 form).
+    row: ?TableRow,
+};
+
+/// A run of recognized table modifier tokens.
+const Mods = struct {
+    header: bool = false,
+    colspan: u8 = 1,
+    rowspan: u8 = 1,
+    halign: document.TableAlign = .none,
+    valign: ?[]const u8 = null,
+    user_style: ?[]const u8 = null,
+    class: ?[]const u8 = null,
+    id: ?[]const u8 = null,
+    lang: ?[]const u8 = null,
+    pad_left: u8 = 0,
+    pad_right: u8 = 0,
+};
+
+const ModKind = enum { signature, row, cell };
+
+/// A successful modifier scan.
+const ModScan = struct {
+    mods: Mods,
+    /// Offset just past the last token: at the `.` of a dot-terminated run
+    /// or at the `|` of a pipe-terminated row run.
+    end: usize,
+    dot_terminated: bool,
+};
+
+/// Recognizes one run of table modifier tokens starting at `i`: `{style}`,
+/// `(class#id)`, `[lang]`, `(`/`)` padding, `<`, `>`, `=`, cell-only `<>`,
+/// row/cell-only `^`/`~`/`_`, and cell-only `\n` colspan / `/n` rowspan.
+/// Returns null when any token is malformed or not allowed in the context,
+/// so the whole line stays literal. The run ends at the first `.`
+/// (dot-terminated; the caller checks the required following whitespace)
+/// or, for rows, directly at a `|` (Textile 2's no-period form).
+fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
+    var m = Mods{};
+    var j = i;
+    while (j < bytes.len) {
+        switch (bytes[j]) {
+            '{' => {
+                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, '}') orelse return null;
+                if (close == j + 1) return null;
+                m.user_style = bytes[j + 1 .. close];
+                j = close + 1;
+            },
+            '[' => {
+                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ']') orelse return null;
+                if (close == j + 1) return null;
+                m.lang = bytes[j + 1 .. close];
+                j = close + 1;
+            },
+            '(' => {
+                // A `(` directly before `(` or `)` is padding (Hobix: each
+                // `(` adds 1em of left padding); otherwise it opens a
+                // `(class#id)` spec terminated by `)`.
+                if (j + 1 < bytes.len and (bytes[j + 1] == '(' or bytes[j + 1] == ')')) {
+                    m.pad_left += 1;
+                    j += 1;
+                } else {
+                    const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ')') orelse return null;
+                    if (close == j + 1) return null;
+                    const inner = bytes[j + 1 .. close];
+                    if (std.mem.indexOfScalar(u8, inner, '#')) |h| {
+                        m.class = inner[0..h];
+                        m.id = inner[h + 1 ..];
+                    } else {
+                        m.class = inner;
+                    }
+                    j = close + 1;
+                }
+            },
+            ')' => {
+                m.pad_right += 1;
+                j += 1;
+            },
+            '<' => {
+                if (j + 1 < bytes.len and bytes[j + 1] == '>') {
+                    if (kind != .cell) return null; // `<>` is cells-only
+                    m.halign = .justify;
+                    j += 2;
+                } else {
+                    m.halign = .left;
+                    j += 1;
+                }
+            },
+            '>' => {
+                m.halign = .right;
+                j += 1;
+            },
+            '=' => {
+                m.halign = .center;
+                j += 1;
+            },
+            '^' => {
+                if (kind == .signature) return null;
+                m.valign = "vertical-align:top";
+                j += 1;
+            },
+            '~' => {
+                if (kind == .signature) return null;
+                m.valign = "vertical-align:bottom";
+                j += 1;
+            },
+            '_' => {
+                if (kind == .signature) return null;
+                m.header = true;
+                j += 1;
+            },
+            '\\' => {
+                if (kind != .cell) return null;
+                const n = scanSpanNumber(bytes, j + 1) orelse return null;
+                m.colspan = n;
+                j += 1 + decimalDigits(bytes, j + 1);
+            },
+            '/' => {
+                if (kind != .cell) return null;
+                const n = scanSpanNumber(bytes, j + 1) orelse return null;
+                m.rowspan = n;
+                j += 1 + decimalDigits(bytes, j + 1);
+            },
+            else => return null,
+        }
+        if (j >= bytes.len) return null; // the run must end at `.` or `|`
+        if (bytes[j] == '.') return .{ .mods = m, .end = j, .dot_terminated = true };
+        if (kind == .row and bytes[j] == '|') return .{ .mods = m, .end = j, .dot_terminated = false };
+    }
+    return null;
+}
+
+/// Reads the span number after a `\`/`/` colspan/rowspan token. A missing,
+/// zero, or oversized span is rejected (the cell stays literal).
+fn scanSpanNumber(bytes: []const u8, i: usize) ?u8 {
+    if (i >= bytes.len) return null;
+    var n: u8 = 0;
+    var k = i;
+    while (k < bytes.len and bytes[k] >= '0' and bytes[k] <= '9') : (k += 1) {
+        n = n *% 10 +% (bytes[k] - '0');
+    }
+    if (k == i or n == 0 or n > 20) return null;
+    return n;
+}
+
+fn decimalDigits(bytes: []const u8, i: usize) usize {
+    var k = i;
+    while (k < bytes.len and bytes[k] >= '0' and bytes[k] <= '9') : (k += 1) {}
+    return k - i;
+}
+
+/// The first byte of a cell that could open a modifier run.
+fn isCellModifierStart(b: u8) bool {
+    return switch (b) {
+        '_', '<', '>', '=', '^', '~', '\\', '/', '{', '(', ')', '[' => true,
+        else => false,
+    };
+}
+
+/// Parses one row line starting at byte `start` of the line (a plain `|`
+/// row, or a modifier-prefixed row). A row must start with `|` (after any
+/// modifiers) and end with `|`; every `|` splits (Textile has no pipe
+/// escape). Returns null when the line is not a row.
+fn parseTableRow(doc: *document.Document, line: source.Line, start: usize) ParseError!?TableRow {
+    const t = line.text;
+    var i = start;
+    var mods = Mods{};
+    if (i < t.len and t[i] != '|') {
+        const scan = scanMods(t, i, .row) orelse return null;
+        mods = scan.mods;
+        if (scan.dot_terminated) {
+            if (scan.end + 1 >= t.len or !isWhitespaceByte(t[scan.end + 1])) return null;
+            i = scan.end + 2;
+        } else {
+            i = scan.end;
+        }
+        if (i >= t.len or t[i] != '|') return null;
+    }
+    if (i >= t.len or t[i] != '|') return null;
+    const end = t.len;
+    if (end <= i + 1 or t[end - 1] != '|') return null;
+
+    const row_style = try composeStyle(doc, mods.user_style, mods.pad_left, mods.pad_right, halignFragment(mods.halign), mods.valign);
+    const row_attrs = try composeAttrs(doc, row_style, mods.class, mods.id, mods.lang);
+    var row = TableRow{
+        .span = line.contentSpan(),
+        .header = mods.header,
+        .attrs = row_attrs,
+        .cells = std.ArrayList(TableCellInfo).empty,
+    };
+    errdefer row.cells.deinit(doc.allocator());
+    var seg_start = i + 1;
+    var seg = seg_start;
+    while (seg < end) : (seg += 1) {
+        if (t[seg] == '|') {
+            try row.cells.append(doc.allocator(), try parseCell(doc, line, seg_start, seg));
+            seg_start = seg + 1;
+        }
+    }
+    return row;
+}
+
+/// Parses one cell segment `[start, end)` of the line: optional modifiers
+/// terminated by `. ` (the documented contract: "a period followed with a
+/// space"), then verbatim content. Every other shape — no modifiers,
+/// malformed modifiers, or a terminator without the space — keeps the whole
+/// segment as content.
+fn parseCell(doc: *document.Document, line: source.Line, start: usize, end: usize) ParseError!TableCellInfo {
+    _ = doc;
+    const t = line.text;
+    var content_start = start;
+    var mods = Mods{};
+    if (start < end and isCellModifierStart(t[start])) {
+        if (scanMods(t, start, .cell)) |scan| {
+            if (scan.dot_terminated and scan.end + 1 < end and isWhitespaceByte(t[scan.end + 1])) {
+                mods = scan.mods;
+                content_start = scan.end + 2;
+            }
+        }
+    }
+    return .{
+        .content = .{
+            .start = @intCast(line.start + content_start),
+            .end = @intCast(line.start + end),
+        },
+        .header = mods.header,
+        .colspan = mods.colspan,
+        .rowspan = mods.rowspan,
+        .halign = mods.halign,
+        .valign = mods.valign,
+        .user_style = mods.user_style,
+        .class = mods.class,
+        .id = mods.id,
+        .lang = mods.lang,
+        .pad_left = mods.pad_left,
+        .pad_right = mods.pad_right,
+    };
+}
+
+/// Recognizes a `table<mods>.` signature. The signature is `table` plus
+/// optional modifiers terminated by a period (Hobix puts the period at end
+/// of line; Textile 2 follows it with a space and the first row). When text
+/// follows the period it must parse as a row, or the line is not a
+/// signature at all (conservative: `table. of contents` stays a paragraph,
+/// docs/TEXTILE-PARITY.md §7).
+fn tryTableSignature(doc: *document.Document, line: source.Line) ParseError!?TableSignature {
+    const t = line.text;
+    if (t.len < 6) return null;
+    if (!std.mem.eql(u8, t[0..5], "table")) return null;
+    var i: usize = 5;
+    var mods = Mods{};
+    if (i < t.len and t[i] != '.') {
+        const scan = scanMods(t, i, .signature) orelse return null;
+        mods = scan.mods;
+        if (!scan.dot_terminated) return null;
+        i = scan.end;
+    }
+    if (i >= t.len or t[i] != '.') return null;
+    i += 1;
+    const style = try composeStyle(doc, mods.user_style, mods.pad_left, mods.pad_right, tableHalignFragment(mods.halign), null);
+    const attrs = try composeAttrs(doc, style, mods.class, mods.id, mods.lang);
+    while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+    if (i == t.len) return .{ .attrs = attrs, .row = null };
+    const row = (try parseTableRow(doc, line, i)) orelse return null;
+    return .{ .attrs = attrs, .row = row };
+}
+
+fn openTable(doc: *document.Document, table: *?TableState, attrs: []const document.Attribute) ParseError!void {
+    _ = doc;
+    std.debug.assert(table.* == null);
+    table.* = .{ .attrs = attrs };
+}
+
+fn appendTableRow(doc: *document.Document, table: *TableState, row: TableRow) ParseError!void {
+    var cols: u32 = 0;
+    for (row.cells.items) |c| cols += c.colspan;
+    if (cols > table.col_count) table.col_count = cols;
+    try table.rows.append(doc.allocator(), row);
+}
+
+/// Closes an open table: resolves the column-alignment defaults (Textile 2
+/// header-propagation rule), then emits the table, rows, and cells into the
+/// model. A signature that never received a row produces no table (tables
+/// must be in their own block; docs/TEXTILE-PARITY.md §7).
+fn closeTable(doc: *document.Document, table: *?TableState) ParseError!void {
+    var state = table.* orelse return;
+    table.* = null;
+    defer deinitTableState(doc.allocator(), &state);
+    if (state.rows.items.len == 0) return;
+
+    // Textile 2: "When a cell is identified as a header cell and an
+    // alignment is specified, that becomes the default alignment for cells
+    // below it." Walking top-down, a header cell with an explicit
+    // alignment updates its column's default; every other cell inherits the
+    // current default unless it carries its own alignment. Only horizontal
+    // alignment propagates (`^`/`~` vertical stays per-cell).
+    const defaults = try doc.allocator().alloc(document.TableAlign, state.col_count);
+    @memset(defaults, .none);
+    for (state.rows.items) |*row| {
+        var col: u32 = 0;
+        for (row.cells.items) |*cell| {
+            if (col < state.col_count and cell.header and cell.halign != .none) defaults[col] = cell.halign;
+            col += cell.colspan;
+        }
+    }
+
+    const first = &state.rows.items[0];
+    const last = &state.rows.items[state.rows.items.len - 1];
+    const table_node = try doc.createNode(.table, .{
+        .start = first.span.start,
+        .end = last.span.end,
+    }, .{
+        .table = .{
+            .alignment = defaults,
+            .attrs = state.attrs,
+            .sections = false,
+        },
+    });
+    try doc.appendChild(doc.root, table_node);
+
+    for (state.rows.items) |*row| {
+        const row_node = try doc.createNode(.table_row, row.span, .{ .table_row = .{ .attrs = row.attrs } });
+        try doc.appendChild(table_node, row_node);
+        var col: u32 = 0;
+        for (row.cells.items) |*cell| {
+            const resolved = if (cell.halign != .none) cell.halign else if (col < state.col_count) defaults[col] else .none;
+            const style = try composeStyle(doc, cell.user_style, cell.pad_left, cell.pad_right, halignFragment(resolved), cell.valign);
+            const attrs = try composeAttrs(doc, style, cell.class, cell.id, cell.lang);
+            const cell_node = try doc.createNode(.table_cell, cell.content, .{
+                .table_cell = .{
+                    // A row-level `_` marks every cell of the row as a
+                    // header cell (Textile 2: "header row or cell").
+                    .header = row.header or cell.header,
+                    // Textile alignment lives in the cell's `style`;
+                    // `alignment` (the GFM `align` attribute) stays none.
+                    .alignment = .none,
+                    .colspan = cell.colspan,
+                    .rowspan = cell.rowspan,
+                    .attrs = attrs,
+                },
+            });
+            try doc.appendChild(row_node, cell_node);
+            try parseInlines(doc, cell_node, cell.content);
+            col += cell.colspan;
+        }
+    }
+}
+
+fn deinitTableState(allocator: std.mem.Allocator, state: *TableState) void {
+    for (state.rows.items) |*row| row.cells.deinit(allocator);
+    state.rows.deinit(allocator);
+}
+
+/// The horizontal-alignment style fragment for a cell or row.
+fn halignFragment(a: document.TableAlign) ?[]const u8 {
+    return switch (a) {
+        .none => null,
+        .left => "text-align:left",
+        .right => "text-align:right",
+        .center => "text-align:center",
+        .justify => "text-align:justify",
+    };
+}
+
+/// The table-signature alignment fragment (Textile 2: `<`/`>` float the
+/// table, `=` centers it via auto side margins).
+fn tableHalignFragment(a: document.TableAlign) ?[]const u8 {
+    return switch (a) {
+        .none => null,
+        .left => "float:left",
+        .right => "float:right",
+        .center => "margin-left:auto;margin-right:auto",
+        .justify => null, // `<>` is cells-only and never reaches here
+    };
+}
+
+/// Appends one CSS rule to a composed style, joining with `; ` (Hobix:
+/// `color:red; padding-left:1em; text-align:right;`). Empty rules are
+/// skipped.
+fn appendStyleRule(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rule: []const u8) ParseError!void {
+    if (rule.len == 0) return;
+    if (out.items.len > 0) try out.appendSlice(allocator, "; ");
+    try out.appendSlice(allocator, rule);
+}
+
+/// Composes a Textile style string from its parts in the pinned order:
+/// user `{style}`, padding-left, padding-right, horizontal alignment, then
+/// vertical alignment — joined with `; ` and terminated with `;` (Hobix
+/// examples; docs/TEXTILE-PARITY.md §7). Empty when no part applies.
+fn composeStyle(
+    doc: *document.Document,
+    user_style: ?[]const u8,
+    pad_left: u8,
+    pad_right: u8,
+    halign_frag: ?[]const u8,
+    valign: ?[]const u8,
+) ParseError![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(doc.allocator());
+    if (user_style) |s| try appendStyleRule(doc.allocator(), &out, s);
+    if (pad_left > 0) try appendStyleRule(doc.allocator(), &out, try std.fmt.allocPrint(doc.allocator(), "padding-left:{d}em", .{pad_left}));
+    if (pad_right > 0) try appendStyleRule(doc.allocator(), &out, try std.fmt.allocPrint(doc.allocator(), "padding-right:{d}em", .{pad_right}));
+    if (halign_frag) |f| try appendStyleRule(doc.allocator(), &out, f);
+    if (valign) |v| try appendStyleRule(doc.allocator(), &out, v);
+    if (out.items.len == 0) return "";
+    try out.append(doc.allocator(), ';');
+    return out.items;
+}
+
+/// Composes the fixed render-order attribute list (style, class, id, lang)
+/// with arena-owned copies (Textile normalizes the values, so they cannot
+/// borrow the source; docs/DOCUMENT-MODEL.md).
+fn composeAttrs(
+    doc: *document.Document,
+    style: ?[]const u8,
+    class: ?[]const u8,
+    id: ?[]const u8,
+    lang: ?[]const u8,
+) ParseError![]const document.Attribute {
+    var list = std.ArrayList(document.Attribute).empty;
+    errdefer list.deinit(doc.allocator());
+    if (style) |s| {
+        if (s.len > 0) try list.append(doc.allocator(), .{ .name = "style", .value = try doc.allocator().dupe(u8, s) });
+    }
+    if (class) |c| try list.append(doc.allocator(), .{ .name = "class", .value = try doc.allocator().dupe(u8, c) });
+    if (id) |i| try list.append(doc.allocator(), .{ .name = "id", .value = try doc.allocator().dupe(u8, i) });
+    if (lang) |l| try list.append(doc.allocator(), .{ .name = "lang", .value = try doc.allocator().dupe(u8, l) });
+    return list.toOwnedSlice(doc.allocator());
 }
 
 const Heading = struct {
@@ -1517,4 +2055,301 @@ test "textile: deeply nested phrases emit iteratively" {
     var second = second_writer.toArrayList();
     defer second.deinit(std.testing.allocator);
     try std.testing.expectEqualSlices(u8, first.items, second.items);
+}
+
+test "textile: tables structure, spans, and rendering" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(std.testing.allocator, "| a | b |\n| 1 | 2 |\n", .textile, .{});
+    defer result.deinit();
+
+    const table = result.document.root.children.items[0];
+    try std.testing.expectEqual(document.Tag.table, table.tag);
+    try std.testing.expectEqual(source.Span{ .start = 0, .end = 19 }, table.span);
+    try std.testing.expect(!table.data.table.sections);
+    try std.testing.expectEqual(@as(usize, 2), table.data.table.alignment.len);
+    try std.testing.expectEqual(@as(usize, 0), table.data.table.attrs.len);
+    try std.testing.expectEqual(@as(usize, 2), table.children.items.len);
+
+    const row0 = table.children.items[0];
+    try std.testing.expectEqual(document.Tag.table_row, row0.tag);
+    try std.testing.expectEqual(source.Span{ .start = 0, .end = 9 }, row0.span);
+    // Cell spans cover the verbatim content (` a `), pipes excluded.
+    try std.testing.expectEqual(source.Span{ .start = 1, .end = 4 }, row0.children.items[0].span);
+    try std.testing.expectEqual(source.Span{ .start = 5, .end = 8 }, row0.children.items[1].span);
+    try std.testing.expect(!row0.children.items[0].data.table_cell.header);
+    try std.testing.expectEqualStrings(" a ", row0.children.items[0].children.items[0].data.text);
+
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(std.testing.allocator);
+    // Hobix: flat rows, no thead/tbody, cell whitespace preserved.
+    try std.testing.expectEqualStrings(
+        "<table>\n<tr>\n<td> a </td>\n<td> b </td>\n</tr>\n<tr>\n<td> 1 </td>\n<td> 2 </td>\n</tr>\n</table>\n",
+        out.items,
+    );
+}
+
+test "textile: cell modifiers compose attributes and spans" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(std.testing.allocator, "|_. a |<. b |\\2. c |/2. d |\n", .textile, .{});
+    defer result.deinit();
+
+    const table = result.document.root.children.items[0];
+    const row = table.children.items[0];
+    try std.testing.expectEqual(@as(usize, 4), row.children.items.len);
+
+    // `_` header cell: <th>, no attributes.
+    const c0 = row.children.items[0];
+    try std.testing.expect(c0.data.table_cell.header);
+    try std.testing.expectEqual(@as(usize, 0), c0.data.table_cell.attrs.len);
+    try std.testing.expectEqualStrings("a ", c0.children.items[0].data.text);
+
+    // `<.` alignment composes a text-align style (not the GFM align attr).
+    const c1 = row.children.items[1];
+    try std.testing.expect(!c1.data.table_cell.header);
+    try std.testing.expectEqual(@as(usize, 1), c1.data.table_cell.attrs.len);
+    try std.testing.expectEqualStrings("style", c1.data.table_cell.attrs[0].name);
+    try std.testing.expectEqualStrings("text-align:left;", c1.data.table_cell.attrs[0].value);
+    try std.testing.expectEqual(document.TableAlign.none, c1.data.table_cell.alignment);
+
+    // `\\2.` colspan.
+    const c2 = row.children.items[2];
+    try std.testing.expectEqual(@as(u8, 2), c2.data.table_cell.colspan);
+    try std.testing.expectEqual(@as(u8, 1), c2.data.table_cell.rowspan);
+
+    // `/2.` rowspan.
+    const c3 = row.children.items[3];
+    try std.testing.expectEqual(@as(u8, 1), c3.data.table_cell.colspan);
+    try std.testing.expectEqual(@as(u8, 2), c3.data.table_cell.rowspan);
+
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings(
+        "<table>\n<tr>\n<th>a </th>\n<td style=\"text-align:left;\">b </td>\n<td colspan=\"2\">c </td>\n<td rowspan=\"2\">d </td>\n</tr>\n</table>\n",
+        out.items,
+    );
+}
+
+test "textile: header alignment propagates and row headers mark cells" {
+    const oliver = @import("oliver.zig");
+    // Textile 2: a header cell's alignment becomes the default for the
+    // cells below it in the same column; the model's table.alignment
+    // records the propagated column defaults.
+    var result = try oliver.parse(std.testing.allocator, "|_<. a |_>. b |\n| c | d |\n", .textile, .{});
+    defer result.deinit();
+
+    const table = result.document.root.children.items[0];
+    try std.testing.expectEqual(document.TableAlign.left, table.data.table.alignment[0]);
+    try std.testing.expectEqual(document.TableAlign.right, table.data.table.alignment[1]);
+    const header = table.children.items[0];
+    try std.testing.expectEqualStrings("text-align:left;", header.children.items[0].data.table_cell.attrs[0].value);
+    try std.testing.expectEqualStrings("text-align:right;", header.children.items[1].data.table_cell.attrs[0].value);
+    const body = table.children.items[1];
+    try std.testing.expectEqualStrings("text-align:left;", body.children.items[0].data.table_cell.attrs[0].value);
+    try std.testing.expectEqualStrings("text-align:right;", body.children.items[1].data.table_cell.attrs[0].value);
+
+    // A row-level `_` marks every cell of the row as a header cell.
+    var result2 = try oliver.parse(std.testing.allocator, "_| a | b |\n", .textile, .{});
+    defer result2.deinit();
+    const row = result2.document.root.children.items[0].children.items[0];
+    try std.testing.expect(row.children.items[0].data.table_cell.header);
+    try std.testing.expect(row.children.items[1].data.table_cell.header);
+}
+
+test "textile: table signature and row modifiers" {
+    const oliver = @import("oliver.zig");
+    // The Textile 2 complex example: signature + first row on one line,
+    // pipe-terminated row modifiers, a rowspan, and a header cell with a
+    // cell style.
+    var result = try oliver.parse(
+        std.testing.allocator,
+        "table(fig). {color:red}_|Top|Row|\n{color:blue}|/2. Second|Row|\n|_{color:green}. Last|\n",
+        .textile,
+        .{},
+    );
+    defer result.deinit();
+
+    const table = result.document.root.children.items[0];
+    try std.testing.expectEqual(document.Tag.table, table.tag);
+    try std.testing.expectEqual(@as(usize, 1), table.data.table.attrs.len);
+    try std.testing.expectEqualStrings("class", table.data.table.attrs[0].name);
+    try std.testing.expectEqualStrings("fig", table.data.table.attrs[0].value);
+    try std.testing.expect(!table.data.table.sections);
+
+    const row0 = table.children.items[0];
+    try std.testing.expectEqualStrings("color:red;", row0.data.table_row.attrs[0].value);
+    try std.testing.expect(row0.children.items[0].data.table_cell.header);
+    try std.testing.expect(row0.children.items[1].data.table_cell.header);
+    try std.testing.expectEqualStrings("Top", row0.children.items[0].children.items[0].data.text);
+
+    const row1 = table.children.items[1];
+    try std.testing.expectEqualStrings("color:blue;", row1.data.table_row.attrs[0].value);
+    try std.testing.expectEqual(@as(u8, 2), row1.children.items[0].data.table_cell.rowspan);
+
+    // `|_{color:green}. Last|`: cell modifiers `_` + `{color:green}`.
+    const row2 = table.children.items[2];
+    try std.testing.expect(row2.children.items[0].data.table_cell.header);
+    try std.testing.expectEqualStrings("color:green;", row2.children.items[0].data.table_cell.attrs[0].value);
+    try std.testing.expectEqualStrings("Last", row2.children.items[0].children.items[0].data.text);
+
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings(
+        "<table class=\"fig\">\n<tr style=\"color:red;\">\n<th>Top</th>\n<th>Row</th>\n</tr>\n<tr style=\"color:blue;\">\n<td rowspan=\"2\">Second</td>\n<td>Row</td>\n</tr>\n<tr>\n<th style=\"color:green;\">Last</th>\n</tr>\n</table>\n",
+        out.items,
+    );
+}
+
+test "textile: table fallbacks stay literal" {
+    const oliver = @import("oliver.zig");
+
+    // A row must end with `|`: `|a|b` is a paragraph.
+    {
+        var result = try oliver.parse(std.testing.allocator, "|a|b\n", .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+    }
+    // Modifiers must be terminated by `. ` (the documented contract): the
+    // `_` in `|_.< a |` cannot terminate mid-run, so the cell is verbatim.
+    {
+        var result = try oliver.parse(std.testing.allocator, "|_.< a |\n", .textile, .{});
+        defer result.deinit();
+        const cell = result.document.root.children.items[0].children.items[0].children.items[0];
+        try std.testing.expect(!cell.data.table_cell.header);
+        try std.testing.expectEqualStrings("_.< a ", cell.children.items[0].data.text);
+    }
+    // `table.` followed by non-row text is not a signature.
+    {
+        var result = try oliver.parse(std.testing.allocator, "table. of contents\n", .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+    }
+    // A modifier run without a `. ` or `|` terminator is not a row.
+    {
+        var result = try oliver.parse(std.testing.allocator, "{a} b\n", .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+    }
+    // A `table.` signature that never receives a row produces no table.
+    {
+        var result = try oliver.parse(std.testing.allocator, "table.\n\npara\n", .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(@as(usize, 1), result.document.root.children.items.len);
+        try std.testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+    }
+    // An unclosed modifier brace keeps the whole cell literal, but the
+    // line is still a row (it starts and ends with `|`).
+    {
+        var result = try oliver.parse(std.testing.allocator, "|{oops x|\n", .textile, .{});
+        defer result.deinit();
+        const table = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.table, table.tag);
+        const cell = table.children.items[0].children.items[0];
+        try std.testing.expectEqualStrings("{oops x", cell.children.items[0].data.text);
+    }
+}
+
+test "textile: tables close on blank lines and other blocks" {
+    const oliver = @import("oliver.zig");
+
+    // A blank line separates two tables.
+    {
+        var result = try oliver.parse(std.testing.allocator, "|a|\n\n|b|\n", .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(@as(usize, 2), result.document.root.children.items.len);
+        try std.testing.expectEqual(document.Tag.table, result.document.root.children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.table, result.document.root.children.items[1].tag);
+    }
+    // A plain line closes the table and starts a paragraph.
+    {
+        var result = try oliver.parse(std.testing.allocator, "|a|b|\nplain\n", .textile, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+        try std.testing.expectEqual(document.Tag.table, root.children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+    }
+    // A heading closes the table.
+    {
+        var result = try oliver.parse(std.testing.allocator, "|a|b|\nh2. T\n", .textile, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(document.Tag.table, root.children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.heading, root.children.items[1].tag);
+    }
+    // A new `table.` signature closes the open table.
+    {
+        var result = try oliver.parse(std.testing.allocator, "|a|b|\ntable.\n|c|\n", .textile, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+        try std.testing.expectEqual(@as(usize, 1), root.children.items[0].children.items.len);
+        try std.testing.expectEqual(@as(usize, 1), root.children.items[1].children.items.len);
+    }
+}
+
+test "textile: table row storm stays linear and deterministic" {
+    const oliver = @import("oliver.zig");
+    const count = 20_000;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(std.testing.allocator);
+    for (0..count) |_| try input.appendSlice(std.testing.allocator, "| a | b |\n");
+
+    var result = try oliver.parse(std.testing.allocator, input.items, .textile, .{});
+    defer result.deinit();
+    const table = result.document.root.children.items[0];
+    try std.testing.expectEqual(@as(usize, count), table.children.items.len);
+
+    var first_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer first_writer.deinit();
+    try oliver.html.render(std.testing.allocator, &first_writer.writer, &result.document, .{});
+    var first = first_writer.toArrayList();
+    defer first.deinit(std.testing.allocator);
+    var second_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer second_writer.deinit();
+    try oliver.html.render(std.testing.allocator, &second_writer.writer, &result.document, .{});
+    var second = second_writer.toArrayList();
+    defer second.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u8, first.items, second.items);
+}
+
+test "textile: tables converge with the markdown GFM model" {
+    const oliver = @import("oliver.zig");
+
+    // Both dialects produce the same table/row/cell node structure with
+    // the same header flags. Documented differences (docs/TEXTILE-PARITY.md
+    // §7): GFM renders `<thead>`/`<tbody>` sections and `align` attributes
+    // and trims cell whitespace, while Textile renders flat rows with
+    // `style` attributes and preserves cell whitespace verbatim — so the
+    // convergence claim here is structural, not byte-identical.
+    var md = try oliver.parse(std.testing.allocator, "| a | b |\n| --- | --- |\n| 1 | 2 |\n", .markdown, .{});
+    defer md.deinit();
+    var tx = try oliver.parse(std.testing.allocator, "|_. a |_. b |\n| 1 | 2 |\n", .textile, .{});
+    defer tx.deinit();
+
+    const md_table = md.document.root.children.items[0];
+    const tx_table = tx.document.root.children.items[0];
+    try std.testing.expectEqual(document.Tag.table, md_table.tag);
+    try std.testing.expectEqual(document.Tag.table, tx_table.tag);
+    try std.testing.expect(md_table.data.table.sections);
+    try std.testing.expect(!tx_table.data.table.sections);
+    try std.testing.expectEqual(md_table.children.items.len, tx_table.children.items.len);
+    for (md_table.children.items, 0..) |md_row, ri| {
+        const tx_row = tx_table.children.items[ri];
+        try std.testing.expectEqual(md_row.children.items.len, tx_row.children.items.len);
+        for (md_row.children.items, 0..) |md_cell, ci| {
+            const tx_cell = tx_row.children.items[ci];
+            try std.testing.expectEqual(md_cell.data.table_cell.header, tx_cell.data.table_cell.header);
+            try std.testing.expectEqual(md_cell.data.table_cell.colspan, tx_cell.data.table_cell.colspan);
+            try std.testing.expectEqual(md_cell.data.table_cell.rowspan, tx_cell.data.table_cell.rowspan);
+        }
+    }
 }

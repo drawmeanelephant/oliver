@@ -1308,7 +1308,7 @@ fn tryEmitTable(
     const node = try doc.createNode(.table, .{
         .start = @intCast(header_span.start),
         .end = @intCast(view.line.content_end),
-    }, .{ .table = .{ .alignment = delim.alignment } });
+    }, .{ .table = .{ .alignment = delim.alignment, .sections = true } });
     try doc.appendChild(parent, node);
     try appendTableRow(doc, node, header_span, header_cells, true, pending);
     paragraph.* = null;
@@ -1330,7 +1330,7 @@ fn appendTableRow(
     pending: *std.ArrayList(PendingInline),
 ) ParseError!void {
     const alignment = table_node.data.table.alignment;
-    const row = try doc.createNode(.table_row, line_span, .none);
+    const row = try doc.createNode(.table_row, line_span, .{ .table_row = .{} });
     try doc.appendChild(table_node, row);
     for (0..alignment.len) |j| {
         const content = if (j < cells.len) cells[j].content else source.Span{ .start = line_span.start, .end = line_span.start };
