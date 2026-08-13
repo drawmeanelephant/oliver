@@ -1625,6 +1625,35 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/link-literal.textile"),
         .expected = @embedFile("fixtures/textile/link-literal.html"),
     },
+    // --- link aliases (Hobix "External References: Link Aliases"; Textile
+    // 2 "Links") ---
+    .{
+        .name = "link-alias-basic",
+        .input = @embedFile("fixtures/textile/link-alias-basic.textile"),
+        .expected = @embedFile("fixtures/textile/link-alias-basic.html"),
+    },
+    // Textile 2's definition block: several `[alias]url` lines in a block
+    // of their own, referenced from elsewhere in the document.
+    .{
+        .name = "link-alias-def-block",
+        .input = @embedFile("fixtures/textile/link-alias-def-block.textile"),
+        .expected = @embedFile("fixtures/textile/link-alias-def-block.html"),
+    },
+    // First definition wins; matching is case-sensitive; an undefined
+    // alias is an ordinary relative URL.
+    .{
+        .name = "link-alias-precedence",
+        .input = @embedFile("fixtures/textile/link-alias-precedence.textile"),
+        .expected = @embedFile("fixtures/textile/link-alias-precedence.html"),
+    },
+    // Shapes that are not definitions stay ordinary text: `[1]` with a
+    // space, an empty alias, no URL, a URL with whitespace, and a
+    // def-shaped substring inside a line.
+    .{
+        .name = "link-alias-literal",
+        .input = @embedFile("fixtures/textile/link-alias-literal.textile"),
+        .expected = @embedFile("fixtures/textile/link-alias-literal.html"),
+    },
     // --- images (Hobix "External References"; Textile 2 "Images") ---
     .{
         .name = "image-basic",
@@ -1817,6 +1846,18 @@ test "shared model: equivalent inputs render identically through one renderer" {
             .markdown = "[x](http://u)",
             .textile = "\"x\":http://u",
             .expected = "<p><a href=\"http://u\">x</a></p>\n",
+        },
+        // Textile `"text":alias` with a `[alias]url` definition converges
+        // with the Markdown reference-link form (same §4.7 machinery).
+        .{
+            .markdown = "[x][a]\n\n[a]: http://u",
+            .textile = "\"x\":a\n\n[a]http://u",
+            .expected = "<p><a href=\"http://u\">x</a></p>\n",
+        },
+        .{
+            .markdown = "[x][a]\n\n[a]: http://u \"T\"",
+            .textile = "\"x (T)\":a\n\n[a]http://u",
+            .expected = "<p><a href=\"http://u\" title=\"T\">x</a></p>\n",
         },
         // Textile `!url!` converges with the Markdown empty-alt image.
         .{
