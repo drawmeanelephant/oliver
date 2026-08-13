@@ -1770,6 +1770,43 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/table-close.textile"),
         .expected = @embedFile("fixtures/textile/table-close.html"),
     },
+    // --- block attributes (Hobix "Attributes: Block Attributes /
+    // Block Alignments"; Textile 2 "Block Attributes") ---
+    // The Hobix §4 battery: class, id, class#id, style, lang, the four
+    // alignments, and `(`/`)` indentation on paragraph signatures.
+    .{
+        .name = "block-attr-basic",
+        .input = @embedFile("fixtures/textile/block-attr-basic.textile"),
+        .expected = @embedFile("fixtures/textile/block-attr-basic.html"),
+    },
+    // Combined modifiers: `h2()>.`, `h3()>[no]{color:red}.`, and mixed
+    // class/lang on one signature.
+    .{
+        .name = "block-attr-combined",
+        .input = @embedFile("fixtures/textile/block-attr-combined.textile"),
+        .expected = @embedFile("fixtures/textile/block-attr-combined.html"),
+    },
+    // Blockquote signatures carry attrs on the `<blockquote>`; the inner
+    // paragraph stays unmarked.
+    .{
+        .name = "block-attr-bq",
+        .input = @embedFile("fixtures/textile/block-attr-bq.textile"),
+        .expected = @embedFile("fixtures/textile/block-attr-bq.html"),
+    },
+    // Headings with class/lang/style attrs alongside plain `hN.` forms.
+    .{
+        .name = "block-attr-heading",
+        .input = @embedFile("fixtures/textile/block-attr-heading.textile"),
+        .expected = @embedFile("fixtures/textile/block-attr-heading.html"),
+    },
+    // Malformed signatures stay literal: unterminated class, no space
+    // after the period, doubled periods, the deferred `bq..`/`bq:` forms,
+    // and a non-`hN` heading marker.
+    .{
+        .name = "block-attr-literal",
+        .input = @embedFile("fixtures/textile/block-attr-literal.textile"),
+        .expected = @embedFile("fixtures/textile/block-attr-literal.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {
