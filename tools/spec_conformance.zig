@@ -547,14 +547,12 @@ test "official identity rejects wrong byte count, example count, and digest" {
 test "expectation partition is complete and named divergences are exact" {
     const counts = try validateManifest(expectations.example_count);
     try std.testing.expectEqual(expectations.example_count, counts.supported + counts.not_yet + counts.divergence);
-    // Steady state after the entity/HTML-blocks-types-6/7 milestone: 636
-    // supported, 16 not-yet (the 13 HTML-block types-1-5 examples, the
-    // link-reference-definition edge 201, and the two `<!-- -->`-in-list
-    // examples 308-309), and the former ATX trailing-backslash divergence
-    // (example 646) now conforms. These pins move only with a reviewed
-    // manifest change.
-    try std.testing.expectEqual(@as(usize, 636), counts.supported);
-    try std.testing.expectEqual(@as(usize, 16), counts.not_yet);
+    // Steady state after the all-seven-HTML-block-types milestone: 651
+    // supported, 1 not-yet (example 201, a link-reference-definition edge),
+    // and the former ATX trailing-backslash divergence (example 646) now
+    // conforms. These pins move only with a reviewed manifest change.
+    try std.testing.expectEqual(@as(usize, 651), counts.supported);
+    try std.testing.expectEqual(@as(usize, 1), counts.not_yet);
     try std.testing.expectEqual(@as(usize, 0), counts.divergence);
     try std.testing.expectEqual(expectations.Class.supported, expectations.classFor(646).?);
     try std.testing.expect(expectations.classFor(0) == null);

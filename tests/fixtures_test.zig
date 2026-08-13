@@ -172,6 +172,52 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/html-block-in-quote.md"),
         .expected = @embedFile("fixtures/markdown/html-block-in-quote.html"),
     },
+    // --- HTML blocks, types 1-5 (docs: HTML-BLOCKS.md) ---
+    .{
+        .name = "html-block-type1",
+        .input = @embedFile("fixtures/markdown/html-block-type1.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type1.html"),
+    },
+    .{
+        .name = "html-block-type1-close",
+        .input = @embedFile("fixtures/markdown/html-block-type1-close.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type1-close.html"),
+    },
+    .{
+        .name = "html-block-type1-raw",
+        .input = @embedFile("fixtures/markdown/html-block-type1-raw.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type1-raw.html"),
+    },
+    .{
+        .name = "html-block-type2",
+        .input = @embedFile("fixtures/markdown/html-block-type2.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type2.html"),
+    },
+    .{
+        .name = "html-block-type2-close",
+        .input = @embedFile("fixtures/markdown/html-block-type2-close.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type2-close.html"),
+    },
+    .{
+        .name = "html-block-type3",
+        .input = @embedFile("fixtures/markdown/html-block-type3.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type3.html"),
+    },
+    .{
+        .name = "html-block-type4",
+        .input = @embedFile("fixtures/markdown/html-block-type4.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type4.html"),
+    },
+    .{
+        .name = "html-block-type5",
+        .input = @embedFile("fixtures/markdown/html-block-type5.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type5.html"),
+    },
+    .{
+        .name = "html-block-interrupt-types",
+        .input = @embedFile("fixtures/markdown/html-block-interrupt-types.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-interrupt-types.html"),
+    },
     .{
         .name = "unicode",
         .input = @embedFile("fixtures/markdown/unicode.md"),

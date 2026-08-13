@@ -25,9 +25,9 @@ pub const Range = struct {
     class: Class,
 };
 
-/// Reviewed partition as of the entity/HTML-blocks-types-6/7 milestone
-/// (636 supported / 16 not-yet / 0 divergences), committed as a plain,
-/// diffable partition. Keep ranges sorted, adjacent, and nonoverlapping.
+/// Reviewed partition as of the HTML-blocks-types-1–5 milestone (651
+/// supported / 1 not-yet / 0 divergences), committed as a plain, diffable
+/// partition. Keep ranges sorted, adjacent, and nonoverlapping.
 pub const ranges = [_]Range{
     // Tabs (1-11) through backslash escapes (12-24), entity references
     // (25-41). Example 21 (`<a href="/bar\/)">`) is an HTML block type 7;
@@ -36,28 +36,21 @@ pub const ranges = [_]Range{
     // nonentities literal while decoding real ones.
     .{ .first = 1, .last = 41, .class = .supported },
     // Precedence/thematic breaks (42-61), ATX (62-79), Setext (80-106),
-    // indented (107-118) and fenced (119-147) code.
-    .{ .first = 42, .last = 147, .class = .supported },
-    // HTML blocks (148-191): types 6 and 7 conform (block-tag lines and
-    // whole-line tags, ending at a blank line); types 1-5 (script/pre/
-    // style/textarea element blocks, comments, PIs, declarations, CDATA —
-    // 169-173 and 176-183) need the cross-line matching-terminator
-    // machinery and remain not-yet.
-    .{ .first = 148, .last = 168, .class = .supported },
-    .{ .first = 169, .last = 173, .class = .not_yet },
-    .{ .first = 174, .last = 175, .class = .supported },
-    .{ .first = 176, .last = 183, .class = .not_yet },
-    .{ .first = 184, .last = 191, .class = .supported },
-    // Link reference definitions (192-218) through paragraphs (219-226).
+    // indented (107-118) and fenced (119-147) code, and HTML blocks
+    // (148-191) — all seven types: 1 (script/pre/style/textarea), 2
+    // (comments), 3 (PIs), 4 (declarations), 5 (CDATA), 6 (block tags), and
+    // 7 (whole-line tags), each with its own end condition.
+    .{ .first = 42, .last = 191, .class = .supported },
+    // Link reference definitions (192-218) through paragraphs (219-226),
+    // block quotes/lists (227-300), and lists (301-326; 308 and 309
+    // interleave `<!-- -->` — a type-2 HTML block — with list items and now
+    // conform). Example 201 (`[foo]: <bar>(baz)` — an angle destination
+    // followed by `(` with no separating whitespace is not a definition)
+    // is the one remaining not-yet example. Everything else through 652 is
+    // supported.
     .{ .first = 192, .last = 200, .class = .supported },
-    // Example 201: `[foo]: <bar>(baz)` — an angle destination followed by
-    // `(` is not a definition. Not yet.
     .{ .first = 201, .last = 201, .class = .not_yet },
-    .{ .first = 202, .last = 307, .class = .supported },
-    // Lists (301-326): 308 and 309 interleave `<!-- -->` (a type-2 HTML
-    // block) with list items; they conform only once types 1-5 land.
-    .{ .first = 308, .last = 309, .class = .not_yet },
-    .{ .first = 310, .last = 652, .class = .supported },
+    .{ .first = 202, .last = 652, .class = .supported },
 };
 
 pub const Divergence = struct {

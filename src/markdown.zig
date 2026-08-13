@@ -415,14 +415,25 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             }
         }
 
-        // An open HTML block (§4.6, types 6/7) owns every non-blank line
-        // while its containing containers still match; a blank line ends the
-        // block, as does a container whose marker is absent. Content is the
+        // An open HTML block (§4.6) owns every line while its containing
+        // containers still match. Types 1-5 end at the first line containing
+        // their terminator (blank lines are content — a `<script>` block may
+        // contain blank lines); types 6/7 end at a blank line. A container
+        // whose marker is absent ends the block either way. Content is the
         // remainder verbatim, so the line is consumed wholesale: no
         // blank-line, lazy-continuation, block-start, or inline rule runs
         // here.
         if (html) |*active| {
             if (matched == active.container_depth) {
+                if (active.block_type <= 5) {
+                    try appendHtmlBlockLine(doc, &active.content, view);
+                    active.node.span.end = @intCast(view.line.content_end);
+                    if (htmlBlockEnded(active.block_type, view.line.text)) {
+                        finishHtmlBlock(&html);
+                    }
+                    extendContainerSpans(&containers, view.line);
+                    continue;
+                }
                 if (!isBlank(view.line.text)) {
                     try appendHtmlBlockLine(doc, &active.content, view);
                     active.node.span.end = @intCast(view.line.content_end);
@@ -603,12 +614,14 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             extendContainerSpans(&containers, view.line);
             continue;
         }
-        // HTML blocks (§4.6), types 6/7. Type 7 cannot interrupt a
-        // paragraph, so it is only tried when no paragraph is open. The node
-        // is appended at open (container order fixed) and content
-        // accumulates verbatim until a blank line or the end of its
+        // HTML blocks (§4.6), all seven types. Types 1-6 may interrupt a
+        // paragraph; type 7 may not, so it is only tried when no paragraph
+        // is open. The node is appended at open (container order fixed) and
+        // content accumulates verbatim; types 1-5 end at their terminator
+        // (which may be on the opening line itself — then the block is just
+        // that line), types 6/7 at a blank line or the end of their
         // container.
-        if (tryHtmlBlockStart(doc, view, paragraph == null)) |_| {
+        if (tryHtmlBlockStart(doc, view, paragraph == null)) |block_type| {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
             const node = try doc.createNode(.html_block, view.line.contentSpan(), .{
                 .html_block = &.{},
@@ -617,9 +630,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             html = .{
                 .node = node,
                 .container_depth = containers.items.len,
+                .block_type = block_type,
             };
             try appendHtmlBlockLine(doc, &html.?.content, view);
             node.span.end = @intCast(view.line.content_end);
+            if (block_type <= 5 and htmlBlockEnded(block_type, view.line.text)) {
+                finishHtmlBlock(&html);
+            }
             extendContainerSpans(&containers, view.line);
             continue;
         }
@@ -1024,8 +1041,8 @@ fn isParagraphContinuationText(
     if (tryFenceOpen(view) != null) return false;
     if (isThematicBreak(view, thematic_facts)) return false;
     if (tryListMarker(view)) |m| return !m.can_interrupt;
-    // Type 7 cannot interrupt a paragraph, so only types 1-6 (here: type
-    // 6) count as non-continuation text (§4.6).
+    // Types 1-6 may interrupt a paragraph; a type-7 start may not (so it is
+    // passed with allow_type_7=false: a 1-6 match means not continuation).
     if (tryHtmlBlockStart(doc, view, false) != null) return false;
     return true;
 }
@@ -1112,15 +1129,18 @@ const IndentedCode = struct {
     content: std.ArrayList(u8) = .empty,
 };
 
-/// The one open HTML block leaf (§4.6; types 6/7). Content accumulates the
-/// container-stripped remainder of each line *verbatim* — leading spaces and
-/// line-ending bytes included — because the block's source lines are not
-/// contiguous once container prefixes are stripped (the reference
-/// implementation's `add_line` keeps everything from its offset onward).
-/// The block ends at a blank line, or when a containing container closes.
+/// The one open HTML block leaf (§4.6; all seven types). Content
+/// accumulates the container-stripped remainder of each line *verbatim* —
+/// leading spaces and line-ending bytes included — because the block's
+/// source lines are not contiguous once container prefixes are stripped
+/// (the reference implementation's `add_line` keeps everything from its
+/// offset onward). `block_type` selects the end condition: types 1-5 end at
+/// the first line containing their terminator; types 6/7 end at a blank
+/// line. Either way a containing container closing also ends the block.
 const HtmlBlock = struct {
     node: *document.Node,
     container_depth: usize,
+    block_type: u8,
     content: std.ArrayList(u8) = .empty,
 };
 
@@ -1152,17 +1172,74 @@ const html_block_tags = [_][]const u8{
     "th",      "thead",    "title",   "tr",       "track",    "ul",
 };
 
-/// §4.6 HTML block start conditions, types 6/7. `allow_type_7` is false
+/// §4.6 HTML block start conditions, types 1-7. `allow_type_7` is false
 /// while a paragraph is open: "All types of HTML blocks except type 7 may
-/// interrupt a paragraph."
+/// interrupt a paragraph." Returns the block type (1-7) or null.
 fn tryHtmlBlockStart(doc: *document.Document, view: View, allow_type_7: bool) ?u8 {
     const text = view.line.text;
     const skipped = skipIndent(view, 3) orelse return null;
     const i = skipped.i;
     if (i >= text.len or text[i] != '<') return null;
+    if (scanHtmlBlockType1(text, i)) return 1;
+    if (scanHtmlBlockType2(text, i)) return 2;
+    if (scanHtmlBlockType3(text, i)) return 3;
+    if (scanHtmlBlockType4(text, i)) return 4;
+    if (scanHtmlBlockType5(text, i)) return 5;
     if (scanHtmlBlockType6(text, i)) return 6;
     if (allow_type_7 and scanHtmlBlockType7(doc.src.bytes, view, i)) return 7;
     return null;
+}
+
+/// Type 1 start (§4.6): `<pre`, `<script`, `<style`, or `<textarea`
+/// (case-insensitive), followed by a space, a tab, `>`, or the end of the
+/// line.
+fn scanHtmlBlockType1(text: []const u8, i: usize) bool {
+    const names = [_][]const u8{ "pre", "script", "style", "textarea" };
+    for (names) |name| {
+        if (i + 1 + name.len > text.len) continue;
+        if (!eqlIgnoreCase(text[i + 1 .. i + 1 + name.len], name)) continue;
+        const after = i + 1 + name.len;
+        if (after >= text.len) return true; // end of line
+        switch (text[after]) {
+            ' ', '\t', '>' => return true,
+            else => continue, // `pre` is a prefix of `prex` etc.
+        }
+    }
+    return false;
+}
+
+/// Type 2 start: line begins with `<!--`.
+fn scanHtmlBlockType2(text: []const u8, i: usize) bool {
+    return i + 4 <= text.len and std.mem.eql(u8, text[i .. i + 4], "<!--");
+}
+
+/// Type 3 start: line begins with `<?`.
+fn scanHtmlBlockType3(text: []const u8, i: usize) bool {
+    return i + 2 <= text.len and std.mem.eql(u8, text[i .. i + 2], "<?");
+}
+
+/// Type 4 start: line begins with `<!` followed by an ASCII letter.
+fn scanHtmlBlockType4(text: []const u8, i: usize) bool {
+    return i + 3 <= text.len and text[i + 1] == '!' and isAsciiLetter(text[i + 2]);
+}
+
+/// Type 5 start: line begins with `<![CDATA[`.
+fn scanHtmlBlockType5(text: []const u8, i: usize) bool {
+    return i + 9 <= text.len and std.mem.eql(u8, text[i .. i + 9], "<![CDATA[");
+}
+
+/// ASCII case-insensitive equality (used by the §4.6 type-1 start/end
+/// scanners, which the spec marks case-insensitive).
+fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (asciiLower(x) != asciiLower(y)) return false;
+    }
+    return true;
+}
+
+fn asciiLower(b: u8) u8 {
+    return if (b >= 'A' and b <= 'Z') b + 32 else b;
 }
 
 /// Type 6 start: `<` or `</` + one of the block tag names + a space, tab,
@@ -1201,9 +1278,6 @@ fn scanHtmlBlockType7(bytes: []const u8, view: View, i: usize) bool {
         var p: usize = 1;
         while (p < tag_text.len and isTagNameChar(tag_text[p])) : (p += 1) {}
         const name = tag_text[1..p];
-        // `pre`/`script`/`style`/`textarea` are excluded here because they
-        // are type-1 starts (§4.6) — a future milestone — so they must not
-        // become type-7 blocks.
         if (std.mem.eql(u8, name, "pre") or std.mem.eql(u8, name, "script") or
             std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "textarea")) return false;
     } else {
@@ -1214,6 +1288,34 @@ fn scanHtmlBlockType7(bytes: []const u8, view: View, i: usize) bool {
         if (bytes[t] != ' ' and bytes[t] != '\t' and bytes[t] != '\x0C') return false;
     }
     return true;
+}
+
+/// §4.6 end conditions for types 1-5: does this line (the container-stripped
+/// remainder) end the block? Types 6/7 end at a blank line instead, handled
+/// by the loop's blank-line branch.
+fn htmlBlockEnded(block_type: u8, text: []const u8) bool {
+    return switch (block_type) {
+        1 => containsIgnoreCase(text, "</pre>") or
+            containsIgnoreCase(text, "</script>") or
+            containsIgnoreCase(text, "</style>") or
+            containsIgnoreCase(text, "</textarea>"),
+        2 => std.mem.indexOf(u8, text, "-->") != null,
+        3 => std.mem.indexOf(u8, text, "?>") != null,
+        4 => std.mem.indexOfScalar(u8, text, '>') != null,
+        5 => std.mem.indexOf(u8, text, "]]>") != null,
+        else => false,
+    };
+}
+
+/// Case-insensitive substring search over ASCII bytes (type-1 end tags are
+/// case-insensitive per §4.6).
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0 or needle.len > haystack.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        if (eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return true;
+    }
+    return false;
 }
 
 fn tryFenceOpen(view: View) ?FenceOpen {
@@ -5598,17 +5700,16 @@ test "markdown: HTML block types 6 and 7" {
         try testing.expectEqual(document.Tag.html_block, root.children.items[1].tag);
     }
 
-    // `pre`/`script`/`style`/`textarea` are excluded from type 7 (they are
-    // type-1 starts, §4.6, not yet implemented): a `<pre>` line is paragraph
-    // text with inline raw HTML, not an HTML block.
+    // `pre`/`script`/`style`/`textarea` belong to type 1: an open tag on its
+    // own line is an HTML block (ending at its matching closing tag), not a
+    // type-7 block (which excludes those names).
     {
         var result = try oliver.parse(testing.allocator, "<pre>\nfoo\n</pre>", .markdown, .{});
         defer result.deinit();
         const root = result.document.root;
         try testing.expectEqual(@as(usize, 1), root.children.items.len);
-        const p = root.children.items[0];
-        try testing.expectEqual(document.Tag.paragraph, p.tag);
-        try testing.expectEqual(document.Tag.raw_html, p.children.items[0].tag);
+        try testing.expectEqual(document.Tag.html_block, root.children.items[0].tag);
+        try testing.expectEqualStrings("<pre>\nfoo\n</pre>", root.children.items[0].data.html_block);
     }
 
     // Container prefixes are stripped; content is verbatim otherwise.
