@@ -223,6 +223,40 @@ fn writeOpen(
             try writer.writeAll("<strong>");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
+        .bold => {
+            // Textile `**x**` renders `<b>` (docs/FEATURE-MATRIX.md, Textile
+            // inlines); Markdown never produces this tag.
+            try writer.writeAll("<b>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .italic => {
+            // Textile `__x__` renders `<i>` (docs/FEATURE-MATRIX.md, Textile
+            // inlines); Markdown never produces this tag.
+            try writer.writeAll("<i>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .deleted => {
+            try writer.writeAll("<del>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .inserted => {
+            try writer.writeAll("<ins>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .superscript => {
+            try writer.writeAll("<sup>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .subscript => {
+            try writer.writeAll("<sub>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .span => {
+            // Textile `%x%` renders `<span>` without attributes; the
+            // attribute-bearing forms are a later milestone.
+            try writer.writeAll("<span>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
         .code_span => {
             try writer.writeAll("<code>");
             // Leaf tag: the (normalized) content is escaped like text
@@ -313,6 +347,13 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         },
         .emphasis => try writer.writeAll("</em>"),
         .strong => try writer.writeAll("</strong>"),
+        .bold => try writer.writeAll("</b>"),
+        .italic => try writer.writeAll("</i>"),
+        .deleted => try writer.writeAll("</del>"),
+        .inserted => try writer.writeAll("</ins>"),
+        .superscript => try writer.writeAll("</sup>"),
+        .subscript => try writer.writeAll("</sub>"),
+        .span => try writer.writeAll("</span>"),
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
