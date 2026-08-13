@@ -34,6 +34,9 @@ pub const cooklang_html = @import("cooklang_html.zig");
 /// The canonical Cooklang serializer (semantic Recipe -> valid .cook;
 /// docs/COOKLANG.md §10).
 pub const cooklang_serialize = @import("cooklang_serialize.zig");
+/// The pure Cooklang scaling operation (semantic Recipe -> scaled
+/// Recipe; docs/COOKLANG.md §11).
+pub const cooklang_scale = @import("cooklang_scale.zig");
 
 comptime {
     // The Cooklang modules have their own entry points and are never
@@ -43,6 +46,7 @@ comptime {
     // parser and serializer unit tests (docs/TESTS.md).
     _ = cooklang;
     _ = cooklang_serialize;
+    _ = cooklang_scale;
 }
 
 pub const version = "0.0.0";
