@@ -1960,6 +1960,39 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/char-replace-literal.textile"),
         .expected = @embedFile("fixtures/textile/char-replace-literal.html"),
     },
+    // The `{...}` character-macro table (Textile 2 "Character
+    // Replacements"): the documented forms with their mirrored orders,
+    // inside link display text, and the literal fallbacks — undocumented
+    // shapes, unclosed braces, opacity inside `@code@`/`==`, and the
+    // brace-edge rule that keeps `{*}`/`{-L}` whole for the macro pass
+    // (docs/TEXTILE-PARITY.md §18).
+    .{
+        .name = "char-macro-basic",
+        .input = @embedFile("fixtures/textile/char-macro-basic.textile"),
+        .expected = @embedFile("fixtures/textile/char-macro-basic.html"),
+    },
+    .{
+        .name = "char-macro-literal",
+        .input = @embedFile("fixtures/textile/char-macro-literal.textile"),
+        .expected = @embedFile("fixtures/textile/char-macro-literal.html"),
+    },
+    // Span phrase attributes (Hobix "Phrase Attributes": all block
+    // attributes apply just inside the opening modifier; Textile 2
+    // "Inline formatting operators accept the following modifiers"):
+    // `%[es]cabeza%` → `<span lang="es">`, the fixed render order for a
+    // combined run, nested phrases, and the literal fallbacks — malformed
+    // runs, whitespace/empty content, and a `%` inside a style value
+    // (docs/TEXTILE-PARITY.md §18).
+    .{
+        .name = "span-attr-basic",
+        .input = @embedFile("fixtures/textile/span-attr-basic.textile"),
+        .expected = @embedFile("fixtures/textile/span-attr-basic.html"),
+    },
+    .{
+        .name = "span-attr-literal",
+        .input = @embedFile("fixtures/textile/span-attr-literal.textile"),
+        .expected = @embedFile("fixtures/textile/span-attr-literal.html"),
+    },
     // Inline `==...==` escaping (Textile 2 "Escaping"): phrase delimiters
     // and the character replacements inside the region stay literal, while
     // formatting outside still applies — the current docs' quote example
