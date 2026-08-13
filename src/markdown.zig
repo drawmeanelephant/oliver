@@ -533,7 +533,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         while (true) {
             if (tryStripBlockQuoteMarker(view)) |stripped| {
                 try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
-                const node = try doc.createNode(.block_quote, stripped.line.contentSpan(), .none);
+                const node = try doc.createNode(.block_quote, stripped.line.contentSpan(), .{ .block_quote = .{} });
                 try doc.appendChild(leafParent(doc, &containers), node);
                 try containers.append(doc.allocator(), .{ .node = node });
                 view = stripped;
@@ -1775,7 +1775,7 @@ fn emitSetextHeading(
     const node = try doc.createNode(.heading, .{
         .start = content[0].content.start,
         .end = @intCast(underline_line.line.content_end),
-    }, .{ .heading = underline.level });
+    }, .{ .heading = .{ .level = underline.level } });
     try doc.appendChild(parent, node);
     try pending.append(doc.allocator(), .{
         .setext_heading = .{ .node = node, .lines = content },
@@ -2162,7 +2162,7 @@ fn closeParagraph(
         .start = remaining[0].content.start,
         .end = remaining[remaining.len - 1].content.end,
     };
-    const node = try doc.createNode(.paragraph, span, .none);
+    const node = try doc.createNode(.paragraph, span, .{ .paragraph = .{} });
     try doc.appendChild(parent, node);
     try pending.append(doc.allocator(), .{ .paragraph = .{ .node = node, .lines = remaining } });
 }
@@ -2323,7 +2323,7 @@ fn emitHeading(
     pending: *std.ArrayList(PendingInline),
 ) ParseError!void {
     const node = try doc.createNode(.heading, view.line.contentSpan(), .{
-        .heading = heading.level,
+        .heading = .{ .level = heading.level },
     });
     try doc.appendChild(parent, node);
     if (!heading.content.isEmpty()) {
@@ -4400,7 +4400,7 @@ test "markdown: paragraphs, soft breaks, ATX headings end to end" {
 
     try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
     try testing.expectEqual(document.Tag.heading, result.document.root.children.items[1].tag);
-    try testing.expectEqual(@as(u8, 1), result.document.root.children.items[1].data.heading);
+    try testing.expectEqual(@as(u8, 1), result.document.root.children.items[1].data.heading.level);
     try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[2].tag);
 }
 
@@ -4753,7 +4753,7 @@ test "markdown: Setext headings transform multiline paragraphs with exact spans"
 
     const h = result.document.root.children.items[0];
     try testing.expectEqual(document.Tag.heading, h.tag);
-    try testing.expectEqual(@as(u8, 2), h.data.heading);
+    try testing.expectEqual(@as(u8, 2), h.data.heading.level);
     try testing.expectEqual(source.Span{ .start = 0, .end = @as(u32, @intCast(input.len)) }, h.span);
     try testing.expectEqual(document.Tag.text, h.children.items[0].tag);
     try testing.expectEqualStrings("Foo ", h.children.items[0].data.text);
@@ -4775,7 +4775,7 @@ test "markdown: Setext headings register leading definitions and preserve final 
     try testing.expectEqual(@as(usize, 2), root.children.items.len);
     const h = root.children.items[0];
     try testing.expectEqual(document.Tag.heading, h.tag);
-    try testing.expectEqual(@as(u8, 1), h.data.heading);
+    try testing.expectEqual(@as(u8, 1), h.data.heading.level);
     try testing.expectEqual(source.Span{ .start = 12, .end = 20 }, h.span);
     try testing.expectEqual(@as(usize, 1), h.children.items.len);
     try testing.expectEqualStrings("Bar\\", h.children.items[0].data.text);
