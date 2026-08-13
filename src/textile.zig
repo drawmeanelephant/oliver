@@ -88,6 +88,12 @@
 //!   href="#fnN">N</a></sup>`, and an `fnN.` paragraph renders
 //!   `<p class="footnote" id="fnN"><sup>N</sup> …</p>` (Textile 2
 //!   "Footnotes"; the Hobix form lacks the classes).
+//! - `==` escaping (Textile 2 "Escaping"): a lone `==` line (trailing
+//!   whitespace allowed) opens a block-escape region whose content passes
+//!   through as a raw `.html_block` — unformatted and unescaped, for
+//!   dropping regular HTML into the document. An inline `==...==` suspends
+//!   all inline formatting and the character replacements for the delimited
+//!   span, which renders as literal text (docs/TEXTILE-PARITY.md §14).
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -117,7 +123,29 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     defer lists.deinit(doc.allocator());
     var table: ?TableState = null;
     var code: ?CodeBlockState = null;
+    var escape: ?EscapeState = null;
     while (lines.next()) |line| {
+        // The block-level `==` escape (Textile 2 "Escaping") runs before
+        // every other rule: while the region is open, every line — blank or
+        // not — is content until the next lone `==` line; and the opening
+        // delimiter interrupts any open block, so an escape region can be
+        // dropped in anywhere (docs/TEXTILE-PARITY.md §14).
+        if (escape != null) {
+            if (isEscapeDelimiter(line.text)) {
+                try closeEscape(doc, &escape);
+            } else {
+                appendEscapeLine(&escape, line);
+            }
+            continue;
+        }
+        if (isEscapeDelimiter(line.text)) {
+            try closeBlock(doc, &block, &defs);
+            closeLists(&lists);
+            try closeTable(doc, &table, &defs);
+            try closeCode(doc, &code);
+            escape = .{ .start = @intCast(line.end), .end = @intCast(line.end) };
+            continue;
+        }
         if (isBlank(line.text)) {
             // An extended `bq..` keeps blank lines: the current paragraph
             // flushes and the blockquote stays open (docs/TEXTILE-PARITY.md
@@ -249,6 +277,9 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     closeLists(&lists);
     try closeTable(doc, &table, &defs);
     try closeCode(doc, &code);
+    // An unterminated escape region still renders its content (the region
+    // implicitly closes at end of input; docs/TEXTILE-PARITY.md §14).
+    try closeEscape(doc, &escape);
 }
 
 const BlockKind = enum { paragraph, block_quote };
@@ -511,6 +542,62 @@ fn closeCode(doc: *document.Document, code: *?CodeBlockState) ParseError!void {
             .escape = !active.preformatted,
             .attrs = active.attrs,
         },
+    });
+    try doc.appendChild(doc.root, node);
+}
+
+// ---------------------------------------------------------------------------
+// Block-level `==` escaping.
+//
+// A lone `==` line (trailing whitespace allowed) opens an escape region;
+// every line until the next lone `==` line — blank lines included — is
+// collected verbatim and published as a raw `.html_block` leaf (Textile 2
+// "Escaping": the content is "not formatted by Textile at all", for
+// dropping regular HTML into the document). The delimiter line check runs
+// before every other block rule, so the region can interrupt paragraphs,
+// lists, tables, and open code blocks alike, and blank lines inside stay
+// content. The content lines are contiguous in the source (no container
+// prefixes are stripped), so the payload is one exact source slice.
+// ---------------------------------------------------------------------------
+
+/// An open block-level `==` escape region: the first content line's start
+/// and the running end (last content line's end, terminator included). A
+/// region with no content lines renders nothing.
+const EscapeState = struct {
+    start: u32,
+    end: u32,
+};
+
+/// True for a lone `==` line, optionally followed by trailing whitespace —
+/// the block-level escape delimiter. `===` and an indented `==` are not
+/// delimiters (they stay content).
+fn isEscapeDelimiter(text: []const u8) bool {
+    if (text.len < 2 or text[0] != '=' or text[1] != '=') return false;
+    var i: usize = 2;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
+    return i == text.len;
+}
+
+/// Extends the open region with one content line. The start is fixed on
+/// the first content line (the delimiter's `start == end` placeholder); the
+/// end runs to the last line's end, terminator included.
+fn appendEscapeLine(escape: *?EscapeState, line: source.Line) void {
+    const active = escape.* orelse return;
+    if (active.start == active.end) escape.*.?.start = @intCast(line.start);
+    escape.*.?.end = @intCast(line.end);
+}
+
+/// Publishes the collected region as a `.html_block` leaf. The payload is
+/// the contiguous source slice from the first content line's start through
+/// the last line's terminator, arena-owned (the `.html_block` payload
+/// convention, docs/DOCUMENT-MODEL.md).
+fn closeEscape(doc: *document.Document, escape: *?EscapeState) ParseError!void {
+    const active = escape.* orelse return;
+    escape.* = null;
+    if (active.start >= active.end) return; // empty region renders nothing
+    const span = source.Span{ .start = active.start, .end = active.end };
+    const node = try doc.createNode(.html_block, span, .{
+        .html_block = try doc.allocator().dupe(u8, doc.src.bytes[span.start..span.end]),
     });
     try doc.appendChild(doc.root, node);
 }
@@ -1659,6 +1746,10 @@ const InlineItem = union(enum) {
     link: LinkData,
     image: ImageData,
     footnote: FootnoteRefData,
+    /// A matched `==...==` escaped region (Textile 2 "Escaping"). `span`
+    /// is the inner content range only, delimiters excluded; the content
+    /// emits as literal text with no formatting and no replacements.
+    escape: Range,
 };
 
 const PhraseOp = struct {
@@ -1692,11 +1783,11 @@ fn phraseOpFor(bytes: []const u8, i: usize) ?PhraseOp {
 
 /// Phase 1: scan one line's content into items. Code spans keep the exact
 /// first-following-at-sign, close-once contract of docs/TEXTILE-INLINE-CODE.md
-/// §2. Links, images, and phrase delimiters are discovered in the same pass.
-/// Lookaheads for links/images only reach the next `"`/`!` (or a URL's
-/// whitespace), so segments scanned by failing lookaheads are disjoint and
-/// the pass stays linear. `defs` resolves `"text":alias` references; each
-/// lookup is O(1), so the pass stays linear.
+/// §2. Links, images, `==` escapes, footnotes, and phrase delimiters are
+/// discovered in the same pass. Lookaheads for links/images only reach the
+/// next `"`/`!` (or a URL's whitespace), so segments scanned by failing
+/// lookaheads are disjoint and the pass stays linear. `defs` resolves
+/// `"text":alias` references; each lookup is O(1), so the pass stays linear.
 fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), content: source.Span, defs: *const AliasTable) ParseError!void {
     const bytes = doc.text(content);
     var run_start: usize = 0;
@@ -1759,6 +1850,20 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                     try appendTextItem(doc.allocator(), items, run_start, i);
                     try items.append(doc.allocator(), .{ .footnote = ref });
                     run_start = ref.span.end;
+                    i = run_start;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            if (b == '=') {
+                if (scanEscape(bytes, i)) |esc| {
+                    try appendTextItem(doc.allocator(), items, run_start, i);
+                    try items.append(doc.allocator(), .{ .escape = esc });
+                    // The construct ends at the closing `==` (the item's
+                    // range covers the content only); resume past it so the
+                    // closer cannot reseed a fresh escape attempt.
+                    run_start = esc.end + 2;
                     i = run_start;
                     continue;
                 }
@@ -1870,6 +1975,34 @@ fn scanFootnoteRef(bytes: []const u8, i: usize) ?FootnoteRefData {
     if (j == i + 1) return null; // at least one digit
     if (j >= bytes.len or bytes[j] != ']') return null;
     return .{ .span = .{ .start = i, .end = j + 1 }, .number = number };
+}
+
+/// Recognizes an inline `==...==` escape (Textile 2 "Escaping"; the current
+/// docs' special-characters page: "the Textile formatting can be temporarily
+/// suspended by wrapping the text passage into =="). The opener must sit at
+/// an inline boundary and be exactly `==` — a `=` run longer than two cannot
+/// open (so `===` stays literal), and the byte before must not be `=` either.
+/// The content is non-empty and runs to the *first following* `==`; if that
+/// `==` is not at an inline boundary the whole construct stays literal (the
+/// same first-following rule code spans use). The returned range covers the
+/// inner content only, so the emitted text node is never span-adjacent to
+/// its neighbors — the delimiters occupy the gap — and the model's
+/// contiguous-text merge rule stays intact (docs/TEXTILE-PARITY.md §14).
+fn scanEscape(bytes: []const u8, i: usize) ?Range {
+    std.debug.assert(bytes[i] == '=');
+    if (i + 1 >= bytes.len or bytes[i + 1] != '=') return null;
+    if (i > 0 and bytes[i - 1] == '=') return null;
+    if (i + 2 < bytes.len and bytes[i + 2] == '=') return null; // a `===`+ run cannot open
+    if (i > 0 and !isInlineBoundaryBefore(bytes, i)) return null;
+    var j = i + 2;
+    while (j + 1 < bytes.len) : (j += 1) {
+        if (bytes[j] == '=' and bytes[j + 1] == '=') {
+            if (j == i + 2) return null; // empty content (`== ==` is a space of content, not empty)
+            if (!isInlineBoundaryAfter(bytes, j + 2)) return null; // the first following `==` must qualify
+            return .{ .start = i + 2, .end = j };
+        }
+    }
+    return null; // no closer: the `==` stays literal text
 }
 
 /// Recognizes `!url!`, `!url(alt)!` (Hobix) / `!url (alt)!` (Textile 2), and
@@ -2077,6 +2210,19 @@ fn emitItems(doc: *document.Document, parent: *document.Node, content: source.Sp
                 },
                 .footnote => |f| {
                     const node = try doc.createNode(.footnote_ref, subSpan(content, f.span.start, f.span.end), .{ .footnote_ref = f.number });
+                    try doc.appendChild(scope.parent, node);
+                    i += 1;
+                },
+                .escape => |esc| {
+                    // The escaped span renders as literal text: no phrase
+                    // formatting and no character replacements (Textile 2
+                    // "Escaping"). The span is the inner content only, so
+                    // the delimiters keep it from ever being span-adjacent
+                    // to neighboring text — the contiguous-text merge rule
+                    // never touches it and the raw payload stays exact
+                    // (docs/TEXTILE-PARITY.md §14).
+                    const inner = subSpan(content, esc.start, esc.end);
+                    const node = try doc.createNode(.text, inner, .{ .text = doc.text(inner) });
                     try doc.appendChild(scope.parent, node);
                     i += 1;
                 },
@@ -4139,4 +4285,96 @@ test "textile: replacements apply inside link display text" {
     const link = result.document.root.children.items[0].children.items[0];
     try std.testing.expectEqual(document.Tag.link, link.tag);
     try std.testing.expectEqualStrings("it\u{2019}s", link.children.items[0].data.text);
+}
+
+test "textile: inline == escaping suspends formatting and replacements" {
+    const oliver = @import("oliver.zig");
+    // Textile 2's own example: the phrase delimiters inside the escape stay
+    // literal — the escaped span is a plain text node, never a phrase.
+    var result = try oliver.parse(std.testing.allocator, "This is ==*a test*== of escaping.", .textile, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try std.testing.expectEqual(@as(usize, 3), p.children.items.len);
+    try std.testing.expectEqualStrings("This is ", p.children.items[0].data.text);
+    try std.testing.expectEqual(document.Tag.text, p.children.items[1].tag);
+    try std.testing.expectEqualStrings("*a test*", p.children.items[1].data.text);
+    try std.testing.expectEqualStrings(" of escaping.", p.children.items[2].data.text);
+    // The current docs' example: character conversions are suspended too —
+    // the quotes stay straight (they still render HTML-escaped).
+    var quotes = try oliver.parse(std.testing.allocator, "Straight quotation marks are ==\"left alone\"== in this example.", .textile, .{});
+    defer quotes.deinit();
+    try std.testing.expectEqualStrings("\"left alone\"", quotes.document.root.children.items[0].children.items[1].data.text);
+    // Replacements never apply inside the escape (em dash, dimension sign,
+    // paren macro), while phrases and replacements outside still work.
+    var mixed = try oliver.parse(std.testing.allocator, "a ==b--c (tm) 2x4== d *e*", .textile, .{});
+    defer mixed.deinit();
+    const mp = mixed.document.root.children.items[0];
+    try std.testing.expectEqualStrings("b--c (tm) 2x4", mp.children.items[1].data.text);
+    try std.testing.expectEqual(document.Tag.strong, mp.children.items[3].tag);
+    // The escaped node's span is the inner content only: the delimiters sit
+    // between it and the neighbors, so spans never merge (model invariant
+    // 11) and the payload stays exact. `a ==b--c (tm) 2x4== d *e*` puts the
+    // content at [4,17] and the trailing text at [19,22].
+    try std.testing.expectEqual(source.Span{ .start = 4, .end = 17 }, mp.children.items[1].span);
+    try std.testing.expectEqual(source.Span{ .start = 19, .end = 22 }, mp.children.items[2].span);
+}
+
+test "textile: malformed == shapes stay literal" {
+    const oliver = @import("oliver.zig");
+    // The conservative boundary contract (docs/TEXTILE-PARITY.md §14): the
+    // opener must sit at an inline boundary, the closer must too, a `=` run
+    // longer than two cannot open, and an unmatched `==` is text.
+    const cases = [_][]const u8{
+        "a==x==b", // opener not at a boundary
+        "==x==y", // closer not at a boundary
+        "===x==", // a `===`+ run cannot open
+        "x == y", // no closer
+        "== unmatched", // no closer
+    };
+    for (cases) |input| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), p.children.items.len);
+        try std.testing.expectEqualStrings(input, p.children.items[0].data.text);
+    }
+    // Two separate escapes on one line each emit their own text node.
+    var two = try oliver.parse(std.testing.allocator, "==x== ==y==", .textile, .{});
+    defer two.deinit();
+    const tp = two.document.root.children.items[0];
+    try std.testing.expectEqualStrings("x", tp.children.items[0].data.text);
+    try std.testing.expectEqualStrings(" ", tp.children.items[1].data.text);
+    try std.testing.expectEqualStrings("y", tp.children.items[2].data.text);
+}
+
+test "textile: block == escaping emits raw html blocks" {
+    const oliver = @import("oliver.zig");
+    // Textile 2's own example: the escaped portion is not formatted at all
+    // — no paragraph wrapper, no em-dash replacement.
+    var result = try oliver.parse(std.testing.allocator, "p. Regular paragraph\n==\nEscaped portion -- will not be formatted\nby Textile at all\n==\np. Back to normal.\n", .textile, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try std.testing.expectEqual(@as(usize, 3), root.children.items.len);
+    try std.testing.expectEqual(document.Tag.paragraph, root.children.items[0].tag);
+    const raw = root.children.items[1];
+    try std.testing.expectEqual(document.Tag.html_block, raw.tag);
+    try std.testing.expectEqualStrings("Escaped portion -- will not be formatted\nby Textile at all\n", raw.data.html_block);
+    try std.testing.expectEqual(document.Tag.paragraph, root.children.items[2].tag);
+    // Blank lines inside the region are content, and an unterminated region
+    // closes at end of input (still rendering its content).
+    var eof = try oliver.parse(std.testing.allocator, "==\nline one\n\nline two\n", .textile, .{});
+    defer eof.deinit();
+    const eof_raw = eof.document.root.children.items[0];
+    try std.testing.expectEqual(document.Tag.html_block, eof_raw.tag);
+    try std.testing.expectEqualStrings("line one\n\nline two\n", eof_raw.data.html_block);
+    // An empty region renders nothing.
+    var empty = try oliver.parse(std.testing.allocator, "==\n==\n", .textile, .{});
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 0), empty.document.root.children.items.len);
+    // The opening delimiter interrupts an open paragraph.
+    var inter = try oliver.parse(std.testing.allocator, "before\n==\n<b>x</b>\n==\nafter\n", .textile, .{});
+    defer inter.deinit();
+    const iroot = inter.document.root;
+    try std.testing.expectEqual(@as(usize, 3), iroot.children.items.len);
+    try std.testing.expectEqualStrings("<b>x</b>\n", iroot.children.items[1].data.html_block);
 }
