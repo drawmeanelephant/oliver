@@ -39,6 +39,7 @@
 
 const std = @import("std");
 const document = @import("document.zig");
+const entities = @import("entities.zig");
 
 pub const RenderOptions = struct {
     /// Emit void elements with a trailing slash (`<br />`) instead of the
@@ -204,6 +205,16 @@ fn writeOpen(
             try writeEscaped(writer, code.content);
             try writer.writeAll("</code></pre>\n");
         },
+        .html_block => {
+            // Leaf block: the verbatim container-stripped source lines, no
+            // escaping (the raw-HTML policy of docs/RAW-HTML.md §3). Every
+            // block is followed by exactly one `\n`, so an unterminated
+            // final line gets one here (the reference implementation's
+            // `cr()`).
+            const content = node.data.html_block;
+            try writer.writeAll(content);
+            if (content.len == 0 or content[content.len - 1] != '\n') try writer.writeByte('\n');
+        },
         .emphasis => {
             try writer.writeAll("<em>");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
@@ -259,7 +270,7 @@ fn writeOpen(
             }
             try writer.writeAll(if (options.void_trailing_slash) " />" else ">");
         },
-        .text => try writeEscaped(writer, node.data.text),
+        .text => try writeEscapedText(writer, node.data.text),
         .raw_html => {
             // Leaf tag: the raw source bytes of the construct, verbatim —
             // no escaping (docs/RAW-HTML.md §3). The span may include line
@@ -305,7 +316,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .thematic_break, .code_block, .text, .image, .autolink, .raw_html, .soft_break, .hard_break => unreachable,
+        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .raw_html, .soft_break, .hard_break => unreachable,
     }
 }
 
@@ -383,6 +394,32 @@ fn writeEscaped(writer: anytype, text: []const u8) !void {
         start = i + 1;
     }
     if (start < text.len) try writer.writeAll(text[start..]);
+}
+
+/// Escapes text content after decoding §2.5 entity and numeric character
+/// references: the decoded character is escaped like any other text byte,
+/// so `&amp;` renders as `&amp;`, `&#X22;` as `&quot;`, and `&ouml;` as
+/// `ö`. Text nodes borrow the source (docs/DOCUMENT-MODEL.md invariant 9),
+/// so entity decoding happens here at render time, exactly where the
+/// delimiter scanner and inline matcher can no longer see it (an
+/// entity-produced `*` is text, never an emphasis delimiter). Code spans
+/// and code blocks keep `writeEscaped` — references are literal there.
+fn writeEscapedText(writer: anytype, text: []const u8) !void {
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] == '&') {
+            if (entities.decodeAt(text, i)) |dec| {
+                if (i > start) try writeEscaped(writer, text[start..i]);
+                try writeEscaped(writer, dec.bytes[0..dec.len]);
+                i = dec.next;
+                start = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if (start < text.len) try writeEscaped(writer, text[start..]);
 }
 
 // ---------------------------------------------------------------------------

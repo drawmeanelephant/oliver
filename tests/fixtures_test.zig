@@ -125,6 +125,58 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/escape-special.md"),
         .expected = @embedFile("fixtures/markdown/escape-special.html"),
     },
+    // --- entities (docs: FEATURE-MATRIX "entity references") ---
+    .{
+        .name = "entity-text",
+        .input = @embedFile("fixtures/markdown/entity-text.md"),
+        .expected = @embedFile("fixtures/markdown/entity-text.html"),
+    },
+    .{
+        .name = "entity-nonentity",
+        .input = @embedFile("fixtures/markdown/entity-nonentity.md"),
+        .expected = @embedFile("fixtures/markdown/entity-nonentity.html"),
+    },
+    .{
+        .name = "entity-code",
+        .input = @embedFile("fixtures/markdown/entity-code.md"),
+        .expected = @embedFile("fixtures/markdown/entity-code.html"),
+    },
+    .{
+        .name = "entity-structural",
+        .input = @embedFile("fixtures/markdown/entity-structural.md"),
+        .expected = @embedFile("fixtures/markdown/entity-structural.html"),
+    },
+    .{
+        .name = "entity-info",
+        .input = @embedFile("fixtures/markdown/entity-info.md"),
+        .expected = @embedFile("fixtures/markdown/entity-info.html"),
+    },
+    // --- HTML blocks, types 6/7 (docs: FEATURE-MATRIX "raw HTML") ---
+    .{
+        .name = "html-block-type6",
+        .input = @embedFile("fixtures/markdown/html-block-type6.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type6.html"),
+    },
+    .{
+        .name = "html-block-type7",
+        .input = @embedFile("fixtures/markdown/html-block-type7.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type7.html"),
+    },
+    .{
+        .name = "html-block-interrupt",
+        .input = @embedFile("fixtures/markdown/html-block-interrupt.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-interrupt.html"),
+    },
+    .{
+        .name = "html-block-in-quote",
+        .input = @embedFile("fixtures/markdown/html-block-in-quote.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-in-quote.html"),
+    },
+    .{
+        .name = "unicode",
+        .input = @embedFile("fixtures/markdown/unicode.md"),
+        .expected = @embedFile("fixtures/markdown/unicode.html"),
+    },
     // --- emphasis / strong emphasis (docs/INLINE-PARSING.md §15) ---
     .{
         .name = "em-simple",

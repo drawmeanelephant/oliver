@@ -97,6 +97,7 @@ const source = @import("source.zig");
 const document = @import("document.zig");
 const diagnostic = @import("diagnostic.zig");
 const unicode = @import("unicode.zig");
+const entities = @import("entities.zig");
 
 pub const ParseError = error{OutOfMemory};
 
@@ -317,6 +318,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var paragraph: ?Paragraph = null;
     var fenced: ?FencedCode = null;
     var indented: ?IndentedCode = null;
+    var html: ?HtmlBlock = null;
 
     var lines = source.Lines.init(doc.src.bytes);
     while (lines.next()) |line| {
@@ -413,7 +415,28 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             }
         }
 
+        // An open HTML block (§4.6, types 6/7) owns every non-blank line
+        // while its containing containers still match; a blank line ends the
+        // block, as does a container whose marker is absent. Content is the
+        // remainder verbatim, so the line is consumed wholesale: no
+        // blank-line, lazy-continuation, block-start, or inline rule runs
+        // here.
+        if (html) |*active| {
+            if (matched == active.container_depth) {
+                if (!isBlank(view.line.text)) {
+                    try appendHtmlBlockLine(doc, &active.content, view);
+                    active.node.span.end = @intCast(view.line.content_end);
+                    extendContainerSpans(&containers, view.line);
+                    continue;
+                }
+                finishHtmlBlock(&html);
+            } else {
+                std.debug.assert(matched < active.container_depth);
+                finishHtmlBlock(&html);
+            }
+        }
 
+        // The same physical line can be re-examined at many nested list
         // depths. Summarize its thematic-break suffixes once so precedence
         // checks stay O(1) per consumed container marker. Literal fenced-code
         // content bypasses this work above.
@@ -446,7 +469,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         if (matched < containers.items.len) {
             const list_sibling = startsListSibling(&containers, matched, view, &thematic_facts);
             resolveListBlankPending(&containers, matched, view, &thematic_facts);
-            if (paragraph != null and !list_sibling and isParagraphContinuationText(view, &thematic_facts)) {
+            if (paragraph != null and !list_sibling and isParagraphContinuationText(doc, view, &thematic_facts)) {
                 try appendParagraphLine(doc, &paragraph, view);
                 extendContainerSpans(&containers, view.line);
                 continue;
@@ -580,7 +603,27 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             extendContainerSpans(&containers, view.line);
             continue;
         }
-
+        // HTML blocks (§4.6), types 6/7. Type 7 cannot interrupt a
+        // paragraph, so it is only tried when no paragraph is open. The node
+        // is appended at open (container order fixed) and content
+        // accumulates verbatim until a blank line or the end of its
+        // container.
+        if (tryHtmlBlockStart(doc, view, paragraph == null)) |_| {
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            const node = try doc.createNode(.html_block, view.line.contentSpan(), .{
+                .html_block = &.{},
+            });
+            try doc.appendChild(leafParent(doc, &containers), node);
+            html = .{
+                .node = node,
+                .container_depth = containers.items.len,
+            };
+            try appendHtmlBlockLine(doc, &html.?.content, view);
+            node.span.end = @intCast(view.line.content_end);
+            extendContainerSpans(&containers, view.line);
+            continue;
+        }
+        // Indented code blocks (§4.4): a chunk needs four or more columns of
         // indentation and cannot interrupt a paragraph, so this is the last
         // block start, guarded by no open paragraph. The node is appended at
         // open so container order is fixed; content accumulates incrementally
@@ -606,6 +649,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     }
     finishFencedCode(&fenced);
     try finishIndentedCode(doc, &indented);
+    finishHtmlBlock(&html);
     try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
 
     // Phase 2: inline pass, with the full definitions map available.
@@ -971,6 +1015,7 @@ fn resolveListBlankPending(
 /// only a paragraph at the same matched container depth, never through a
 /// missing container marker.
 fn isParagraphContinuationText(
+    doc: *document.Document,
     view: View,
     thematic_facts: *const ThematicLineFacts,
 ) bool {
@@ -979,6 +1024,9 @@ fn isParagraphContinuationText(
     if (tryFenceOpen(view) != null) return false;
     if (isThematicBreak(view, thematic_facts)) return false;
     if (tryListMarker(view)) |m| return !m.can_interrupt;
+    // Type 7 cannot interrupt a paragraph, so only types 1-6 (here: type
+    // 6) count as non-continuation text (§4.6).
+    if (tryHtmlBlockStart(doc, view, false) != null) return false;
     return true;
 }
 
@@ -1063,6 +1111,110 @@ const IndentedCode = struct {
     container_depth: usize,
     content: std.ArrayList(u8) = .empty,
 };
+
+/// The one open HTML block leaf (§4.6; types 6/7). Content accumulates the
+/// container-stripped remainder of each line *verbatim* — leading spaces and
+/// line-ending bytes included — because the block's source lines are not
+/// contiguous once container prefixes are stripped (the reference
+/// implementation's `add_line` keeps everything from its offset onward).
+/// The block ends at a blank line, or when a containing container closes.
+const HtmlBlock = struct {
+    node: *document.Node,
+    container_depth: usize,
+    content: std.ArrayList(u8) = .empty,
+};
+
+fn appendHtmlBlockLine(doc: *document.Document, out: *std.ArrayList(u8), view: View) ParseError!void {
+    try out.appendSlice(doc.allocator(), doc.src.bytes[view.line.start..view.line.end]);
+}
+
+/// Publishes the arena-backed verbatim payload.
+fn finishHtmlBlock(html: *?HtmlBlock) void {
+    const active = html.* orelse return;
+    active.node.data = .{ .html_block = active.content.items };
+    html.* = null;
+}
+
+/// §4.6 type-6 block tag names, matching the reference implementation's
+/// scanner list. The match is case-sensitive (cmark's re2c `blocktagname`
+/// is lowercase; the spec prose says "case-insensitive", but the corpus is
+/// generated by cmark, which routes uppercase tags like `<DIV>` through
+/// the type-7 scanner instead).
+const html_block_tags = [_][]const u8{
+    "address", "article",  "aside",   "base",     "basefont", "blockquote", "body",
+    "caption", "center",   "col",     "colgroup", "dd",       "details",    "dialog",
+    "dir",     "div",      "dl",      "dt",       "fieldset", "figcaption", "figure",
+    "footer",  "form",     "frame",   "frameset", "h1",       "h2",         "h3",
+    "h4",      "h5",       "h6",      "head",     "header",   "hr",         "html",
+    "iframe",  "legend",   "li",      "link",     "main",     "menu",       "menuitem",
+    "nav",     "noframes", "ol",      "optgroup", "option",   "p",          "param",
+    "search",  "section",  "summary", "table",    "tbody",    "td",         "tfoot",
+    "th",      "thead",    "title",   "tr",       "track",    "ul",
+};
+
+/// §4.6 HTML block start conditions, types 6/7. `allow_type_7` is false
+/// while a paragraph is open: "All types of HTML blocks except type 7 may
+/// interrupt a paragraph."
+fn tryHtmlBlockStart(doc: *document.Document, view: View, allow_type_7: bool) ?u8 {
+    const text = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return null;
+    const i = skipped.i;
+    if (i >= text.len or text[i] != '<') return null;
+    if (scanHtmlBlockType6(text, i)) return 6;
+    if (allow_type_7 and scanHtmlBlockType7(doc.src.bytes, view, i)) return 7;
+    return null;
+}
+
+/// Type 6 start: `<` or `</` + one of the block tag names + a space, tab,
+/// vertical tab, form feed, `>`, `/>`, or end of line (cmark's
+/// `[<] [/]? blocktagname (spacechar | [/]? [>])`).
+fn scanHtmlBlockType6(text: []const u8, i: usize) bool {
+    var p = i + 1;
+    if (p < text.len and text[p] == '/') p += 1;
+    for (html_block_tags) |name| {
+        if (p + name.len > text.len or !std.mem.eql(u8, text[p .. p + name.len], name)) continue;
+        const after = p + name.len;
+        if (after >= text.len) return false;
+        switch (text[after]) {
+            ' ', '\t', '\x0B', '\x0C', '\r', '\n', '>' => return true,
+            '/' => return after + 1 < text.len and text[after + 1] == '>',
+            else => continue, // e.g. `head` is a prefix of `header`
+        }
+    }
+    return false;
+}
+
+/// Type 7 start: the whole line (after up to three spaces of indentation)
+/// is a complete open tag or closing tag plus optional spaces/tabs/form
+/// feeds — cmark's `[<] (opentag | closetag) [\t\n\f ]* [\r\n]`. Open
+/// tags named `pre`/`script`/`style`/`textarea` are excluded (they are
+/// type 1); closing tags of those names are still type 7. The tag must be
+/// complete per the §6.6 grammar, so comments/PIs/declarations/CDATA
+/// (types 2-5) never match here.
+fn scanHtmlBlockType7(bytes: []const u8, view: View, i: usize) bool {
+    const tag = scanHtmlTag(bytes, view.line.start + i, view.line.content_end) orelse return false;
+    const tag_text = bytes[tag.start..tag.end];
+    if (tag_text.len < 2) return false;
+    if (tag_text[1] == '/') {
+        // Closing tag: no name exclusion (cmark and the spec agree).
+    } else if (isAsciiLetter(tag_text[1])) {
+        var p: usize = 1;
+        while (p < tag_text.len and isTagNameChar(tag_text[p])) : (p += 1) {}
+        const name = tag_text[1..p];
+        // `pre`/`script`/`style`/`textarea` are excluded here because they
+        // are type-1 starts (§4.6) — a future milestone — so they must not
+        // become type-7 blocks.
+        if (std.mem.eql(u8, name, "pre") or std.mem.eql(u8, name, "script") or
+            std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "textarea")) return false;
+    } else {
+        return false; // `<!`/`<?` forms are types 2-5
+    }
+    var t = tag.end;
+    while (t < view.line.content_end) : (t += 1) {
+        if (bytes[t] != ' ' and bytes[t] != '\t' and bytes[t] != '\x0C') return false;
+    }
+    return true;
+}
 
 fn tryFenceOpen(view: View) ?FenceOpen {
     const text = view.line.text;
@@ -3444,12 +3596,15 @@ fn emitInlines(
                 try doc.appendChild(current, node);
             },
             .autolink => |al| {
-                // Leaf node: the raw content between `<` and `>` becomes
-                // both the label (verbatim, escapes inert) and the href
-                // (with `mailto:` prepended for email autolinks). The href
-                // is arena-owned because of the prefix; the label is the
-                // verbatim content copy (docs/AUTOLINKS.md §3).
-                const content = doc.src.bytes[al.content.start..al.content.end];
+                // Leaf node: the content between `<` and `>` becomes both
+                // the label and the href (with `mailto:` prepended for
+                // email autolinks). Backslash escapes are inert inside
+                // autolinks (§6.5), but entity references are still
+                // recognized (the reference implementation's
+                // `cmark_clean_autolink`/`make_str_with_entities` decode
+                // them); the payload is arena-owned because of the prefix
+                // and the decoded copy (docs/AUTOLINKS.md §3).
+                const content = try resolveEntities(doc, al.content);
                 const href = if (al.is_email)
                     try std.fmt.allocPrint(doc.allocator(), "mailto:{s}", .{content})
                 else
@@ -3625,11 +3780,11 @@ fn allSpaces(s: []const u8) bool {
 /// cannot borrow the source because references are consumed. Line endings
 /// are kept verbatim (titles may span lines).
 fn resolveEscapes(doc: *document.Document, span: source.Span) ParseError![]const u8 {
-    const bytes = doc.src.bytes;
+    const decoded = try resolveEntities(doc, span);
     var n: usize = 0;
-    var i = span.start;
-    while (i < span.end) : (i += 1) {
-        if (bytes[i] == '\\' and i + 1 < span.end and isAsciiPunctuation(bytes[i + 1])) {
+    var i: usize = 0;
+    while (i < decoded.len) : (i += 1) {
+        if (decoded[i] == '\\' and i + 1 < decoded.len and isAsciiPunctuation(decoded[i + 1])) {
             i += 1;
         }
         n += 1;
@@ -3637,26 +3792,66 @@ fn resolveEscapes(doc: *document.Document, span: source.Span) ParseError![]const
 
     const buf = try doc.allocator().alloc(u8, n);
     var k: usize = 0;
-    i = span.start;
-    while (i < span.end) : (i += 1) {
-        if (bytes[i] == '\\' and i + 1 < span.end and isAsciiPunctuation(bytes[i + 1])) {
-            buf[k] = bytes[i + 1];
+    i = 0;
+    while (i < decoded.len) : (i += 1) {
+        if (decoded[i] == '\\' and i + 1 < decoded.len and isAsciiPunctuation(decoded[i + 1])) {
+            buf[k] = decoded[i + 1];
             i += 1;
         } else {
-            buf[k] = bytes[i];
+            buf[k] = decoded[i];
         }
         k += 1;
     }
     return buf;
-}fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) ParseError!void {
+}
+
+/// Resolves §2.5 entity and numeric character references in a span into an
+/// arena-owned copy, or returns the borrowed source span when the span
+/// contains none. The common case (no `&` or no valid reference) borrows;
+/// only a span containing a reference allocates.
+fn resolveEntities(doc: *document.Document, span: source.Span) ParseError![]const u8 {
+    const bytes = doc.src.bytes;
+    var i = span.start;
+    while (i < span.end) : (i += 1) {
+        if (bytes[i] != '&') continue;
+        if (entities.decodeAt(bytes, i) == null) continue;
+        // A reference decodes here: build the arena copy from the start.
+        var buf = std.ArrayList(u8).empty;
+        defer buf.deinit(doc.allocator());
+        var run_start = span.start;
+        var j = span.start;
+        while (j < span.end) : (j += 1) {
+            if (bytes[j] == '&') {
+                if (entities.decodeAt(bytes, j)) |dec| {
+                    try buf.appendSlice(doc.allocator(), bytes[run_start..j]);
+                    try buf.appendSlice(doc.allocator(), dec.bytes[0..dec.len]);
+                    j = @intCast(dec.next - 1);
+                    run_start = j + 1;
+                }
+            }
+        }
+        try buf.appendSlice(doc.allocator(), bytes[run_start..span.end]);
+        return doc.allocator().dupe(u8, buf.items);
+    }
+    return bytes[span.start..span.end];
+}
+
+fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) ParseError!void {
     if (span.isEmpty()) return;
     // Contiguous text in the same parent merges into one node: scanning
-    // artifacts (item boundaries, leftover delimiters, escape splits) must
-    // not fragment the normalized model. The merged span covers adjacent
-    // source bytes, so the borrowed text payload is exact.
+    // artifacts (item boundaries, leftover delimiters) must not fragment
+    // the normalized model. The merged span covers adjacent source bytes,
+    // so the borrowed text payload is exact.
+    //
+    // Escape splits are the one deliberate exception: a node whose first
+    // byte is a backslash-escaped character never merges with the text
+    // after it, so the escaped byte stays its own node and the renderer's
+    // entity decoding remains escape-aware (`\&ouml;` must render
+    // `&amp;ouml;`, never decode the reference the backslash protects).
     if (parent.children.items.len > 0) {
         const last = parent.children.items[parent.children.items.len - 1];
-        if (last.tag == .text and last.span.end == span.start)
+        if (last.tag == .text and last.span.end == span.start and
+            !(last.span.start > 0 and doc.src.bytes[last.span.start - 1] == '\\'))
         {
             last.span.end = span.end;
             last.data.text = doc.text(last.span);
@@ -4115,13 +4310,17 @@ test "markdown: escapes produce literal characters with precise spans" {
     var result = try oliver.parse(testing.allocator, "a\\*b", .markdown, .{});
     defer result.deinit();
     const p = result.document.root.children.items[0];
-    // The escape marker is covered by no node; the escaped * (span {2,3}) is
-    // contiguous with "b" (span {3,4}) and merges into one text node.
-    try testing.expectEqual(@as(usize, 2), p.children.items.len); // "a", "*b"
+    // The escape marker is covered by no node. The escaped * (span {2,3})
+    // stays its own node: it never merges with the following text, so the
+    // renderer's entity decoding remains escape-aware (the boundary is
+    // visible to the text pass).
+    try testing.expectEqual(@as(usize, 3), p.children.items.len); // "a", "*", "b"
     try testing.expectEqualStrings("a", p.children.items[0].data.text);
     try testing.expectEqual(source.Span{ .start = 0, .end = 1 }, p.children.items[0].span);
-    try testing.expectEqual(source.Span{ .start = 2, .end = 4 }, p.children.items[1].span);
-    try testing.expectEqualStrings("*b", p.children.items[1].data.text);
+    try testing.expectEqual(source.Span{ .start = 2, .end = 3 }, p.children.items[1].span);
+    try testing.expectEqualStrings("*", p.children.items[1].data.text);
+    try testing.expectEqual(source.Span{ .start = 3, .end = 4 }, p.children.items[2].span);
+    try testing.expectEqualStrings("b", p.children.items[2].data.text);
 }
 
 test "markdown: hard breaks" {
@@ -4376,13 +4575,17 @@ test "markdown: mod-3 rule (spec examples)" {
 test "markdown: escaped delimiters are literal, not delimiters" {
     const oliver = @import("oliver.zig");
 
-    // \*foo* — the first * is escaped, so nothing opens; all literal.
+    // \*foo* — the first * is escaped, so nothing opens; all literal. The
+    // escaped * stays its own node (the escape boundary is visible to the
+    // renderer's entity decoding), and the trailing literal * merges with
+    // "foo".
     {
         var result = try oliver.parse(testing.allocator, "\\*foo*", .markdown, .{});
         defer result.deinit();
         const p = result.document.root.children.items[0];
-        try testing.expectEqual(@as(usize, 1), p.children.items.len);
-        try testing.expectEqualStrings("*foo*", p.children.items[0].data.text);
+        try testing.expectEqual(@as(usize, 2), p.children.items.len);
+        try testing.expectEqualStrings("*", p.children.items[0].data.text);
+        try testing.expectEqualStrings("foo*", p.children.items[1].data.text);
     }
     // \\*emphasis* — the escaped backslash is literal, then real emphasis.
     {
@@ -4422,12 +4625,14 @@ test "markdown: emphasis in headings" {
     try testing.expectEqualStrings("foo ", h.children.items[0].data.text);
     try testing.expectEqual(document.Tag.emphasis, h.children.items[1].tag);
     try testing.expectEqualStrings("bar", h.children.items[1].children.items[0].data.text);
-    // The escaped stars are literal; escape splits merge where contiguous:
-    // " " (gap from the consumed backslash), then "*baz" (star + baz), then
-    // a final escaped star.
+    // The escaped stars are literal; escape splits never merge the escaped
+    // character with the following text (the boundary must stay visible to
+    // the renderer's entity decoding), and each escape's backslash leaves a
+    // gap, so the model is " ", "*", "baz", "*".
     try testing.expectEqualStrings(" ", h.children.items[2].data.text);
-    try testing.expectEqualStrings("*baz", h.children.items[3].data.text);
-    try testing.expectEqualStrings("*", h.children.items[4].data.text);
+    try testing.expectEqualStrings("*", h.children.items[3].data.text);
+    try testing.expectEqualStrings("baz", h.children.items[4].data.text);
+    try testing.expectEqualStrings("*", h.children.items[5].data.text);
 }
 
 test "markdown: code spans basic structure and content" {
@@ -5292,6 +5497,128 @@ test "markdown: raw HTML preserves multiline bytes and flattens image alt" {
         const img = result.document.root.children.items[0].children.items[0];
         try testing.expectEqual(document.Tag.image, img.tag);
         try testing.expectEqualStrings("<b>x</b>", img.data.image.alt);
+    }
+}
+
+test "markdown: entity references decode in text but not code or raw HTML" {
+    const oliver = @import("oliver.zig");
+
+    // Named and numeric references decode in text (§2.5); `&amp;` decodes
+    // to `&` and re-escapes, and an entity-produced `*` is not a delimiter.
+    {
+        var result = try oliver.parse(testing.allocator, "&nbsp; &amp; &#35; &#X22; &#42;foo&#42;", .markdown, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>\u{a0} &amp; # &quot; *foo*</p>\n", out.items);
+    }
+
+    // Nonentities and backslash-escaped ampersands stay literal: the
+    // escaped `&` must not be decoded as part of a reference.
+    {
+        var result = try oliver.parse(testing.allocator, "&copy &MadeUpEntity; \\&ouml;", .markdown, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>&amp;copy &amp;MadeUpEntity; &amp;ouml;</p>\n", out.items);
+    }
+
+    // References are literal inside code spans and code blocks.
+    {
+        var result = try oliver.parse(testing.allocator, "`&amp;`\n\n    &amp;\n", .markdown, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p><code>&amp;amp;</code></p>\n<pre><code>&amp;amp;\n</code></pre>\n", out.items);
+    }
+
+    // A decoded tab and newline are text bytes, not breaks or indentation.
+    {
+        var result = try oliver.parse(testing.allocator, "&#9;foo\n\nfoo&#10;&#10;bar", .markdown, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>\tfoo</p>\n<p>foo\n\nbar</p>\n", out.items);
+    }
+}
+
+test "markdown: HTML block types 6 and 7" {
+    const oliver = @import("oliver.zig");
+
+    // Type 6: a block tag on its own line; content is verbatim and ends at
+    // a blank line. The `<table>` line is a complete type-6 start even with
+    // attributes.
+    {
+        var result = try oliver.parse(testing.allocator, "<div id=\"foo\">\n  *hello*\n\nokay.", .markdown, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try testing.expectEqual(document.Tag.html_block, root.children.items[0].tag);
+        try testing.expectEqualStrings("<div id=\"foo\">\n  *hello*\n", root.children.items[0].data.html_block);
+        try testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+    }
+
+    // Type 7: a complete open tag with a non-block name; cannot interrupt a
+    // paragraph, so it is only a block at a fresh start.
+    {
+        var result = try oliver.parse(testing.allocator, "<a href=\"bar\">\n*foo*\n</a>", .markdown, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try testing.expectEqual(@as(usize, 1), root.children.items.len);
+        try testing.expectEqual(document.Tag.html_block, root.children.items[0].tag);
+        try testing.expectEqualStrings("<a href=\"bar\">\n*foo*\n</a>", root.children.items[0].data.html_block);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "Foo\n<a href=\"bar\">\nbaz", .markdown, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.paragraph, p.tag);
+        try testing.expectEqual(document.Tag.text, p.children.items[0].tag);
+        try testing.expectEqual(document.Tag.soft_break, p.children.items[1].tag);
+        try testing.expectEqual(document.Tag.raw_html, p.children.items[2].tag);
+    }
+
+    // Type 6 can interrupt a paragraph; type 7 cannot.
+    {
+        var result = try oliver.parse(testing.allocator, "Foo\n<div>\nbar", .markdown, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try testing.expectEqual(document.Tag.paragraph, root.children.items[0].tag);
+        try testing.expectEqual(document.Tag.html_block, root.children.items[1].tag);
+    }
+
+    // `pre`/`script`/`style`/`textarea` are excluded from type 7 (they are
+    // type-1 starts, §4.6, not yet implemented): a `<pre>` line is paragraph
+    // text with inline raw HTML, not an HTML block.
+    {
+        var result = try oliver.parse(testing.allocator, "<pre>\nfoo\n</pre>", .markdown, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try testing.expectEqual(@as(usize, 1), root.children.items.len);
+        const p = root.children.items[0];
+        try testing.expectEqual(document.Tag.paragraph, p.tag);
+        try testing.expectEqual(document.Tag.raw_html, p.children.items[0].tag);
+    }
+
+    // Container prefixes are stripped; content is verbatim otherwise.
+    {
+        var result = try oliver.parse(testing.allocator, "> <div>\n> foo\n\nbar", .markdown, .{});
+        defer result.deinit();
+        const quote = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.block_quote, quote.tag);
+        try testing.expectEqual(document.Tag.html_block, quote.children.items[0].tag);
+        try testing.expectEqualStrings("<div>\nfoo\n", quote.children.items[0].data.html_block);
     }
 }
 
