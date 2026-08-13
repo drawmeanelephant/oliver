@@ -148,10 +148,14 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
     var stack = std.ArrayList(Frame).empty;
     defer stack.deinit(gpa);
 
+    // The footnote-numbering table is always allocated: `deinit` runs on
+    // every path, so an `undefined` map here would be freed while uninitialized
+    // (the managed HashMap's pointer-stability mutex is garbage) — a crash
+    // that only manifests on some platforms/stack states.
     var fn_ctx = if (options.footnotes and doc.footnotes.items.len > 0)
         try Footnotes.init(gpa, doc)
     else
-        Footnotes{ .numbers = undefined };
+        Footnotes{ .numbers = std.StringHashMap(u32).init(gpa) };
     defer fn_ctx.deinit(gpa);
 
     try stack.append(gpa, .{ .enter = .{
@@ -1682,6 +1686,51 @@ test "html: footnote refs and section render in first-reference order" {
     var out2 = try renderDoc(&doc);
     defer out2.deinit(testing.allocator);
     try testing.expect(std.mem.indexOf(u8, out2.items, "footnote-ref") == null);
+}
+
+test "html: render without footnote context never frees an uninitialized map" {
+    // Regression: the footnote-numbering table was left `undefined` whenever
+    // the footnotes option was off (or on with no definitions), yet `deinit`
+    // ran unconditionally. Freeing an uninitialized managed HashMap reads the
+    // garbage `pointer_stability` mutex and aborts on platforms/stack states
+    // where that garbage is non-zero (observed on Linux CI; benign on macOS).
+    // Every render path must construct the map with a real allocator.
+    {
+        // Default options, no footnotes anywhere.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+        try doc.appendChild(doc.root, p);
+        try addText(&doc, p, "No footnotes here.");
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>No footnotes here.</p>\n", out.items);
+    }
+    {
+        // Option enabled but the document defines no footnotes.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+        try doc.appendChild(doc.root, p);
+        try addText(&doc, p, "Plain paragraph.");
+        var out = try renderDocOpts(&doc, .{ .footnotes = true });
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>Plain paragraph.</p>\n", out.items);
+    }
+    {
+        // Definitions present but the option off: refs render literally and
+        // the numbering table is still the empty-initialized path.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+        try doc.appendChild(doc.root, p);
+        try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "x" } }));
+        const def = try doc.createNode(.footnote, .{ .start = 0, .end = 0 }, .none);
+        try doc.footnotes.append(doc.allocator(), .{ .label = "x", .node = def });
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expect(std.mem.indexOf(u8, out.items, "footnote-ref") == null);
+    }
 }
 
 test "html: definition lists render dl/dt/dd with tight single paragraphs" {
