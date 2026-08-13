@@ -25,9 +25,9 @@ pub const Range = struct {
     class: Class,
 };
 
-/// Reviewed partition as of the HTML-blocks-types-1–5 milestone (651
-/// supported / 1 not-yet / 0 divergences), committed as a plain, diffable
-/// partition. Keep ranges sorted, adjacent, and nonoverlapping.
+/// Reviewed partition as of the full-conformance milestone (652 supported /
+/// 0 not-yet / 0 divergences), committed as a plain, diffable partition.
+/// Keep ranges sorted, adjacent, and nonoverlapping.
 pub const ranges = [_]Range{
     // Tabs (1-11) through backslash escapes (12-24), entity references
     // (25-41). Example 21 (`<a href="/bar\/)">`) is an HTML block type 7;
@@ -46,11 +46,8 @@ pub const ranges = [_]Range{
     // interleave `<!-- -->` — a type-2 HTML block — with list items and now
     // conform). Example 201 (`[foo]: <bar>(baz)` — an angle destination
     // followed by `(` with no separating whitespace is not a definition)
-    // is the one remaining not-yet example. Everything else through 652 is
-    // supported.
-    .{ .first = 192, .last = 200, .class = .supported },
-    .{ .first = 201, .last = 201, .class = .not_yet },
-    .{ .first = 202, .last = 652, .class = .supported },
+    // conforms. Everything through 652 is supported.
+    .{ .first = 192, .last = 652, .class = .supported },
 };
 
 pub const Divergence = struct {

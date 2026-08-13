@@ -1596,6 +1596,15 @@ fn tryParseDefinition(doc: *document.Document, lines: []const Paragraph.LineRef)
         const end = scanAngleDest(bytes, p + 1, lineEnd(bytes, lines, p)) orelse return null;
         dest = .{ .start = @intCast(p + 1), .end = @intCast(end) };
         p = end + 1;
+        // An angle destination must be followed by spaces/tabs or the end
+        // of the line (or a line ending): "No further character may occur"
+        // after the destination without a whitespace separator, so
+        // `[foo]: <bar>(baz)` is not a definition (§4.7 example 201). A
+        // bare destination already stops at whitespace (and at an
+        // unbalanced `)`); only the angle form can be directly adjacent to
+        // a would-be title.
+        if (p < para_end and bytes[p] != ' ' and bytes[p] != '\t' and
+            bytes[p] != '\n' and bytes[p] != '\r') return null;
     } else {
         const end = scanBareDest(bytes, p, lineEnd(bytes, lines, p)) orelse return null;
         dest = .{ .start = @intCast(p), .end = @intCast(end) };
@@ -5832,6 +5841,34 @@ test "markdown: no link when label undefined; brackets stay literal" {
     try testing.expectEqualStrings("[foo]", p.children.items[0].data.text);
     try testing.expectEqual(document.Tag.link, p.children.items[1].tag);
     try testing.expectEqualStrings("bar", p.children.items[1].children.items[0].data.text);
+}
+
+test "markdown: angle destination directly followed by a title is not a definition (§4.7 example 201)" {
+    const oliver = @import("oliver.zig");
+    // `[foo]: <bar>(baz)` — the `(baz)` title follows the angle
+    // destination with no separating whitespace, so the line is ordinary
+    // text and `[foo]` is a literal shortcut that resolves nothing.
+    const input = "[foo]: <bar>(baz)\n\n[foo]\n";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 2), root.children.items.len);
+    const p1 = root.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p1.tag);
+    // Text before the tag, the raw inline HTML, then the text after it.
+    try testing.expectEqual(@as(usize, 3), p1.children.items.len);
+    try testing.expectEqual(document.Tag.text, p1.children.items[0].tag);
+    try testing.expectEqualStrings("[foo]: ", p1.children.items[0].data.text);
+    try testing.expectEqual(document.Tag.raw_html, p1.children.items[1].tag);
+    const raw = p1.children.items[1];
+    try testing.expectEqualStrings("<bar>", input[raw.span.start..raw.span.end]);
+    try testing.expectEqual(document.Tag.text, p1.children.items[2].tag);
+    try testing.expectEqualStrings("(baz)", p1.children.items[2].data.text);
+    // Not a definition, so `[foo]` resolves nothing and stays literal text.
+    const p2 = root.children.items[1];
+    try testing.expectEqual(document.Tag.paragraph, p2.tag);
+    try testing.expectEqual(document.Tag.text, p2.children.items[0].tag);
+    try testing.expectEqualStrings("[foo]", p2.children.items[0].data.text);
 }
 
 test "markdown: definition-only paragraph produces no block" {
