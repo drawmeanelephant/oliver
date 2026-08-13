@@ -127,9 +127,15 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     defer containers.deinit(doc.allocator());
     var paragraph: ?Paragraph = null;
     var fenced: ?FencedCode = null;
+    var indented: ?IndentedCode = null;
 
     var lines = source.Lines.init(doc.src.bytes);
-    while (lines.next()) |line| {
+    var replay: ?source.Line = null;
+    while (true) {
+        const line = if (replay) |saved| blk: {
+            replay = null;
+            break :blk saved;
+        } else lines.next() orelse break;
         // A. Match open containers top-down, consuming one marker each. A
         // block quote consumes `> `; a list item consumes its content
         // indentation; a list consumes nothing (its fate is decided by its
@@ -150,16 +156,16 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 },
                 .list_item => {
                     if (c.inert) break;
-                    if (isBlank(view.text)) {
+                    if (isBlank(view)) {
                         // Blank lines match list items without requiring the
                         // full content indentation. Still consume as much of
                         // that structural indentation as is present: an open
                         // fenced leaf observes excess spaces as literal code,
                         // but never the list item's own prefix.
                         if (c.initial_blank_pending) c.inert = true;
-                        view = advance(view, @min(countIndent(view.text), c.content_indent));
+                        view = advance(view, @min(countIndent(view), c.content_indent));
                     } else {
-                        const indent = countIndent(view.text);
+                        const indent = countIndent(view);
                         if (indent < c.content_indent) break;
                         view = advance(view, c.content_indent);
                         // Rule 3 limits only the blank prefix before the
@@ -195,6 +201,38 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             finishFencedCode(&fenced);
         }
 
+        // An indented-code leaf owns blank lines provisionally and consumes
+        // every following line with at least four virtual indentation
+        // columns. A shorter nonblank line closes the leaf and is replayed
+        // through the ordinary block-start machinery below; indented code
+        // has no lazy continuation rule.
+        if (indented) |*active| {
+            if (matched == active.container_depth) {
+                if (isBlank(view)) {
+                    try active.pending.append(doc.allocator(), view);
+                    extendContainerSpans(&containers, view);
+                    continue;
+                }
+                if (countIndent(view) >= 4) {
+                    try flushIndentedPending(doc, active, &containers);
+                    try appendIndentedContentLine(doc, active, view);
+                    active.node.span.end = @intCast(view.content_end);
+                    extendContainerSpans(&containers, view);
+                    continue;
+                }
+            }
+            // A provisional blank run that is followed by a non-indented
+            // block is no longer code content, but it still separates two
+            // direct blocks in a list item. Record that boundary before the
+            // line is replayed through the normal list-looseness resolver.
+            if (matched == active.container_depth and active.pending.items.len > 0) {
+                noteListBlankLines(&containers, matched);
+            }
+            finishIndentedCode(&indented, doc.allocator());
+            replay = line;
+            continue;
+        }
+
         // The same physical line can be re-examined at many nested list
         // depths. Summarize its thematic-break suffixes once so precedence
         // checks stay O(1) per consumed container marker. Literal fenced-code
@@ -206,7 +244,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // items open; a blank line may make a list loose, but the decision
         // is deferred until the next line shows whether the blank separated
         // blocks inside an item or two items (§5.3).
-        if (isBlank(view.text)) {
+        if (isBlank(view)) {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
             noteListBlankLines(&containers, matched);
             containers.shrinkRetainingCapacity(matched);
@@ -304,7 +342,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // A marker-only line (`>` alone, or a line whose markers are all
         // consumed, or a blank-start list item) is a blank line inside the
         // container, not an empty paragraph.
-        if (isBlank(view.text)) {
+        if (isBlank(view)) {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
             extendContainerSpans(&containers, view);
             continue;
@@ -326,6 +364,22 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 .indent = opening.indent,
                 .container_depth = containers.items.len,
             };
+            extendContainerSpans(&containers, view);
+            continue;
+        }
+        if (paragraph == null and countIndent(view) >= 4) {
+            const node = try doc.createNode(.code_block, view.contentSpan(), .{
+                .code_block = .{ .content = &.{}, .info = null },
+            });
+            try doc.appendChild(leafParent(doc, &containers), node);
+            indented = .{
+                .node = node,
+                .container_depth = containers.items.len,
+            };
+            if (indented) |*active| {
+                try appendIndentedContentLine(doc, active, view);
+                active.node.span.end = @intCast(view.content_end);
+            }
             extendContainerSpans(&containers, view);
             continue;
         }
@@ -368,6 +422,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         extendContainerSpans(&containers, view);
     }
     finishFencedCode(&fenced);
+    finishIndentedCode(&indented, doc.allocator());
     try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
 
     // Phase 2: inline pass, with the full definitions map available.
@@ -400,6 +455,17 @@ const ContainerState = struct {
     blank_pending: bool = false,
 };
 
+/// The one open indented-code leaf. Unlike fenced code, blank lines are
+/// provisional: CommonMark retains them only when another indented content
+/// line follows, so the leaf keeps the raw post-container views until that
+/// decision is known.
+const IndentedCode = struct {
+    node: *document.Node,
+    container_depth: usize,
+    content: std.ArrayList(u8) = .empty,
+    pending: std.ArrayList(source.Line) = .empty,
+};
+
 /// The node under which a new leaf or container is created: the deepest
 /// open container, or the document root when the stack is empty.
 fn leafParent(doc: *document.Document, containers: *const std.ArrayList(ContainerState)) *document.Node {
@@ -419,24 +485,28 @@ fn extendContainerSpans(containers: *const std.ArrayList(ContainerState), line: 
     }
 }
 
-/// Strips one block quote marker (§5.1): up to three leading spaces, `>`,
-/// then one following space of indentation. Returns the stripped view or
-/// null. A tab anywhere in the leading indentation disqualifies the marker
-/// (full tab handling is deferred, see docs/BLOCKS-PARSING.md §7).
+/// Strips one block quote marker (§5.1): up to three virtual leading spaces,
+/// `>`, then one following space/tab of indentation. A tab after `>` may be
+/// only partly consumed; its residual visual spaces stay on the view and are
+/// structural whitespace for the next block decision.
 fn tryStripBlockQuoteMarker(line: source.Line) ?source.Line {
-    const t = line.text;
-    var i: usize = 0;
-    var indent: usize = 0;
-    while (i < t.len and t[i] == ' ' and indent < 3) : (i += 1) indent += 1;
-    if (i >= t.len or t[i] != '>') return null;
-    i += 1;
-    if (i < t.len and t[i] == ' ') i += 1;
-    return .{
-        .text = t[i..],
-        .start = line.start + i,
-        .content_end = line.content_end,
-        .end = line.end,
-    };
+    var view = line;
+    var indent: u32 = 0;
+    if (view.synthetic > 3) return null;
+    if (view.synthetic > 0) {
+        indent += view.synthetic;
+        view = advance(view, view.synthetic);
+    }
+    while (view.text.len > 0 and view.text[0] == ' ' and indent < 3) {
+        view = advance(view, 1);
+        indent += 1;
+    }
+    if (view.text.len == 0 or view.text[0] != '>') return null;
+    view = advanceByte(view);
+    if (view.text.len > 0 and (view.text[0] == ' ' or view.text[0] == '\t')) {
+        view = advance(view, 1);
+    }
+    return view;
 }
 
 /// A list marker recognized on a line (§5.2): a bullet character (`-`,
@@ -476,73 +546,94 @@ const ListMarker = struct {
 };
 
 /// Recognizes a list marker at the start of `line` (§5.2). The marker may
-/// be preceded by up to three spaces (measured in the current view — a
-/// quote's content — so nested lists compose); a tab disqualifies the line
-/// (full tab handling deferred). The content indentation is the marker's
-/// own indentation plus W plus N (rules 1–3): the spec's "let the width and
-/// indentation of the list marker determine the indentation necessary for
-/// blocks to fall under the list item" (docs/BLOCKS-PARSING.md §3).
+/// be preceded by up to three virtual spaces (measured in the current view —
+/// a quote's content — so nested lists compose). Post-marker spaces/tabs use
+/// four-column tab stops; a five-plus-column first prefix selects the
+/// indented-code-first-item rule and leaves its excess indentation on `rest`.
 fn tryListMarker(line: source.Line) ?ListMarker {
-    const t = line.text;
-    var i: usize = 0;
+    var marker_view = line;
     var marker_indent: u32 = 0;
-    while (i < t.len and t[i] == ' ' and marker_indent < 3) : (i += 1) marker_indent += 1;
-    if (i >= t.len or t[i] == '\t') return null;
+    if (marker_view.synthetic > 3) return null;
+    if (marker_view.synthetic > 0) {
+        marker_indent = marker_view.synthetic;
+        marker_view = advance(marker_view, marker_view.synthetic);
+    }
+    while (marker_view.text.len > 0 and
+        (marker_view.text[0] == ' ' or marker_view.text[0] == '\t'))
+    {
+        const width = if (marker_view.text[0] == ' ') 1 else tabWidth(marker_view.column);
+        if (marker_indent + width > 3) return null;
+        marker_view = advance(marker_view, width);
+        marker_indent += width;
+    }
+    if (marker_view.text.len == 0) return null;
 
     var kind: ListMarker.Kind = undefined;
     var bullet: u8 = 0;
     var delimiter: u8 = 0;
     var start: u32 = 1;
     var width: u32 = 0;
-    if (t[i] == '-' or t[i] == '+' or t[i] == '*') {
+    if (marker_view.text[0] == '-' or marker_view.text[0] == '+' or marker_view.text[0] == '*') {
         kind = .bullet;
-        bullet = t[i];
+        bullet = marker_view.text[0];
         width = 1;
-        i += 1;
-    } else if (t[i] >= '0' and t[i] <= '9') {
-        const digit_start = i;
-        while (i < t.len and t[i] >= '0' and t[i] <= '9') : (i += 1) {}
-        const digits = i - digit_start;
+        marker_view = advanceByte(marker_view);
+    } else if (marker_view.text[0] >= '0' and marker_view.text[0] <= '9') {
+        const digit_start = marker_view.text;
+        var digits: usize = 0;
+        while (digits < marker_view.text.len and marker_view.text[digits] >= '0' and marker_view.text[digits] <= '9') : (digits += 1) {}
         if (digits > 9) return null; // §5.2: at most nine digits
-        if (i >= t.len or (t[i] != '.' and t[i] != ')')) return null;
+        if (digits >= marker_view.text.len or (marker_view.text[digits] != '.' and marker_view.text[digits] != ')')) return null;
         kind = .ordered;
-        delimiter = t[i];
+        delimiter = marker_view.text[digits];
         var n: u32 = 0;
-        for (t[digit_start..i]) |b| n = n * 10 + (b - '0');
+        for (digit_start[0..digits]) |b| n = n * 10 + (b - '0');
         start = n;
         width = @intCast(digits + 1);
-        i += 1;
+        for (0..digits + 1) |_| marker_view = advanceByte(marker_view);
     } else {
         return null;
     }
 
-    // Spaces after the marker (tabs deferred).
-    const space_start = i;
-    while (i < t.len and t[i] == ' ') : (i += 1) {}
-    if (i < t.len and t[i] == '\t') return null;
-    const n: u32 = @intCast(i - space_start);
+    const after_marker = marker_view;
+    var whitespace = marker_view;
+    var n: u32 = 0;
+    while (true) {
+        if (whitespace.synthetic > 0) {
+            n += whitespace.synthetic;
+            whitespace = advance(whitespace, whitespace.synthetic);
+            continue;
+        }
+        if (whitespace.text.len == 0) break;
+        if (whitespace.text[0] == ' ') {
+            n += 1;
+            whitespace = advance(whitespace, 1);
+        } else if (whitespace.text[0] == '\t') {
+            const tab = tabWidth(whitespace.column);
+            n += tab;
+            whitespace = advance(whitespace, tab);
+        } else break;
+    }
 
     var blank_start = false;
     var content_indent: u32 = 0;
     var rest: source.Line = undefined;
-    if (i >= t.len) {
-        // Nothing after the marker: the item starts with a blank line
-        // (rule 3); required indentation is W+1.
+    if (whitespace.text.len == 0 and whitespace.synthetic == 0) {
+        // Nothing after the marker (or only separator whitespace): the item
+        // starts with a blank line (§5.2 rule 3).
         blank_start = true;
         content_indent = marker_indent + width + 1;
-        rest = .{ .text = t[i..], .start = line.start + i, .content_end = line.content_end, .end = line.end };
+        rest = whitespace;
     } else if (n == 0) {
-        return null; // the marker must be followed by 1–4 spaces
+        return null; // the marker must be followed by whitespace
     } else if (n <= 4) {
         // Rule 1: the first block is ordinary content; indentation W+N.
         content_indent = marker_indent + width + n;
-        rest = .{ .text = t[i..], .start = line.start + i, .content_end = line.content_end, .end = line.end };
+        rest = whitespace;
     } else {
-        // 5+ spaces: the first block is an indented code block (rule 2);
-        // content indentation is W+1 and the code's own four spaces follow.
+        // 5+ visual spaces: the first block is indented code (rule 2).
         content_indent = marker_indent + width + 1;
-        const after_one = i - (n - 1);
-        rest = .{ .text = t[after_one..], .start = line.start + after_one, .content_end = line.content_end, .end = line.end };
+        rest = advance(after_marker, 1);
     }
 
     return .{
@@ -579,23 +670,101 @@ fn sameListType(list_node: *document.Node, m: ListMarker) bool {
     };
 }
 
-/// Leading spaces of a line (tabs deferred: a tab stops the count).
-fn countIndent(text: []const u8) u32 {
+/// Returns the visual indentation of a line view. Spaces and tabs before the
+/// first non-whitespace byte are measured at four-column tab stops; tabs are
+/// not rewritten in the source view and therefore remain literal once the
+/// structural prefix has been consumed.
+fn countIndent(line: source.Line) u32 {
+    var col = line.column;
     var i: usize = 0;
-    while (i < text.len and text[i] == ' ') : (i += 1) {}
-    return @intCast(i);
+    var consumed: u32 = line.synthetic;
+    col += line.synthetic;
+    while (i < line.text.len) {
+        switch (line.text[i]) {
+            ' ' => {
+                consumed += 1;
+                col += 1;
+                i += 1;
+            },
+            '\t' => {
+                const width = tabWidth(col);
+                consumed += width;
+                col += width;
+                i += 1;
+            },
+            else => break,
+        }
+    }
+    return consumed;
 }
 
-/// Advances a line view by `n` bytes (a matched container's consumed
-/// indentation). `content_end`/`end` are absolute, so they are unchanged.
+fn tabWidth(column: u32) u32 {
+    return 4 - (column % 4);
+}
+
+/// Advances a line view by `n` virtual indentation columns. When a tab is
+/// only partly consumed, its source byte is removed and the residual visual
+/// spaces are retained in `synthetic` so code payloads can reproduce them.
 fn advance(line: source.Line, n: u32) source.Line {
-    const k: usize = n;
-    return .{
-        .text = line.text[k..],
-        .start = line.start + k,
-        .content_end = line.content_end,
-        .end = line.end,
-    };
+    var out = line;
+    var remaining = n;
+
+    const from_synthetic = @min(remaining, out.synthetic);
+    out.synthetic -= from_synthetic;
+    out.column += from_synthetic;
+    remaining -= from_synthetic;
+
+    var i: usize = 0;
+    while (remaining > 0 and i < out.text.len) {
+        switch (out.text[i]) {
+            ' ' => {
+                out.column += 1;
+                remaining -= 1;
+                i += 1;
+            },
+            '\t' => {
+                const width = tabWidth(out.column);
+                if (remaining < width) {
+                    // The tab byte is consumed as structural indentation;
+                    // only its unconsumed visual suffix is content.
+                    i += 1;
+                    out.column += remaining;
+                    out.synthetic = width - remaining;
+                    remaining = 0;
+                } else {
+                    i += 1;
+                    out.column += width;
+                    remaining -= width;
+                }
+            },
+            else => break,
+        }
+    }
+    out.text = out.text[i..];
+    out.start += i;
+    return out;
+}
+
+/// Consumes one non-whitespace source byte (a marker or ordinary content)
+/// while advancing the virtual column by one. Callers use `advance` for
+/// indentation bytes so tab stops remain correct.
+fn advanceByte(line: source.Line) source.Line {
+    var out = line;
+    std.debug.assert(out.synthetic == 0 and out.text.len > 0);
+    out.text = out.text[1..];
+    out.start += 1;
+    out.column += 1;
+    return out;
+}
+
+fn appendCodeView(
+    allocator: std.mem.Allocator,
+    content: *std.ArrayList(u8),
+    view: source.Line,
+) ParseError!void {
+    if (view.synthetic > 0) try content.appendNTimes(allocator, ' ', view.synthetic);
+    try content.appendSlice(allocator, view.text);
+    try content.append(allocator, '\n');
 }
 
 /// Records a blank line for each open list whose direct item is matched by
@@ -757,8 +926,8 @@ const Definition = struct {
 /// definitions, the first one takes precedence").
 const Definitions = std.StringHashMap(Definition);
 
-fn isBlank(text: []const u8) bool {
-    for (text) |b| {
+fn isBlank(line: source.Line) bool {
+    for (line.text) |b| {
         if (b != ' ' and b != '\t') return false;
     }
     return true;
@@ -779,7 +948,7 @@ fn appendParagraphLine(doc: *document.Document, paragraph: *?Paragraph, line: so
 const FenceOpen = struct {
     marker: u8,
     fence_len: usize,
-    indent: u8,
+    indent: u32,
     info: source.Span,
 };
 
@@ -790,18 +959,29 @@ const FencedCode = struct {
     node: *document.Node,
     marker: u8,
     fence_len: usize,
-    indent: u8,
+    indent: u32,
     container_depth: usize,
     content: std.ArrayList(u8) = .empty,
 };
 
 fn tryFenceOpen(line: source.Line) ?FenceOpen {
-    const text = line.text;
-    var i: usize = 0;
-    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
-    if (i > 3 or i >= text.len) return null;
+    var view = line;
+    var indent: u32 = 0;
+    if (view.synthetic > 3) return null;
+    if (view.synthetic > 0) {
+        indent += view.synthetic;
+        view = advance(view, view.synthetic);
+    }
+    while (view.text.len > 0 and (view.text[0] == ' ' or view.text[0] == '\t')) {
+        const width = if (view.text[0] == ' ') 1 else tabWidth(view.column);
+        if (indent + width > 3) return null;
+        indent += width;
+        view = advance(view, width);
+    }
+    if (view.text.len == 0) return null;
 
-    const indent: u8 = @intCast(i);
+    const text = view.text;
+    var i: usize = 0;
     const marker = text[i];
     if (marker != '`' and marker != '~') return null;
     const fence_start = i;
@@ -823,17 +1003,30 @@ fn tryFenceOpen(line: source.Line) ?FenceOpen {
         .fence_len = fence_len,
         .indent = indent,
         .info = .{
-            .start = @intCast(line.start + info_start),
-            .end = @intCast(line.start + info_end),
+            .start = @intCast(view.start + info_start),
+            .end = @intCast(view.start + info_end),
         },
     };
 }
 
 fn isFenceClose(line: source.Line, marker: u8, opening_len: usize) bool {
-    const text = line.text;
+    var view = line;
+    var indent: u32 = 0;
+    if (view.synthetic > 3) return false;
+    if (view.synthetic > 0) {
+        indent += view.synthetic;
+        view = advance(view, view.synthetic);
+    }
+    while (view.text.len > 0 and (view.text[0] == ' ' or view.text[0] == '\t')) {
+        const width = if (view.text[0] == ' ') 1 else tabWidth(view.column);
+        if (indent + width > 3) return false;
+        indent += width;
+        view = advance(view, width);
+    }
+    if (view.text.len == 0 or view.text[0] != marker) return false;
+
+    const text = view.text;
     var i: usize = 0;
-    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
-    if (i > 3 or i >= text.len or text[i] != marker) return false;
 
     const fence_start = i;
     while (i < text.len and text[i] == marker) : (i += 1) {}
@@ -847,10 +1040,44 @@ fn appendFencedContentLine(
     fenced: *FencedCode,
     line: source.Line,
 ) ParseError!void {
-    var strip: usize = 0;
-    while (strip < fenced.indent and strip < line.text.len and line.text[strip] == ' ') : (strip += 1) {}
-    try fenced.content.appendSlice(doc.allocator(), line.text[strip..]);
-    try fenced.content.append(doc.allocator(), '\n');
+    const stripped = advance(line, @min(fenced.indent, countIndent(line)));
+    try appendCodeView(doc.allocator(), &fenced.content, stripped);
+}
+
+fn appendIndentedContentLine(
+    doc: *document.Document,
+    indented: *IndentedCode,
+    line: source.Line,
+) ParseError!void {
+    const stripped = advance(line, 4);
+    try appendCodeView(doc.allocator(), &indented.content, stripped);
+}
+
+fn flushIndentedPending(
+    doc: *document.Document,
+    indented: *IndentedCode,
+    containers: *const std.ArrayList(ContainerState),
+) ParseError!void {
+    for (indented.pending.items) |blank| {
+        // Pending lines were captured after container matching. They are
+        // guaranteed to be blank, so consuming four virtual columns removes
+        // only structural indentation and preserves any excess spaces.
+        const stripped = advance(blank, @min(@as(u32, 4), countIndent(blank)));
+        try appendCodeView(doc.allocator(), &indented.content, stripped);
+        indented.node.span.end = @intCast(blank.content_end);
+        extendContainerSpans(containers, blank);
+    }
+    indented.pending.clearRetainingCapacity();
+}
+
+fn finishIndentedCode(indented: *?IndentedCode, allocator: std.mem.Allocator) void {
+    var active = indented.* orelse return;
+    active.node.data = .{ .code_block = .{
+        .content = active.content.items,
+        .info = null,
+    } };
+    active.pending.deinit(allocator);
+    indented.* = null;
 }
 
 /// Publishes the arena-backed normalized payload. No deinit is required: the
@@ -1036,8 +1263,8 @@ fn tryParseDefinition(doc: *document.Document, lines: []const Paragraph.LineRef)
     const bytes = doc.src.bytes;
     const para_end = lines[lines.len - 1].content.end;
 
-    // Optional indentation: up to three spaces (a tab disqualifies the
-    // line — full tab-stop handling is deferred, as in ATX headings).
+    // Optional indentation: up to three virtual columns. A leading tab is
+    // four columns and therefore cannot start a definition.
     var i: usize = 0;
     var indent: usize = 0;
     while (i < lines[0].content.len() and bytes[lines[0].content.start + i] == ' ') : (i += 1) {
@@ -1468,8 +1695,8 @@ const AtxHeading = struct {
 /// or end of line, with an optional closing sequence of *unescaped* `#`s
 /// (preceded by spaces/tabs, followed by only spaces/tabs).
 ///
-/// Slice divergences: a tab in the leading indentation disqualifies the line
-/// (full 4-space tab-stop handling is deferred); closing-sequence detection
+/// A tab in the leading indentation advances to column four and therefore
+/// disqualifies the heading as an ATX opener; closing-sequence detection
 /// handles backslash escapes (spec example 76).
 fn tryAtxHeading(line: source.Line) ?AtxHeading {
     const t = line.text;
@@ -1479,7 +1706,7 @@ fn tryAtxHeading(line: source.Line) ?AtxHeading {
         indent += 1;
     }
     if (indent > 3) return null;
-    if (i < t.len and t[i] == '\t') return null; // deferred: tab indentation
+    if (i < t.len and t[i] == '\t') return null; // four-column indentation
 
     var level: usize = 0;
     while (i < t.len and t[i] == '#') : (i += 1) {
@@ -3509,11 +3736,13 @@ test "markdown: heading recognition edge cases" {
         try testing.expectEqual(document.Tag.heading, h.tag);
         try testing.expectEqualStrings("foo", h.children.items[0].data.text);
     }
-    // A leading tab disqualifies the line in the slice (deferred).
+    // A leading tab supplies one four-column indented-code prefix.
     {
         var result = try oliver.parse(testing.allocator, "\t# foo", .markdown, .{});
         defer result.deinit();
-        try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+        const code = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("# foo\n", code.data.code_block.content);
     }
 }
 
@@ -3577,6 +3806,126 @@ test "markdown: fenced blanks preserve excess list indentation without ending a 
     // Two of the four spaces belong to the list item. A wholly unindented
     // blank also remains literal content and does not make the item inert.
     try testing.expectEqualStrings("  \n\nmore\n", code.data.code_block.content);
+}
+
+test "markdown: indented code uses virtual tab stops and preserves internal tabs" {
+    const oliver = @import("oliver.zig");
+    const input = "\tfoo\tbaz\t\tbim\n";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+
+    const code = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.code_block, code.tag);
+    try testing.expectEqual(source.Span{ .start = 0, .end = @intCast(input.len - 1) }, code.span);
+    try testing.expectEqualStrings("foo\tbaz\t\tbim\n", code.data.code_block.content);
+}
+
+test "markdown: tab-aware quote and list indentation leaves residual visual spaces" {
+    const oliver = @import("oliver.zig");
+    {
+        var result = try oliver.parse(testing.allocator, ">\t\tfoo", .markdown, .{});
+        defer result.deinit();
+        const quote = result.document.root.children.items[0];
+        const code = quote.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("  foo\n", code.data.code_block.content);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "-\t\tfoo", .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0].children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("  foo\n", code.data.code_block.content);
+    }
+}
+
+test "markdown: indented code retains only internal blank chunks" {
+    const oliver = @import("oliver.zig");
+    const input = "    one\n\n      \n    two\n\nnext";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+
+    const code = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.code_block, code.tag);
+    try testing.expectEqualStrings("one\n\n  \ntwo\n", code.data.code_block.content);
+    try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[1].tag);
+}
+
+test "markdown: indented code cannot interrupt a paragraph" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "Foo\n    bar", .markdown, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p.tag);
+    try testing.expectEqual(@as(usize, 3), p.children.items.len);
+    try testing.expectEqualStrings("Foo", p.children.items[0].data.text);
+    try testing.expectEqual(document.Tag.soft_break, p.children.items[1].tag);
+    try testing.expectEqualStrings("bar", p.children.items[2].data.text);
+}
+
+test "markdown: indented-code spans remain byte-true inside containers" {
+    const oliver = @import("oliver.zig");
+    {
+        const input = ">     foo\n>     bar";
+        var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqual(source.Span{ .start = 2, .end = @intCast(input.len) }, code.span);
+        try testing.expectEqualStrings("foo\nbar\n", code.data.code_block.content);
+    }
+    {
+        const input = "-     foo\n      bar";
+        var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0].children.items[0].children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqual(source.Span{ .start = 2, .end = @intCast(input.len) }, code.span);
+        try testing.expectEqualStrings("foo\nbar\n", code.data.code_block.content);
+    }
+}
+
+test "markdown: closing indented code preserves list looseness" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "-     code\n\n  para", .markdown, .{});
+    defer result.deinit();
+    const item = result.document.root.children.items[0].children.items[0];
+    try testing.expectEqual(@as(usize, 2), item.children.items.len);
+    try testing.expectEqual(document.Tag.code_block, item.children.items[0].tag);
+    try testing.expectEqual(document.Tag.paragraph, item.children.items[1].tag);
+}
+
+test "markdown: indented tab storm renders deterministically" {
+    const oliver = @import("oliver.zig");
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    for (0..5_000) |_| try input.appendSlice(testing.allocator, "\tcode\n");
+
+    var result = try oliver.parse(testing.allocator, input.items, .markdown, .{});
+    defer result.deinit();
+    var first_writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer first_writer.deinit();
+    try oliver.html.render(testing.allocator, &first_writer.writer, &result.document, .{});
+    var first = first_writer.toArrayList();
+    defer first.deinit(testing.allocator);
+
+    var second_writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer second_writer.deinit();
+    try oliver.html.render(testing.allocator, &second_writer.writer, &result.document, .{});
+    var second = second_writer.toArrayList();
+    defer second.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, first.items, second.items);
+}
+
+test "markdown: indented code normalizes mixed line endings" {
+    const oliver = @import("oliver.zig");
+    const input = "    a\r\n    b\r    c";
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+    const code = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.code_block, code.tag);
+    try testing.expectEqualStrings("a\nb\nc\n", code.data.code_block.content);
+    try testing.expectEqual(source.Span{ .start = 0, .end = @intCast(input.len) }, code.span);
 }
 
 test "markdown: thematic breaks precede lists and interrupt paragraphs" {

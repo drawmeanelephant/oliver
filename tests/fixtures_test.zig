@@ -120,6 +120,42 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/indent-heading.md"),
         .expected = @embedFile("fixtures/markdown/indent-heading.html"),
     },
+    // --- tab stops and indented code (§2.2/§4.4) ---
+    .{
+        .name = "tab-basic",
+        .input = @embedFile("fixtures/markdown/tab-basic.md"),
+        .expected = @embedFile("fixtures/markdown/tab-basic.html"),
+    },
+    .{
+        .name = "tab-quote-code",
+        .input = @embedFile("fixtures/markdown/tab-quote-code.md"),
+        .expected = @embedFile("fixtures/markdown/tab-quote-code.html"),
+    },
+    .{
+        .name = "tab-list-code",
+        .input = @embedFile("fixtures/markdown/tab-list-code.md"),
+        .expected = @embedFile("fixtures/markdown/tab-list-code.html"),
+    },
+    .{
+        .name = "indent-multiline",
+        .input = @embedFile("fixtures/markdown/indent-multiline.md"),
+        .expected = @embedFile("fixtures/markdown/indent-multiline.html"),
+    },
+    .{
+        .name = "indent-blank-chunk",
+        .input = @embedFile("fixtures/markdown/indent-blank-chunk.md"),
+        .expected = @embedFile("fixtures/markdown/indent-blank-chunk.html"),
+    },
+    .{
+        .name = "indent-no-interrupt",
+        .input = @embedFile("fixtures/markdown/indent-no-interrupt.md"),
+        .expected = @embedFile("fixtures/markdown/indent-no-interrupt.html"),
+    },
+    .{
+        .name = "indent-list-loose",
+        .input = @embedFile("fixtures/markdown/indent-list-loose.md"),
+        .expected = @embedFile("fixtures/markdown/indent-list-loose.html"),
+    },
     .{
         .name = "escape-special",
         .input = @embedFile("fixtures/markdown/escape-special.md"),

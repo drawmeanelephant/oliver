@@ -21,6 +21,7 @@ does not study or imitate existing parser implementations. See
 ## Status
 
 Implemented so far: paragraphs, ATX and Setext headings, thematic breaks,
+tab-aware indented code blocks (§2.2/§4.4),
 fenced code blocks (§4.5, backtick/tilde fences, literal normalized content,
 info strings and container composition), backslash escapes, hard and soft
 line breaks, emphasis and strong emphasis (full CommonMark §6.2 rule set,
@@ -53,6 +54,8 @@ The thematic-break/Setext precedence contract is
 [docs/LEAF-BLOCKS.md](docs/LEAF-BLOCKS.md).
 The fenced-code open-leaf/model/rendering contract is
 [docs/FENCED-CODE.md](docs/FENCED-CODE.md).
+The tab-stop and indented-code contract is
+[docs/INDENTED-CODE.md](docs/INDENTED-CODE.md).
 Code spans, links, images, autolinks, and raw HTML ride the same
 scan → match → emit seam.
 
@@ -66,11 +69,11 @@ and prints a per-section scorecard. Every example is classified in a
 reviewed manifest (docs/COMMONMARK-EXPECTATIONS.md) as supported,
 not-yet, or a named divergence; `--gate` fails on any supported regression,
 unexpected pass, or changed divergence, so the full corpus is a regression
-wall (see docs/TESTS.md for the current 546/652 scorecard and how to fetch
+wall (see docs/TESTS.md for the current 592/652 scorecard and how to fetch
 the spec).
 
 ```bash
-zig build test    # run all tests (130 tests)
+zig build test    # run all tests (138 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 

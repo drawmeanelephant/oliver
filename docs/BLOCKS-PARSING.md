@@ -1,8 +1,8 @@
 # Oliver Block Parsing: Container Blocks (Block Quotes, Lists)
 
 **Status: implementation contract. Block quotes and lists share the
-container stack; thematic breaks and Setext headings now close the first
-leaf-block precedence rung.**
+container stack; thematic breaks, Setext headings, fenced code, and
+tab-aware indented code now close the first leaf-block precedence rung.**
 This document derives Oliver's container-block algorithm from the
 CommonMark spec (§5 "Container blocks and leaf blocks", §5.1 "Block
 quotes", §5.2 "List items", §5.3 "Lists", and the appendix "A parsing
@@ -10,10 +10,10 @@ strategy"), quoted and paraphrased. Implementation follows this document
 block quote first (§5.1), then list items and lists (§5.2/§5.3); the
 architecture is designed up front so both fit the same seam.
 
-The container milestones are verified with the sectioned scorecard. After the
-thematic-break/Setext rung, the canonical 0.31.2 corpus scores 21/25 for block
-quotes, 32/48 for List items, and 21/27 for Lists; remaining failures require
-the not-yet-implemented code or HTML block families.
+The container milestones are verified with the sectioned scorecard. The
+canonical 0.31.2 corpus now scores 25/25 for block quotes, 48/48 for List
+items, and 24/26 for Lists; remaining failures require the not-yet-implemented
+entity or HTML block families.
 
 ---
 
@@ -202,7 +202,7 @@ never act through a lazy/missing container marker (docs/LEAF-BLOCKS.md).
 | thematic break | yes |
 | list item | yes, with §5.2 exceptions |
 | fenced code | yes |
-| indented code | no (pending) |
+| indented code | no |
 | setext underline | transforms the open paragraph at matched depth |
 | link reference definition | no (§4.7, landed) |
 
@@ -232,29 +232,23 @@ uses.)
 3. **Leaf-block precedence rung** — implemented: thematic breaks (§4.1) and
    Setext headings (§4.3), including their precedence over list markers and
    lazy-container interaction (docs/LEAF-BLOCKS.md).
-4. **Code leaves** — fenced code (§4.5) is implemented as an open leaf that
-   ends at its closer or containing-block boundary (docs/FENCED-CODE.md).
-   Indented code (§4.4) follows together with the tab/virtual-column design it
-   requires. HTML blocks
-   (§4.6) follow an explicit block-HTML policy decision.
+4. **Code leaves** — fenced code (§4.5) and tab-aware indented code (§4.4)
+   are implemented as open leaves that end at their closer, indentation
+   boundary, or containing-block boundary (docs/FENCED-CODE.md and
+   docs/INDENTED-CODE.md). HTML blocks (§4.6) follow an explicit block-HTML
+   policy decision.
 
 ## 7. Chosen behaviors and divergences
 
-- **Tabs in markers are deferred.** A tab in the leading indentation or
-  immediately after `>` is not consumed as a marker character (space
-  only), matching the existing policy for link-reference definitions and
-  ATX closing sequences. The spec (§2.4) would expand tabs to spaces;
-  Oliver records this as a pending tab-handling milestone and the
-  conformance scorecard's `Tabs` section tracks it.
+- **Tabs use virtual columns.** A tab advances to the next four-column stop
+  wherever block structure depends on indentation. The raw tab byte remains
+  in ordinary/content text; a partially consumed tab becomes a synthetic
+  visual-space prefix in the Markdown line view (docs/INDENTED-CODE.md).
 - **Block quotes are containers, not leaves.** The model adds
   `block_quote` as a container tag (children: blocks); DOCUMENT-MODEL
   invariants are updated accordingly.
-- **Scorecard targets.** Block quotes 0/25 → the 17 examples that depend
-  only on quotes/headings/paragraphs/definitions pass immediately; the
-  remaining 8 (indented/fenced code inside quotes, thematic breaks, lists
-  inside/next to quotes) flip as the leaf-block and list milestones land.
-  `--section "Block quotes" --gate` becomes the milestone's CI gate once
-  it hits 25/25.
+- **Scorecard.** Block quotes and list items are complete at 25/25 and 48/48;
+  the two remaining Lists examples depend on HTML-block behavior.
 
 ## 8. Verification plan
 

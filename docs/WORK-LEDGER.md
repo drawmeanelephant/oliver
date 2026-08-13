@@ -13,6 +13,9 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | conformance worker | Q1 list conformance wall | list fixture pairs and list-only hostile tests; no parser files | independent; merge after M1 only to minimize fixture-index conflict | integrated on main (PR #11) |
 | Textile worker | T1 `p.`/break-span repairs + `bq.` | Textile frontend, Textile fixtures/provenance; no Markdown/core model | independent | integrated on main (PR #12) |
 
+| lead | M3 tab-aware indentation + indented code | virtual-column Markdown line view; open `.code_block` leaf; container composition; conformance manifest | stacked after M2 | implementation complete on `codex/indented-code` |
+| Textile worker | T3 emphasis/strong phrase modifiers | Textile-local inline tokenizer, shared `.emphasis`/`.strong` IR, fixtures/provenance; no Markdown parser edits | independent after T2 | reviewed commit `5f0f6c8` in `/private/tmp/oliver-textile-emphasis` |
+
 ## M1 — Thematic-break / Setext precedence rung
 
 - **Objective:** implement CommonMark §4.1 and §4.3 as one precedence slice.
@@ -110,8 +113,10 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   lists/quotes, long whitespace/tabs.
 - **Parallelism:** no until the virtual-column seam is designed by the lead.
 - **Integration:** after M2.
-- **State:** M2 dependency cleared; the virtual-column/tab design is the next
-  lead-owned architectural decision.
+- **State:** implementation complete on the lead branch. The line view now
+  tracks four-column tab stops and synthetic residual spaces for partially
+  consumed tabs; indented code is an open leaf with provisional blank chunks.
+  Canonical scorecard: 592/652; Tabs 11/11; Indented code 12/12.
 
 ## C1 — Classified conformance expectations
 
@@ -129,8 +134,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes, tooling-only ownership.
 - **Integration:** any time after current PR stack; avoid simultaneous edits to
   global test-count prose.
-- **State:** integrated on main (PR #15); the manifest is 546 supported, 106
-  not-yet, and 0 named divergences (the former ATX trailing-backslash
+- **State:** integrated on main (PR #15), then advanced with M3; the manifest
+  is 592 supported, 60 not-yet, and 0 named divergences (the former ATX trailing-backslash
   divergence now conforms).
 
 ## Deferred architectural cards
@@ -143,5 +148,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **T2 Textile `@code@`:** integrated on main (PR #14); Textile-local inline
   scanner using the existing `.code_span` IR, with opacity and delimiter-storm
   tests (docs/TEXTILE-INLINE-CODE.md).
-- **T3 Textile emphasis/strong:** follows T2; same-line boundary/nesting policy
-  must be pinned from authoritative Textile documentation first.
+- **T3 Textile emphasis/strong:** implementation and clean-room contract are
+  complete in `5f0f6c8`; pending integration after cross-review. The slice
+  recognizes same-line `_x_`/`*x*` and doubled forms with Unicode boundaries,
+  nesting, and `@code@` opacity.

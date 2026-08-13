@@ -2,25 +2,26 @@
 
 Tests are product contracts. `zig build test` runs three suites:
 
-1. **Library module tests** — 114 `test` blocks inside `src/*.zig` covering
+1. **Library module tests** — 122 `test` blocks inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
    frontends, Unicode case folding, the HTML renderer, and the public API.
    Markdown tests pin the container stack, thematic-break/list precedence,
    multiline Setext transformation, reference-definition interaction,
-   terminal-backslash behavior, fenced-code payload/spans, every implemented
+   terminal-backslash behavior, fenced-code and indented-code payload/spans,
+   tab-stop indentation, every implemented
    inline family, exact AST shapes, and exact spans. Textile tests pin
    `p.`/`hN.`/`bq.` structure, hard-break terminators, and `@code@` payloads.
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 242 Markdown and 24 Textile fixture pairs.
+   The explicit index contains 249 Markdown and 24 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
    ordered starts and near misses, empty items, interruption, nesting,
    marker/delimiter separation, tight/loose propagation, and quote/list
    composition), reference links, autolinks, raw HTML, thematic breaks,
-   Setext headings, and fenced code blocks; the Textile wall covers `bq.`
+   Setext headings, fenced code blocks, tab stops, and indented code; the Textile wall covers `bq.`
    quotes and `@code@` spans. It also verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
    deterministic repeat rendering (list stress: 2k nested items, 10k
@@ -34,7 +35,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **130/130 tests passing** with Zig 0.16.0.
+The current complete result is **138/138 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
@@ -156,17 +157,18 @@ requires the complete corpus: `--section` is report-only and cannot be
 combined with `--gate`. The harness converts the spec's tab-arrow marker to
 a real tab and ignores exactly one renderer-owned final newline.
 
-Current canonical baseline: **546/652 examples pass** (546 supported,
-106 not-yet, 0 named divergences).
+Current canonical baseline: **592/652 examples pass** (592 supported,
+60 not-yet, 0 named divergences).
 
-- Thematic breaks: 18/19; the remaining example is indented code.
-- Setext headings: 25/27; both remaining examples are indented code.
-- ATX headings: 17/18; the remaining example is indented code.
-- Fenced code blocks: 28/29; the remaining example is indented code.
-- Backslash escapes: 11/13; fenced info-string escapes are implemented.
-- Link reference definitions: 25/27.
-- Block quotes: 22/25.
-- List items: 33/48; Lists: 23/26.
+- Thematic breaks: 19/19.
+- Setext headings: 27/27.
+- ATX headings: 18/18.
+- Fenced code blocks: 29/29.
+- Indented code blocks: 12/12; Tabs: 11/11.
+- Backslash escapes: 12/13; fenced info-string escapes are implemented.
+- Link reference definitions: 26/27.
+- Block quotes: 25/25.
+- List items: 48/48; Lists: 24/26.
 - Code spans, emphasis/strong, images, autolinks, inline raw HTML, hard/soft
   breaks, and textual content: 100%.
 

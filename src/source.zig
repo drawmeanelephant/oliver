@@ -82,6 +82,14 @@ pub const Line = struct {
     /// Byte offset just past the terminator (start of the next line, or
     /// end of input for a final unterminated line).
     end: usize,
+    /// Virtual tab-stop column at the beginning of `text`.  Markdown block
+    /// parsing may consume only part of a tab's visual width; in that case
+    /// the consumed tab byte is gone from `text` and `synthetic` records the
+    /// remaining visual spaces before the next source byte.  Ordinary source
+    /// lines (and all callers outside the block parser) leave both fields at
+    /// their defaults.
+    column: u32 = 0,
+    synthetic: u32 = 0,
 
     /// Span of the content, excluding the terminator.
     pub fn contentSpan(self: Line) Span {

@@ -22,17 +22,14 @@ pub const Range = struct {
     class: Class,
 };
 
-/// Reviewed partition as of the thematic-break/Setext, fenced-code, and list
-/// milestones (546 supported / 106 not-yet / 0 divergences), then committed
-/// as a plain, diffable partition. Keep ranges sorted, adjacent, and
-/// nonoverlapping.
+/// Reviewed partition after the tab-stop and indented-code milestone
+/// (592 supported / 60 not-yet / 0 divergences), committed as a plain,
+/// diffable partition. Keep ranges sorted, adjacent, and nonoverlapping.
 pub const ranges = [_]Range{
     // Tabs (examples 1-11).
-    .{ .first = 1, .last = 9, .class = .not_yet },
-    .{ .first = 10, .last = 17, .class = .supported },
+    .{ .first = 1, .last = 17, .class = .supported },
     // Backslash escapes (12-24).
-    .{ .first = 18, .last = 18, .class = .not_yet },
-    .{ .first = 19, .last = 20, .class = .supported },
+    .{ .first = 18, .last = 20, .class = .supported },
     .{ .first = 21, .last = 21, .class = .not_yet },
     .{ .first = 22, .last = 24, .class = .supported },
     // Entity references (25-41).
@@ -40,29 +37,18 @@ pub const ranges = [_]Range{
     .{ .first = 28, .last = 30, .class = .supported },
     .{ .first = 31, .last = 34, .class = .not_yet },
     .{ .first = 35, .last = 35, .class = .supported },
-    .{ .first = 36, .last = 41, .class = .not_yet },
+    .{ .first = 36, .last = 36, .class = .supported },
+    .{ .first = 37, .last = 41, .class = .not_yet },
     // Block/inline precedence (42) and thematic breaks (43-61).
-    .{ .first = 42, .last = 47, .class = .supported },
-    .{ .first = 48, .last = 48, .class = .not_yet },
-    .{ .first = 49, .last = 68, .class = .supported },
+    .{ .first = 42, .last = 68, .class = .supported },
     // ATX headings (62-79).
-    .{ .first = 69, .last = 69, .class = .not_yet },
-    .{ .first = 70, .last = 84, .class = .supported },
+    .{ .first = 69, .last = 84, .class = .supported },
     // Setext headings (80-106).
-    .{ .first = 85, .last = 85, .class = .not_yet },
-    .{ .first = 86, .last = 99, .class = .supported },
-    .{ .first = 100, .last = 100, .class = .not_yet },
-    .{ .first = 101, .last = 106, .class = .supported },
+    .{ .first = 85, .last = 106, .class = .supported },
     // Indented code blocks (107-118).
-    .{ .first = 107, .last = 107, .class = .not_yet },
-    .{ .first = 108, .last = 109, .class = .supported },
-    .{ .first = 110, .last = 112, .class = .not_yet },
-    .{ .first = 113, .last = 113, .class = .supported },
-    .{ .first = 114, .last = 118, .class = .not_yet },
+    .{ .first = 107, .last = 118, .class = .supported },
     // Fenced code blocks (119-147).
-    .{ .first = 119, .last = 133, .class = .supported },
-    .{ .first = 134, .last = 134, .class = .not_yet },
-    .{ .first = 135, .last = 147, .class = .supported },
+    .{ .first = 119, .last = 147, .class = .supported },
     // HTML blocks (148-191).
     .{ .first = 148, .last = 167, .class = .not_yet },
     .{ .first = 168, .last = 168, .class = .supported },
@@ -72,35 +58,16 @@ pub const ranges = [_]Range{
     // Link reference definitions (192-218).
     .{ .first = 192, .last = 200, .class = .supported },
     .{ .first = 201, .last = 201, .class = .not_yet },
-    .{ .first = 202, .last = 210, .class = .supported },
-    .{ .first = 211, .last = 211, .class = .not_yet },
-    .{ .first = 212, .last = 224, .class = .supported },
+    .{ .first = 202, .last = 224, .class = .supported },
     // Paragraphs (219-226).
-    .{ .first = 225, .last = 225, .class = .not_yet },
-    .{ .first = 226, .last = 230, .class = .supported },
+    .{ .first = 225, .last = 230, .class = .supported },
     // Block quotes (228-252).
-    .{ .first = 231, .last = 231, .class = .not_yet },
-    .{ .first = 232, .last = 235, .class = .supported },
-    .{ .first = 236, .last = 236, .class = .not_yet },
-    .{ .first = 237, .last = 251, .class = .supported },
-    .{ .first = 252, .last = 254, .class = .not_yet },
+    .{ .first = 231, .last = 252, .class = .supported },
     // List items (253-300).
-    .{ .first = 255, .last = 256, .class = .supported },
-    .{ .first = 257, .last = 257, .class = .not_yet },
-    .{ .first = 258, .last = 263, .class = .supported },
-    .{ .first = 264, .last = 264, .class = .not_yet },
-    .{ .first = 265, .last = 269, .class = .supported },
-    .{ .first = 270, .last = 274, .class = .not_yet },
-    .{ .first = 275, .last = 277, .class = .supported },
-    .{ .first = 278, .last = 278, .class = .not_yet },
-    .{ .first = 279, .last = 285, .class = .supported },
-    .{ .first = 286, .last = 290, .class = .not_yet },
-    .{ .first = 291, .last = 307, .class = .supported },
+    .{ .first = 253, .last = 307, .class = .supported },
     // Lists (301-326).
     .{ .first = 308, .last = 309, .class = .not_yet },
-    .{ .first = 310, .last = 312, .class = .supported },
-    .{ .first = 313, .last = 313, .class = .not_yet },
-    .{ .first = 314, .last = 502, .class = .supported },
+    .{ .first = 310, .last = 502, .class = .supported },
     // Links (482-571).
     .{ .first = 503, .last = 503, .class = .not_yet },
     .{ .first = 504, .last = 505, .class = .supported },
