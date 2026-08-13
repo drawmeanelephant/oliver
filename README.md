@@ -68,9 +68,11 @@ blank lines, footnotes (`[N]` references + `fnN.` blocks with
 replacements (curly quotes, em/en dashes, ellipsis, `(c)`/`(r)`/`(tm)`,
 fractions, degree, plus/minus, dimension sign), `==` escaping
 (a lone `==` line passes raw HTML through unformatted; inline
-`==...==` suspends all formatting and replacements), and `|mods|.`
+`==...==` suspends all formatting and replacements), `|mods|.`
 line attributes (the pipe-delimited form of the block-attribute set,
-converging byte-identically with `p<mods>.`),
+converging byte-identically with `p<mods>.`), and image modifiers
+(alignment, sizing `10x20`/`10w 20h`/`20%`, and style/class/padding
+on `!url!` images),
 structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
@@ -88,7 +90,8 @@ The fenced-code open-leaf/model/rendering contract is
 The Textile fixture audit — inventory, gaps vs. Textile 2 semantics, and
 chosen behaviors for phrase modifiers, links, images, lists, tables, link
 aliases, block attributes, code blocks, extended blocks, footnotes,
-block-quote citations, and character replacements — is
+block-quote citations, character replacements, `==` escaping, line
+attributes, and image modifiers — is
 [docs/TEXTILE-PARITY.md](docs/TEXTILE-PARITY.md).
 The GFM tables extension contract is
 [docs/TABLES.md](docs/TABLES.md).

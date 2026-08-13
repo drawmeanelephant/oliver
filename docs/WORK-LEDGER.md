@@ -25,7 +25,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T14 `bq.:URL` citations | citation URL after the block-quote period → the blockquote's `cite` attribute; block attrs combine; Textile fixtures; Markdown untouched | after T13 | integrated on main (PR #27) |
 | Textile worker | T15 character replacements | curly quotes, em/en dashes, ellipsis, dimension sign, `(c)`/`(r)`/`(tm)`, fractions/degree/plus-minus applied to plain text in the inline pass; arena-owned replaced payloads; Textile fixtures; Markdown untouched | after T14 | integrated on main (PR #28) |
 | Textile worker | T16 `==` escaping | lone `==` lines open a block-escape region emitted as a raw `.html_block`; inline `==...==` suspends formatting and replacements, emitting a literal `.text` node; Textile fixtures; Markdown untouched | after T15 | integrated on main (PR #31) |
-| Textile worker | T17 line attributes | the `|mods|.` pipe form applies the §8 block-modifier set to the paragraph, byte-identical to `p<mods>.`; a `.line` modifier kind; Textile fixtures; Markdown untouched | after T16 | implemented on main (uncommitted) |
+| Textile worker | T17 line attributes | the `|mods|.` pipe form applies the §8 block-modifier set to the paragraph, byte-identical to `p<mods>.`; a `.line` modifier kind; Textile fixtures; Markdown untouched | after T16 | merged on main (PR #32) |
+| Textile worker | T18 image modifiers | the documented image family — alignment (`!<x!`…`!~x!`), sizing (`10x20`, `10w 20h`, `20%x40%`, `20%`), `{style}`/`(class#id)`/padding — composes onto `.image.attrs`/width/height through the §8 machinery; shared model + renderer gain defaulted width/height/attrs; Markdown untouched | after T17 | merged on main (PR #33) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -623,7 +624,43 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   pairs (`line-attr-basic`, `line-attr-literal`).
 - **Parallelism:** yes; Textile-only, Markdown untouched.
 - **Integration:** after T16 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 188/188 tests green;
+- **State:** integrated on main (PR #32). 188/188 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T18 — Textile image modifiers
+
+- **Objective:** implement the deferred image-modifier milestone —
+  alignment, sizing (`10x20`, `10w 20h`, `20%x40%`, `20%`), and
+  style/class/padding on Textile images — converging with the image
+  model.
+- **Normative source:** Textile 2 "Images" (the alignment operators,
+  the size forms, the `{style}`/`(class)` set) and the current Textile
+  docs "Images" page (`=` centering, the `(class)` form). Both
+  references agree on the family; no parser implementation consulted
+  (docs/CLEANROOM.md session 13).
+- **Dependencies:** the §8 modifier machinery (T10), the `composeStyle`/
+  `composeAttrs` composition, the shared `.image` leaf (T4).
+- **Seams:** `src/document.zig` + `src/html.zig` (the `.image` payload
+  gains defaulted `width`/`height`/`attrs`; the renderer writes them in
+  the fixed order src, alt, title, width, height, attrs) and
+  `src/textile.zig` (`ImageMods`, `scanImageMods`, `scanImageSize`, the
+  `scanImage` rewrite, the emit composition). Markdown images never set
+  the new fields, so Markdown output is byte-identical.
+- **Acceptance:** the six alignment fragments (`float:left`/`right`,
+  centered block, `vertical-align:middle`/`top`/`bottom`), last-align-
+  wins; the four size forms parse and render as `width`/`height`
+  attributes; size and alt never combine; style/class/id/padding compose
+  in the pinned order; the linked-image form combines with modifiers;
+  every malformed shape (bad modifier, junk post-src token, malformed
+  size) stays literal; the 652/652 gate is untouched.
+- **Tests:** 2 unit tests (modifier composition + size parsing,
+  literal fallbacks), 2 new Textile fixture pairs (`image-mods-basic`,
+  `image-mods-attrs`) plus the updated `image-literal` pin (Hobix's own
+  `!>obake.gif!` aligned form).
+- **Parallelism:** yes; the model/renderer additions are defaulted, so
+  Markdown is untouched.
+- **Integration:** after T17 (the 652/652 gate is re-verified).
+- **State:** integrated on main (PR #33). 189/189 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations
