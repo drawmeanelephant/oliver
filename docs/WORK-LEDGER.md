@@ -18,7 +18,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | lead | M7 GFM tables extension | Markdown table open-leaf + header/delimiter/body parsing; `.table` family in model and HTML renderer; docs/TABLES.md contract | after M6 | integrated on main (PR #19) |
 | Textile worker | T8 Textile tables | Textile `|a|b|` block rows, cell/row/table modifiers, header-alignment propagation, flat-row rendering; Textile fixtures; no Markdown/core changes | after M7 (reuses the `.table` model family) | integrated on main (PR #20) |
 | Textile worker | T9 Textile link aliases | `[alias]url` definition lines + `"text":alias` references via a document-global alias table; Textile fixtures; no Markdown/core changes | after T8 | integrated on main (PR #21) |
-| Textile worker | T10 Textile block attributes | `{style}`/`(class#id)`/`[lang]`/alignment/padding on `p.`/`hN.`/`bq.` signatures; block attrs in model + renderer; Textile fixtures; Markdown untouched | after T9 | implemented on main (uncommitted) |
+| Textile worker | T10 Textile block attributes | `{style}`/`(class#id)`/`[lang]`/alignment/padding on `p.`/`hN.`/`bq.` signatures; block attrs in model + renderer; Textile fixtures; Markdown untouched | after T9 | integrated on main (PR #22) |
+| Textile worker | T11 `bc.`/`pre.` block code | single-period code/preformatted leaf blocks owning verbatim lines until a blank line; `.code_block` verbatim `escape` flag + attrs; Textile fixtures; Markdown untouched | after T10 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -366,7 +367,43 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   forms, bq attrs, heading attrs, literal).
 - **Parallelism:** yes; Textile + model/renderer, Markdown untouched.
 - **Integration:** after T9 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 167/167 tests green;
+- **State:** integrated on main (PR #22). 167/167 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T11 — `bc.`/`pre.` block code
+
+- **Objective:** implement the `bc.` block-code and `pre.` preformatted
+  signatures — the last planned *block* family — converging with the
+  Markdown `.code_block` model.
+- **Authoritative sources:** Movable Type Textile 2 Syntax "Block
+  Formatting" (`bc` is "block code": a preformatted section like `pre`
+  that also gets a `<code>` tag, and "within a `bc` block, `<` and `>`
+  are translated into HTML entities automatically"; "a block ends with
+  the first blank line"); current Textile docs
+  <https://textile-lang.com> (`pre.` "pre-formatted text", `bc.` "a
+  block of lines of code"). Hobix documents neither signature (raw HTML
+  only). Both clean-room allowed.
+- **Seams:** `src/document.zig` (`.code_block` gains the verbatim
+  `escape` flag and `attrs`), `src/html.zig` (the `pre.` verbatim branch
+  and attrs on the `<pre>`), `src/textile.zig` (the `CodeSignature`/
+  `CodeBlockState`/`tryCodeMarker`/`openCode`/`closeCode` leaf block
+  owning verbatim lines until a blank line), Textile fixtures/index,
+  feature matrix, parity (new §9), model/test/ledger docs, README.
+  Markdown untouched.
+- **Acceptance:** `bc.` escapes `<`/`>` inside `<pre><code>`
+  byte-identically to a Markdown fence of the same content (convergence
+  pair); `pre.` is verbatim `<pre>` preserving HTML; signature-shaped
+  content lines stay code; the block ends at the first blank line and
+  interrupts paragraphs/lists/tables; `bc{...}.`/`pre(...)[lang].`
+  modifiers land on the `<pre>`; empty/near-miss/bare markers stay
+  literal; the 652/652 gate is untouched.
+- **Tests:** 2 unit tests (structure/content/span/modifiers; marker edge
+  cases and block interaction), 4 Textile fixture pairs (bc basics, pre
+  verbatim, attrs, literal), and 1 shared-model convergence pair
+  (`bc.` ↔ fenced code, byte-identical).
+- **Parallelism:** yes; Textile + model/renderer, Markdown untouched.
+- **Integration:** after T10 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 169/169 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

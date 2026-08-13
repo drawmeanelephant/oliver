@@ -171,4 +171,24 @@ normalization and empty-class omission are faithful renderings of the
 Hobix examples, and the table-only token restrictions reuse the already-
 pinned table machinery).
 
+## Sources consulted (session 6 — `bc.`/`pre.` block code)
+
+- Movable Type "Textile 2 Syntax" "Block Formatting"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html> —
+  the `bc` signature definition ("block code": "a preformatted section
+  like the 'pre' block, but it also gets a `<code>` tag"), the automatic
+  `<`/`>` entity translation within `bc` blocks, and the block
+  termination rule ("Normally, a block ends with the first blank line
+  encountered").
+- Textile Markup Language Documentation
+  <https://textile-lang.com/> — the `pre.` ("pre-formatted text") and
+  `bc.` ("a block of lines of code") signatures.
+
+Hobix does not document either signature (its pre/code example is raw
+HTML), so both follow the Textile 2 + current-docs majority. No Textile
+parser implementation source was consulted for the T11 code-block work;
+the pinned behaviors in docs/TEXTILE-PARITY.md §9 are derived from the
+user-facing prose above (the shared `.code_block` payload and escaping
+policy come from the already-pinned Markdown fenced-code machinery).
+
 No Markdown or Textile parser implementation source was consulted.

@@ -48,6 +48,8 @@ consulted.
 | block attributes on `p.` (`{style}`, `(class#id)`, `[lang]`, `< > = <>`, `(`/`)`) | `.paragraph.attrs` | `<p style="…" class="…" id="…" lang="…">` | implemented (T10) |
 | block attributes on `hN.` | `.heading.attrs` | `<h2 style="…" lang="…">` | implemented (T10) |
 | block attributes on `bq.` | `.block_quote.attrs` (inner `.paragraph` unmarked) | `<blockquote style="…">` | implemented (T10) |
+| `bc.` block code | `.code_block` (escaped content, `escape` flag) | `<pre><code>` with `<`/`>` escaped | implemented (T11) |
+| `pre.` preformatted text | `.code_block` (verbatim, `escape = false`) | `<pre>` verbatim | implemented (T11) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -72,15 +74,15 @@ planned/deferred. The notable ones, so the record is honest:
   CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
   bodies literal (fixture `image-literal`).
-- **`bq..` extended blocks and citations**, **`pre.`/`bc.`**,
-  **footnotes**, **line attributes**, **`==` escaping**, and the
+- **`bq..` extended blocks and citations**, **footnotes**,
+  **line attributes**, **`==` escaping**, and the
   **character-replacement macros** (curly quotes, em/en dashes, ellipsis,
   `(c)`/`(r)`/`(tm)`). All planned/deferred in the feature matrix.
 
 Tables were the last large *block* gap; they are now implemented (T8) —
 see §6. The largest remaining *inline* gap, link aliases, is now
-implemented too (T9) — see §7. Block attributes are now implemented (T10)
-— see §8.
+implemented too (T9) — see §7. Block attributes are implemented (T10) —
+see §8 — and `bc.`/`pre.` block code is implemented (T11) — see §9.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -365,5 +367,48 @@ same structure `closeBlock` already used for plain quotes).
 `p>.no-space` — a doubled period — `p.. double` — the deferred `bq..`
 extended and `bq:...` citation forms — and a non-`hN` marker like `h1x.`
 are all ordinary paragraph text with no attributes.
+
+## 9. Block code and preformatted text (T11): pinned behaviors
+
+Hobix documents neither `bc.` nor `pre.` as signatures (its pre/code
+example is raw HTML). Textile 2 documents **`bc`** — "block code": "a
+preformatted section like the 'pre' block, but it also gets a `<code>`
+tag", and "within a `bc` block, `<` and `>` are translated into HTML
+entities automatically" — and the current Textile docs document both
+**`bc.`** ("a block of lines of code") and **`pre.`** ("pre-formatted
+text"). Oliver implements both per the two-reference majority; every
+choice below is pinned by the `code-block-*` fixtures and the unit tests
+in `src/textile.zig`.
+
+**Ownership.** A single-period `bc.`/`pre.` signature opens a leaf that
+owns every following non-blank line, **verbatim** — signature-shaped
+lines (`p. still code`), list markers, and table rows stay code content.
+The block ends at the **first blank line** (Textile 2: "Normally, a block
+ends with the first blank line encountered") or at EOF; it interrupts an
+open paragraph and closes open lists and tables. The first line's leading
+whitespace is consumed as the marker's separator (the shared rule); every
+continuation line keeps its leading whitespace byte-for-byte.
+
+**Rendering.** `bc` publishes the shared `.code_block` payload with the
+default escaping, so `<`/`>` (and `&`, `"`) are escaped inside
+`<pre><code>` — byte-identical to a Markdown fenced block of the same
+content (proven by the convergence pair). `pre` sets the verbatim
+`escape = false` form: content is written inside `<pre>` with **no
+escaping** and no `<code>` wrapper, so embedded HTML is preserved.
+
+**Modifiers.** The block-attribute set of §8 works on both signatures
+(`bc{color:red}.`, `pre(fig#demo)[en].`); the composed attrs land on the
+`<pre>` element.
+
+**Literal fallbacks (pinned by `code-block-literal`).** An empty
+signature (`bc. `, `pre.` — empty behavior is unspecified, the same rule
+`bq.` uses), a near miss (`bcd.`), a bare marker (`bc`), and a plain word
+that merely starts with the letters (`prelude.`) are all ordinary
+paragraph text.
+
+**Deferred.** The extended **`bc..`/`pre..`** double-period forms (blank
+lines inside the block, terminated by the next signature) are the
+separately documented extended-block mechanism and stay deferred with
+`bq..`.
 
 

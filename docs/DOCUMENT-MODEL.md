@@ -167,7 +167,7 @@ emit them in a fixed documented order.
 | ATX/Setext heading | `hN.` heading | `.heading` (level) |
 | (no Markdown equivalent) | Textile block attributes `p(...).`, `hN{...}.`, `bq>.` (`{style}`, `(class#id)`, `[lang]`, alignment, padding) | ordered `attrs` (style/class/id/lang) on `.paragraph` / `.heading` / `.block_quote` (docs/TEXTILE-PARITY.md §8) |
 | thematic break | (planned) | `.thematic_break` |
-| fenced code block | `bc.` / `pre.` (planned) | `.code_block` (owned content/info) |
+| fenced code block | `bc.` / `pre.` | `.code_block` (owned content/info; `pre.` sets the verbatim `escape` flag, docs/TEXTILE-PARITY.md §9) |
 | HTML block (Markdown §4.6 types 6/7) | (Textile has no HTML blocks; literal) | `.html_block` (owned verbatim content) |
 | `emphasis` / `strong` | Textile `_x_` / `*x*` | `.emphasis` / `.strong` |
 | `bold` / `italic` | Textile `**x**` / `__x__` | `.bold` / `.italic` |
