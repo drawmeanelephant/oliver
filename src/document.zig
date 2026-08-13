@@ -104,6 +104,10 @@ pub const Tag = enum {
     superscript,
     /// Subscript inline content (Textile `~x~`). Children: inlines.
     subscript,
+    /// Cited inline content (Textile `??x??`, Hobix "Use double question
+    /// marks to indicate citation"). Children: inlines. Like the other
+    /// phrase tags it can carry Textile phrase attributes (T21).
+    cite,
     /// A generic inline span (Textile `%x%`). Children: inlines. The
     /// attribute-bearing forms (`%{style}(class#id)[lang]x%`) carry their
     /// composed attrs in `data.span` (Hobix "Phrase Attributes").
@@ -145,17 +149,21 @@ pub const Tag = enum {
     /// `<sup class="footnote"><a href="#fnN">N</a></sup>` (Textile 2
     /// "Footnotes"). Leaf: the payload is the footnote number.
     footnote_ref,
+    /// A Textile acronym `CSS(Cascading Style Sheets)` (Hobix
+    /// "Acronyms"): renders `<acronym title="…">CSS</acronym>`. Leaf:
+    /// `data.acronym` holds the letters and the definition title.
+    acronym,
 
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => true,
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => false,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => true,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => false,
         };
     }
@@ -176,6 +184,11 @@ pub const Data = union(enum) {
     heading: Heading,
     /// `.footnote_ref`: the footnote number (Textile `[N]` references).
     footnote_ref: u16,
+    /// `.acronym`: the Textile acronym (`CSS(Cascading Style Sheets)`, Hobix
+    /// "Acronyms"): the uppercase letters (a source slice, verbatim) and
+    /// the definition as the `title` (arena-owned, like link/image
+    /// titles). Markdown never produces acronym nodes.
+    acronym: Acronym,
     /// `.text`: borrowed slice of the document source.
     text: []const u8,
     /// `.code_span`: normalized content. Arena-owned copy (not a source
@@ -237,6 +250,15 @@ pub const Data = union(enum) {
 /// fixed render order (style/class/id/lang; docs/TEXTILE-PARITY.md §18).
 pub const Span = struct {
     attrs: []const Attribute = &.{},
+};
+
+/// The payload of a `.acronym` node (Hobix "Acronyms"): the uppercase
+/// letters — a verbatim source slice — and the parenthesized definition
+/// as the `title` attribute (arena-owned, like link/image titles). The
+/// definition is opaque: no phrase formatting, no character replacements.
+pub const Acronym = struct {
+    text: []const u8,
+    title: []const u8,
 };
 
 /// The payload of a non-span phrase node (`*x*`, `_x_`, `-x-`, …) that

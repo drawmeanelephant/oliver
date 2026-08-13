@@ -2011,6 +2011,37 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/phrase-attr-literal.textile"),
         .expected = @embedFile("fixtures/textile/phrase-attr-literal.html"),
     },
+    // The citation operator `??x??` → `<cite>` (Hobix "Use double
+    // question marks to indicate citation"): Hobix's example with the
+    // curly-apostrophe replacement, phrase attributes and nesting, and
+    // the literal fallbacks — lone `?`, runs of 3+, boundary shapes,
+    // malformed/whitespace mods runs, and a no-content run falling back
+    // to a plain cite (docs/TEXTILE-PARITY.md §20).
+    .{
+        .name = "citation-basic",
+        .input = @embedFile("fixtures/textile/citation-basic.textile"),
+        .expected = @embedFile("fixtures/textile/citation-basic.html"),
+    },
+    .{
+        .name = "citation-literal",
+        .input = @embedFile("fixtures/textile/citation-literal.textile"),
+        .expected = @embedFile("fixtures/textile/citation-literal.html"),
+    },
+    // The acronym form `ABC(def)` → `<acronym title="def">ABC</acronym>`
+    // (Hobix "Acronyms"): the definition becomes the title, and the
+    // literal fallbacks — single letters (`I(think)`), intraword runs,
+    // empty/unclosed definitions, and opacity inside `@code@`/link
+    // display (docs/TEXTILE-PARITY.md §20).
+    .{
+        .name = "acronym-basic",
+        .input = @embedFile("fixtures/textile/acronym-basic.textile"),
+        .expected = @embedFile("fixtures/textile/acronym-basic.html"),
+    },
+    .{
+        .name = "acronym-literal",
+        .input = @embedFile("fixtures/textile/acronym-literal.textile"),
+        .expected = @embedFile("fixtures/textile/acronym-literal.html"),
+    },
     // Inline `==...==` escaping (Textile 2 "Escaping"): phrase delimiters
     // and the character replacements inside the region stay literal, while
     // formatting outside still applies — the current docs' quote example
