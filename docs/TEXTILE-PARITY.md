@@ -45,6 +45,9 @@ consulted.
 | row modifiers (incl. `_` header row) | row `attrs` / header flags | `<tr style="…">`, all-`<th>` row | implemented (T8) |
 | `[alias]url` definition lines | (no node: collected into the alias table) | never renders | implemented (T9) |
 | `"text":alias` reference | `.link` (href from the alias table) | `<a href="defined-url">` | implemented (T9) |
+| block attributes on `p.` (`{style}`, `(class#id)`, `[lang]`, `< > = <>`, `(`/`)`) | `.paragraph.attrs` | `<p style="…" class="…" id="…" lang="…">` | implemented (T10) |
+| block attributes on `hN.` | `.heading.attrs` | `<h2 style="…" lang="…">` | implemented (T10) |
+| block attributes on `bq.` | `.block_quote.attrs` (inner `.paragraph` unmarked) | `<blockquote style="…">` | implemented (T10) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -70,13 +73,14 @@ planned/deferred. The notable ones, so the record is honest:
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
   bodies literal (fixture `image-literal`).
 - **`bq..` extended blocks and citations**, **`pre.`/`bc.`**,
-  **footnotes**, **block/line attributes**, **`==` escaping**, and the
+  **footnotes**, **line attributes**, **`==` escaping**, and the
   **character-replacement macros** (curly quotes, em/en dashes, ellipsis,
   `(c)`/`(r)`/`(tm)`). All planned/deferred in the feature matrix.
 
 Tables were the last large *block* gap; they are now implemented (T8) —
 see §6. The largest remaining *inline* gap, link aliases, is now
-implemented too (T9) — see §7.
+implemented too (T9) — see §7. Block attributes are now implemented (T10)
+— see §8.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -321,5 +325,45 @@ there. Titles work unchanged: `"text (title)":alias`.
 footnote` (space after `]`), `[]http://x` (empty alias), `[x]` (no URL),
 `[x] url with space` (whitespace in the URL), and a def-shaped substring
 inside a line are all ordinary paragraph text.
+
+## 8. Block attributes
+
+Both references document the full block attribute set — Hobix "Attributes:
+Block Attributes / Block Alignments" and Textile 2 "Block Attributes" —
+and they agree: modifiers sit **between the marker and its period** for
+`p`, `hN`, and `bq` signatures, and the period must be followed by a space
+(or tab, Oliver's consistent extension). `h2()>. Bingo.` is the Hobix
+example verbatim. Every choice below is pinned by the `block-attr-*`
+fixtures and the unit tests in `src/textile.zig`.
+
+**The token set** is the table family's (shared `scanMods`): `{style}`,
+`(class)`, `(#id)`, `(class#id)`, `[lang]`, `<`/`>`/`=`/`<>` alignment,
+and `(`/`)` padding — but **not** the table-only `_`, `^`, `~`, `\n`
+colspan, or `/n` rowspan (those stay literal on a block signature).
+Tokens are order-independent; the composed style always renders in the
+pinned order user-style → padding-left → padding-right → text-align
+(`{color:blue;margin:30px}` → `style="color:blue; margin:30px;"`).
+
+**Alignment** on a block is `text-align` (Hobix: `p<.` → `<p
+style="text-align:left;">`), unlike the table signature's float/centered
+form. `<>` renders `text-align:justify` — it is valid on blocks, even
+though the table machinery reserves it for cells.
+
+**Padding.** A bare `(` directly before the period (or another `(`/`)`,
+or end of line) is one em of left padding and needs **no closing paren**:
+`p(.` = `padding-left:1em;`, `p((.` = 2em, `p))).` = `padding-right:3em;`
+(Hobix). A `(` followed by other bytes opens a `(class#id)` spec that must
+close with `)`, or the whole line stays literal. An empty class is
+omitted: `p(#big-red).` renders `<p id="big-red">`, not `class=""`.
+
+**`bq` placement.** A `bq` signature's attributes land on the
+`<blockquote>` element and the single inner paragraph is unmarked (the
+same structure `closeBlock` already used for plain quotes).
+
+**Literal fallbacks (pinned by `block-attr-literal`).** An unterminated
+`(class` — `p(foo not closed` — a period not followed by whitespace —
+`p>.no-space` — a doubled period — `p.. double` — the deferred `bq..`
+extended and `bq:...` citation forms — and a non-`hN` marker like `h1x.`
+are all ordinary paragraph text with no attributes.
 
 
