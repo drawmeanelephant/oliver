@@ -21,7 +21,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T10 Textile block attributes | `{style}`/`(class#id)`/`[lang]`/alignment/padding on `p.`/`hN.`/`bq.` signatures; block attrs in model + renderer; Textile fixtures; Markdown untouched | after T9 | integrated on main (PR #22) |
 | Textile worker | T11 `bc.`/`pre.` block code | single-period code/preformatted leaf blocks owning verbatim lines until a blank line; `.code_block` verbatim `escape` flag + attrs; Textile fixtures; Markdown untouched | after T10 | integrated on main (PR #23) |
 | Textile worker | T12 extended blocks (`bq..`/`bc..`/`pre..`) | double-period signatures stay active across blank lines: `bq..` flushes blank-line-separated paragraphs into one blockquote, `bc..`/`pre..` keep blank lines as code content; both end at the next block signature | after T11 | integrated on main (PR #24) |
-| Textile worker | T13 Textile footnotes | `[N]` references → `.footnote_ref` sup links + `fnN.` blocks (paragraph attrs + leading sup); Textile fixtures; Markdown untouched | after T12 | implemented on main (uncommitted) |
+| Textile worker | T13 Textile footnotes | `[N]` references → `.footnote_ref` sup links + `fnN.` blocks (paragraph attrs + leading sup); Textile fixtures; Markdown untouched | after T12 | integrated on main (PR #25) |
+| Textile worker | T14 `bq.:URL` citations | citation URL after the block-quote period → the blockquote's `cite` attribute; block attrs combine; Textile fixtures; Markdown untouched | after T13 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -474,7 +475,48 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes; Textile + one new shared inline tag, Markdown
   untouched.
 - **Integration:** after T12 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 175/175 tests green;
+- **State:** integrated on main (PR #25). 175/175 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T14 — Block-quote citations (`bq.:URL`)
+
+- **Objective:** implement the block-quote citation form — a citation
+  URL immediately following the `bq` signature's period, rendered as
+  the blockquote's `cite` attribute.
+- **Authoritative sources:** current Textile Markup Language
+  Documentation "Block quotations"
+  <https://textile-lang.com/doc/block-quotations> — "Block quotes may
+  include a citation URL immediately following the period:
+  `bq.:http://textpattern.com/ A cited quotation.`" — plus Learn X in
+  Y Minutes <https://learnxinyminutes.com/textile/> ("You can include
+  a citation URL immediately after the '.'"). Neither Hobix nor
+  Textile 2 documents the form; the current docs are already an
+  allowed reference, and the rendering (the `cite` attribute) is the
+  standard HTML blockquote citation, per the user's specification.
+  Clean-room allowed.
+- **Seams:** `src/document.zig` (`.block_quote` payload gains the
+  arena-owned `cite`), `src/html.zig` (cite attribute on the
+  blockquote open, via the href policy `writeEscapedHref`),
+  `src/textile.zig` (`BlockQuoteSig` + `scanCiteUrl` URL run with the
+  inline-link trailing-punctuation trim, the reworked
+  `tryBlockQuoteMarker` returning the cite, `ActiveBlock.cite`
+  threaded through `appendBlockContent`/`closeBlock`), Textile
+  fixtures/index (incl. the `bq-malformed` and empty-signature pins
+  updated for the new contract), feature matrix, parity (new §12),
+  model/tests/ledger docs, README.
+- **Acceptance:** the textile-lang example byte-for-byte; the §8
+  modifiers combine (cite first, then attrs); trailing punctuation is
+  trimmed from the URL with the separator check on the raw run;
+  `bq.:` with no URL, a space after the colon, no content, no
+  separator, or `bq..:URL` stays literal; a citation signature
+  terminates an open extended quote; the 652/652 gate is untouched.
+- **Tests:** 4 unit tests (structure + rendered output, trailing-
+  punctuation trim, modifiers, literal shapes), 4 Textile fixture
+  pairs, and the `bq-malformed` fixture/empty-signature unit-test
+  pins updated for the new contract.
+- **Parallelism:** yes; Textile + one model field, Markdown untouched.
+- **Integration:** after T13 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 179/179 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

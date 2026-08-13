@@ -232,4 +232,22 @@ from the user-facing prose above (Oliver renders the Textile 2 classed
 form, and the §8 block-modifier set applies to `fnN.` signatures like
 any other block signature, with the structural class/id winning).
 
+Session 9 (T14 block-quote citations) consulted:
+
+- Textile Markup Language Documentation "Block quotations"
+  <https://textile-lang.com/doc/block-quotations> — "Block quotes may
+  include a citation URL immediately following the period:
+  `bq.:http://textpattern.com/ A cited quotation.`" (the current docs
+  are already an allowed reference).
+- Learn X in Y Minutes <https://learnxinyminutes.com/textile/> —
+  "Block quotes use the tag 'bq.'... `bq.:http://someurl.com` You can
+  include a citation URL immediately after the '.'".
+
+No Textile parser implementation source was consulted for the T14
+work. Neither Hobix nor Textile 2 documents the citation form; the
+pinned behaviors in docs/TEXTILE-PARITY.md §12 are derived from the
+user-facing prose above, with the rendering (the `cite` attribute on
+the blockquote, the standard HTML citation) per the user's
+specification.
+
 No Markdown or Textile parser implementation source was consulted.
