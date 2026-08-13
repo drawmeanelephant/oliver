@@ -235,7 +235,8 @@ diagnostics.
   semantics through an IR that cannot carry them. The existing
   Markdown/Textile API is untouched (source-compatible).
 - CLI: `oliver render --from cooklang` renders the recipe through the
-  Cooklang HTML policy.
+  Cooklang HTML policy; `oliver serialize --from cooklang` writes the
+  canonical `.cook` text (§10).
 
 ## 7. HTML rendering policy (Oliver-owned, not Cooklang-conformant)
 
@@ -274,24 +275,84 @@ Vocabulary (as implemented):
   `cooklang.parse`, comparing parts and metadata against the canonical
   expectations (YAML numbers compared via the derived numeric view;
   YAML strings via source text; null quantity mapped to the canonical
-  default per type). Registered as `zig build cooklang-conformance`.
-- **Owned tests**: 31 unit tests in `src/cooklang.zig` (exact spans and
-  model shape, every semantic family, diagnostics, bounded behavior),
-  fixture pairs in `tests/fixtures/cooklang/` (input + expected HTML:
-  `cooklang-basic`, `cooklang-sections`, `cooklang-frontmatter`,
-  `cooklang-literal`), and adversarial/resource tests in
-  `tests/fixtures_test.zig` (huge delimiter runs, thousands of
-  ingredients, deep preparations, an unterminated block comment, many
-  steps/sections, a 100 KB single line) proving deterministic output and
-  no pathological rescans.
+  default per type). Registered as `zig build cooklang-conformance`;
+  with no path argument the vendored corpus is used, and a path may be
+  passed to check a freshly fetched copy. The harness also asserts the
+  serializer's semantic fixed point over every corpus source (§10), so
+  canonical output never drifts from what the canonical tests accept.
+- **Owned tests**: 22 parser unit tests in `src/cooklang.zig` and 2
+  serializer unit tests in `src/cooklang_serialize.zig` (exact spans
+  and model shape, every semantic family, diagnostics, bounded
+  behavior, the serialize round-trip fixed point — all running under
+  `zig build test`), fixture pairs in `tests/fixtures/cooklang/`
+  (input + expected HTML: `cooklang-basic`, `cooklang-sections`,
+  `cooklang-frontmatter`, `cooklang-literal`; input + expected
+  canonical output: `serialize-basic`, `serialize-literal`), and
+  adversarial/resource tests in `tests/fixtures_test.zig` (huge
+  delimiter runs, thousands of ingredients, deep preparations, an
+  unterminated block comment, many steps/sections, a 100 KB single
+  line) proving deterministic output and no pathological rescans.
 - **Regression wall**: the CommonMark gate stays 652/652 with 0
   mismatches; the Textile suite stays green; `zig fmt --check` clean.
 
 ## 9. Explicitly deferred (documented, not built)
 
-Canonical Cooklang serializer (stretch, after the model is proven);
-richer generic HTML recipe renderer; `.menu` profile support beyond "it
+Richer generic HTML recipe renderer; `.menu` profile support beyond "it
 already parses"; a pure `scaleRecipe()` semantic operation; and all of
 conventions.md's application features (shopping lists, pantry, aisles,
 image discovery, search, meal scheduling, publication). These are
-consumer/ecosystem responsibilities, per §1.
+consumer/ecosystem responsibilities, per §1. (The canonical Cooklang
+serializer was the first stretch goal and is now implemented — §10.)
+
+## 10. Canonical serializer (Oliver-owned, not byte-identical round-trip)
+
+`src/cooklang_serialize.zig` turns a semantic `Recipe` back into valid
+`.cook` text: `oliver.cooklang_serialize.serialize(allocator, writer,
+&recipe, .{})`, or `oliver serialize --from cooklang` on the CLI. It is
+**canonical serialization, not byte-identical source round-tripping**:
+parsing normalizes away the source's exact spelling (marker style,
+whitespace, `== Name ==` vs `= Name`, comment placement), so the output
+is one deterministic valid spelling of the same recipe — not the
+original text. A byte-identical round-trip would require a CST/trivia
+layer; that is explicitly out of scope, and this distinction is
+recorded here and in the module docstring so nobody mistakes canonical
+output for the source.
+
+Canonical rules (as implemented):
+
+- Blocks render in order, separated by one blank line, ending with a
+  single `\n`; front matter renders first as `---\n` + raw payload +
+  `---\n` (the payload passes through byte-for-byte — it is data, not
+  parsed).
+- A step renders its parts in order: text verbatim (text values are
+  already join-normalized by the parser, so a multi-line step without
+  forced breaks collapses to one line), tokens in canonical form, and
+  a `line_break` part as `\` + `\n`.
+- Tokens emit braces exactly when the model says they carried them
+  (`quantity != null`; the empty-braces form `@x{}` is `quantity = ""`,
+  distinct from no braces at all), `%units` only when units are
+  non-empty, and the shorthand `(preparation)` follows the closing
+  brace verbatim. Recipe references need no special form:
+  `is_recipe_reference` is a derived flag, and the name renders as-is.
+- Notes render as `> ` plus the text; sections render as `= Name` (the
+  `== Name ==` variant normalizes to `= Name`).
+- No escaping is needed or performed: text values cannot contain a
+  valid token shape (it would have parsed as one) or a trailing `\`
+  (it would be a break), so verbatim emission re-parses to the same
+  parts; `-`/`[-`-carrying literal text re-parses identically by the
+  same rules the parser applies.
+
+Contract, verified by tests:
+
+- **Semantic fixed point**: `parse(serialize(parse(x)))` is
+  semantically identical to `parse(x)` (source spans excepted — they
+  are positions in different texts), and `serialize(serialize(x))` is
+  byte-identical: serialization is idempotent.
+- **Corpus wall**: the conformance harness asserts the fixed point over
+  every source in the official 60-test corpus, so canonical output
+  never drifts from what the canonical tests accept.
+- **Fixture pairs**: `serialize-basic` and `serialize-literal` pin
+  canonical output byte-for-byte, including the degraded/literal
+  shapes that must round-trip unchanged.
+- **Parser fix carried**: empty front matter (`---\n---`) — the
+  zero-payload case — parses correctly (no panic) and round-trips.

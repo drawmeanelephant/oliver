@@ -20,7 +20,8 @@ source bytes (cooklang)
 cooklang parser
     |
     v
-typed Recipe ───────────────────> cooklang_html policy ─> output bytes
+typed Recipe ──┬────────────────> cooklang_html policy ─> output bytes
+               └────────────────> cooklang_serialize ──> canonical .cook
 ```
 
 Two document families, deliberately separate:
@@ -42,7 +43,9 @@ The two boundaries that matter:
 - **Document/Recipe → renderer**: rendering is dialect-independent and
   never reparses source. The renderer is the only place HTML bytes are
   decided. `src/html.zig` renders the Document; `src/cooklang_html.zig`
-  renders the Recipe under its own documented policy.
+  renders the Recipe under its own documented policy, and
+  `src/cooklang_serialize.zig` writes canonical `.cook` (semantic, not
+  byte-identical round-trip — docs/COOKLANG.md §10).
 
 ## Module map
 
@@ -57,6 +60,7 @@ The two boundaries that matter:
 | `src/cooklang.zig` | Cooklang frontend: typed Recipe model + parser |
 | `src/html.zig` | deterministic HTML renderer (Document) |
 | `src/cooklang_html.zig` | deterministic Cooklang HTML policy (Recipe) |
+| `src/cooklang_serialize.zig` | canonical Cooklang serializer (Recipe → valid `.cook`) |
 | `src/main.zig` | provisional CLI: arguments + stdio only; no parser semantics |
 | `tools/cooklang_conformance.zig` | Cooklang canonical-corpus harness (`zig build cooklang-conformance`) |
 | `tests/fixtures_test.zig` | fixture-driven tests + adversarial smoke tests |
