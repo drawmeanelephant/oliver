@@ -27,6 +27,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T16 `==` escaping | lone `==` lines open a block-escape region emitted as a raw `.html_block`; inline `==...==` suspends formatting and replacements, emitting a literal `.text` node; Textile fixtures; Markdown untouched | after T15 | integrated on main (PR #31) |
 | Textile worker | T17 line attributes | the `|mods|.` pipe form applies the §8 block-modifier set to the paragraph, byte-identical to `p<mods>.`; a `.line` modifier kind; Textile fixtures; Markdown untouched | after T16 | merged on main (PR #32) |
 | Textile worker | T18 image modifiers | the documented image family — alignment (`!<x!`…`!~x!`), sizing (`10x20`, `10w 20h`, `20%x40%`, `20%`), `{style}`/`(class#id)`/padding — composes onto `.image.attrs`/width/height through the §8 machinery; shared model + renderer gain defaulted width/height/attrs; Markdown untouched | after T17 | merged on main (PR #33) |
+| Textile worker | T19 big/small phrases | Textile 2's `++bigger++`/`--smaller--` → `<big>`/`<small>` slot into the phrase machinery as doubled `+`/`-` runs; a matched `--` pair is consumed (never em-dashed) while space-adjacent/intraword/numeric/unmatched `--` still em-dash; Tag gains big/small; Markdown untouched | after T18 | merged on main (PR #34) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -661,6 +662,39 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   Markdown is untouched.
 - **Integration:** after T17 (the 652/652 gate is re-verified).
 - **State:** integrated on main (PR #33). 189/189 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T19 — Textile big/small phrases (`++x++` / `--x--`)
+
+- **Objective:** implement Textile 2's `++bigger++`/`--smaller--`
+  (big/small) phrase operators with the literal-run fallbacks the phrase
+  family already pins — the last phrase-family gap.
+- **Normative source:** Textile 2 "Inline Formatting" — "`++bigger++`
+  Translates into `<big>bigger</big>`" and "`--smaller--` Translates
+  into: `<small>smaller</small>`". The only clean-room reference carrying
+  them (Hobix and the current docs do not); the earlier deferral followed
+  the majority rule and the user's explicit request lifts it
+  (docs/CLEANROOM.md session 14).
+- **Dependencies:** the phrase machinery (T4) — a doubled run of `-`/`+`
+  is a phrase operator like `**`/`__` — and the character-replacement
+  em-dash rule (T15), whose interaction the milestone pins.
+- **Seams:** `src/document.zig` + `src/html.zig` (`Tag` gains `.big`/
+  `.small`, rendered `<big>`/`<small>`) and `src/textile.zig` only
+  (`phraseOpFor` maps `-`/`+` runs of 2). Markdown never produces the
+  tags, so Markdown output is byte-identical.
+- **Acceptance:** the Textile 2 examples byte-for-byte; nesting
+  (`++*big*++`); single-length del/ins unchanged; runs of 3+ stay
+  entirely literal; a matched `--` pair is consumed as a delimiter while
+  space-adjacent/intraword/numeric/unmatched `--` still em-dash through
+  the replacement pass; opacity inside `@code@`; the 652/652 gate is
+  untouched.
+- **Tests:** 2 unit tests (Textile 2 examples + spans, nesting,
+  over-long runs, em-dash interplay), 1 new Textile fixture pair
+  (`phrase-big-small`) plus the `phrase-boundaries` over-long-run pin
+  update.
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T18 (the 652/652 gate is re-verified).
+- **State:** integrated on main (PR #34). 190/190 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

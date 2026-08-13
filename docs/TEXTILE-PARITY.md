@@ -62,6 +62,7 @@ consulted.
 | image alignment (`!<x!`/`!>x!`/`!=x!`/`!-x!`/`!^x!`/`!~x!`) | `.image.attrs` (style fragment) | `<img style="float:left;" …>` | implemented (T18) |
 | image `{style}`/`(class#id)`/padding | `.image.attrs` (style/class/id) | `<img style="…" class="…" id="…">` | implemented (T18) |
 | image sizing (`10x20`, `10w 20h`, `20%x40%`, `20%`) | `.image` width/height | `width="10" height="20"` | implemented (T18) |
+| `++x++` big / `--x--` small | `.big` / `.small` | `<big>` / `<small>` | implemented (T19) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -102,9 +103,10 @@ the character-replacement macros are implemented (T15) — see §13 —
 line attributes (`|mods|.`) are implemented (T17) — see §15 — and the
 image modifiers (alignment, sizing, style/class/padding) are
 implemented (T18) — see §16.
-- **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
-  Textile 2, not Hobix; Oliver defers per the "implement once from the
-  majority" rule. Runs of 2+ for the single-length operators stay literal.
+- **`++bigger++` / `--smaller--`** (`<big>`/`<small>`): documented only by
+  Textile 2, not Hobix — the last phrase-family gap, now implemented per
+  the user's explicit request (T19); see §17. Runs of 3+ for the
+  single-length operators stay literal.
 - **`??citation??`**, **acronyms**, and **definition lists** (Hobix-only or
   Textile 2-only) — deferred.
 - **Textile raw HTML** — Textile keeps `<...>` as plain text (no `.raw_html`
@@ -121,10 +123,13 @@ disagreement is named.
 
 1. **Phrase delimiter runs.** `*`/`_` of length 1 are strong/emphasis and of
    length 2 are bold/italic (both references agree: "doubling the
-   underscores or asterisks"); `-`, `+`, `^`, `~`, `%` are single-length
-   only. Runs longer than any documented operator stay **entirely literal**
-   (`***x***` is never split into literal `*` + bold `**`), and unmatched
-   openers stay literal — the same conservatism as `@code@` edge cases.
+   underscores or asterisks"); `-`/`+` are del/ins at length 1 and
+   small/big at length 2 (Textile 2's `--smaller--`/`++bigger++`;
+   implemented per the user's request, §17); `^`, `~`, `%` are
+   single-length only. Runs longer than any documented operator stay
+   **entirely literal** (`***x***` is never split into literal `*` + bold
+   `**`), and unmatched openers stay literal — the same conservatism as
+   `@code@` edge cases.
 2. **Boundary rule.** An opener needs a whitespace-or-punctuation boundary
    before and non-whitespace content immediately after; a closer needs
    non-whitespace before and a whitespace-or-punctuation boundary (or line
@@ -212,7 +217,8 @@ The fixture wall added by this audit:
 - documented nesting `*_way_*` plus deeper same-type/other-type nesting
   (`phrase-nesting`);
 - every boundary fallback: intraword, edge whitespace, over-long runs,
-  deferred `--`, unmatched openers (`phrase-boundaries`);
+  unmatched openers, and the big/small + em-dash interplay
+  (`phrase-boundaries`, `phrase-big-small`);
 - links: trailing punctuation, mailto, relative URLs, titles, the bracket
   trick, and literal fallbacks (`link-basic`, `link-title`,
   `link-bracket-trick`, `link-literal`);
@@ -566,9 +572,11 @@ apostrophe) while verbatim payloads do not.
   closing `”` after the `*`), pinned by the fixtures.
 - **Em dash.** Two consecutive hyphens `--` become `—`; runs longer
   than two are replaced left-to-right (`---` → `—` + `-`, `----` →
-  `——`). This is the majority reading — Textile 2's `--smaller--`
-  `<small>` macro is deferred, so `--smaller--` renders as plain
-  em-dashed text, never a `<small>` element.
+  `——`). The em-dash rule operates on plain text: a `--` that forms a
+  matched phrase pair is consumed by the phrase scanner first (Textile
+  2's `--smaller--` → `<small>`, §17), so only `--` that cannot form a
+  pair — space-adjacent, intraword, numeric, or unmatched — reaches
+  this rule.
 - **En dash.** A hyphen with a space/tab on **both** sides (` - `)
   becomes `–`. A hyphen touching letters (`well-formed`, `foo-bar`)
   or at the content edge is untouched.
@@ -765,4 +773,49 @@ an empty src, an unclosed `!`, and every malformed size shape — a bare
 tokens — keep the whole construct ordinary text. The pre-existing pin
 that all modifier shapes stay literal was updated: `!>obake.gif!` now
 renders Hobix's own aligned form.
+
+## 17. Big and small phrases (T19): pinned behaviors
+
+Textile 2 "Inline Formatting" documents the pair — "`++bigger++`
+Translates into `<big>bigger</big>`" and "`--smaller--` Translates
+into: `<small>smaller</small>`" — the only clean-room reference that
+carries them (Hobix and the current Textile docs do not). The deferral
+(docs/FEATURE-MATRIX.md, recorded ambiguity #18) followed the
+"implement once from the majority" rule; the user's explicit request
+lifts it, and the implementation slots into the existing phrase
+machinery unchanged — a doubled run of `-`/`+` is a phrase operator
+like `**`/`__`, with the same boundary contract, strict-LIFO matching,
+nesting, and literal-run fallbacks (docs/TEXTILE-PARITY.md §3).
+
+**The operators.** `++x++` → `<big>x</big>` and `--x--` →
+`<small>x</small>`, recognized when both delimiters sit at the inline
+boundaries (opener: boundary before, non-whitespace content after;
+closer: non-whitespace before, boundary after). They nest like the
+rest of the family (`++*big*++` → `<big><strong>big</strong></big>`),
+and the single-length `-x-`/`+x+` del/ins forms are unchanged.
+
+**The em-dash interplay.** The doubled hyphen run is shared between
+`--` the small operator and `--` the em-dash replacement (all three
+references document the em dash). The phrase scanner runs first: a
+`--` that forms a matched pair is **consumed as a delimiter**, so
+`--smaller--` renders `<small>smaller</small>`, never `—smaller—`.
+A `--` that cannot form a pair stays text and the em-dash rule applies
+unchanged: space-adjacent (`a -- b` → `a — b`), intraword
+(`foo--bar` → `foo—bar`), numeric (`2--4` → `2—4`), and unmatched
+(`--x` → `—x`, `x--` → `x—`) shapes. Literal `---`/`+++` runs of
+three or more stay entirely literal text (the whole run is skipped,
+never reseeding a shorter operator) and still em-dash
+(`---x---` → `—-x—-`).
+
+**Model and renderer.** The shared `Tag` union gains `.big`/`.small`,
+rendered `<big>`/`</big>`/`<small>`/`</small>` through the same enter/
+exit machinery as the other phrase tags. Markdown never produces these
+tags, so the Markdown frontend is untouched (gate 652/652).
+
+**Literal fallbacks (pinned by `phrase-big-small`).** Runs of 3+
+(`+++x+++`, `---x---`), unmatched openers/closers (`--x`, `x--`),
+intraword runs (`foo--bar`), edge whitespace (`a -- b`), and opacity
+inside `@code@` (where the dashes stay literal) all follow the family
+rules. The `phrase-boundaries` fixture's deferred-`--` line became an
+over-long-run case (`---smaller---` stays literal).
 
