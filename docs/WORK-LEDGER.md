@@ -37,6 +37,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Cooklang worker | CK1 Cooklang frontend | a first-class `*.cook` frontend: a typed Recipe model (blocks/steps/ingredients/cookware/timers/notes/sections/preps/recipe-refs/frontmatter) with exact spans, built from the official spec + EBNF + canonical corpus (pinned revision, MIT) under clean-room rules; canonical conformance harness; Oliver-owned tests; deterministic HTML policy; `--from cooklang` CLI; Markdown/Textile untouched | after the Textile audit (T1–T25) | merged (PR #43) |
 | Cooklang worker | CK2 canonical serializer | `src/cooklang_serialize.zig`: semantic Recipe → valid `.cook`, deterministic and idempotent (canonical, not byte-identical round-tripping — docs/COOKLANG.md §10); front-matter passthrough; empty-front-matter parser fix (`---\n---` no longer panics); `oliver serialize --from cooklang` CLI; the conformance harness asserts the fixed point over every corpus source; serialize fixture pairs; Cooklang unit tests wired into `zig build test` (they had been skipped by lazy analysis); Cooklang gate added to CI; Markdown/Textile untouched | after CK1 (first stretch goal) | merged (PR #45) |
 | Cooklang worker | CK3 pure scaling | `src/cooklang_scale.zig`: `scaleRecipe` derives a scaled Recipe — exact-rational linear scaling (no f64), `.servings` mode reading frontmatter `servings`/`serves`/`yield` (leading number, default 1), `=`-fixed quantities locked, timers/cookware/references never scaled, non-numeric unchanged, frontmatter untouched; `oliver scale --from cooklang (--factor | --servings)` CLI; 10 unit tests + 2 fixture pairs; per the conventions' "Scaling and Servings" (clean-room session 22); Markdown/Textile untouched | after CK2 (second stretch goal) | merged (PR #46) |
+| Cooklang worker | CK4 richer HTML policy | `src/cooklang_html.zig` grows from the bare article/steps vocabulary into the richer generic policy: an **ingredients index** (one `<li>` per distinct ingredient — exact case-sensitive name, first occurrence's quantity/units/preparation, first-appearance order, recipe-ref items, cookware/timers excluded, omitted when empty), timers as `<time class="timer" datetime="PT25M">` (ISO-8601 duration for whole-number quantities with recognized day/hour/minute/second units, case-insensitive; named timers render `name (3 minutes)`), unnamed sections omit the empty `<h2>`, preparations surfaced in the index; 2 unit tests (ISO durations, richer-policy structure); the 4 HTML fixture pairs regenerated under the new vocabulary; Markdown/Textile untouched | after CK3 (third stretch goal) | merged (PR #47) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1043,6 +1044,43 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   change is visibility-only.
 - **Integration:** after CK2; the 652/652 gate is re-verified.
 - **State:** merged on main (PR #46). 242/242 tests green (222 lib + 13
+  fixtures + 7 harness); Cooklang conformance 60/60; CommonMark gate
+  still 652/652 with 0 mismatches; Textile suite untouched.
+
+## CK4 — Richer generic HTML policy
+
+- **Objective:** third stretch goal — expand the Cooklang HTML policy
+  into a richer generic recipe renderer with an ingredients index,
+  section-aware layout, and preparation/timer semantics.
+- **Normative sources:** none new — the HTML vocabulary is Oliver-owned
+  policy (the spec defines no HTML); the index/timer semantics derive
+  from the existing Recipe model and documented contract
+  (docs/COOKLANG.md §7). No upstream material consulted.
+- **Dependencies:** `src/cooklang.zig` model only (`parseQuantity` for
+  the timer-duration whole-number rule); the renderer already writes to
+  any writer and never reparses.
+- **Seams:** `src/cooklang_html.zig` (ingredients index with
+  StringHashMap dedup + first-appearance ordering, `<time>`/`datetime`
+  ISO-8601 durations, unnamed-section `<h2>` omission, named-timer
+  `name (3 minutes)` text), `src/oliver.zig` (forced analysis now
+  includes cooklang_html so its unit tests run under `zig build test`),
+  the 4 HTML fixture pairs (regenerated under the new vocabulary).
+- **Acceptance:** every ingredient/reference appears once in the index
+  in first-appearance order with first-occurrence quantity/units/prep;
+  recipe references are index items and never resolved; cookware and
+  timers never appear in the index; whole-number timers with recognized
+  day/hour/minute/second units get ISO-8601 `datetime` (case-insensitive,
+  abbreviations included); fractional/unknown-unit timers keep
+  `data-quantity`/`data-units` only; unnamed sections render no empty
+  `<h2>`; the index is omitted when empty; escaping and the data
+  contract are unchanged.
+- **Tests:** 2 unit tests (ISO-8601 duration mapping incl. null cases;
+  richer-policy structure — dedup, refs, quantity/prep spans, `<time>`
+  output, section headings) + the 4 fixture pairs pinned byte-for-byte.
+- **Parallelism:** yes; Markdown/Textile untouched; the fixture HTML is
+  Oliver's own policy and changes deliberately with the vocabulary.
+- **Integration:** after CK3; the 652/652 gate is re-verified.
+- **State:** merged on main (PR #47). 244/244 tests green (224 lib + 13
   fixtures + 7 harness); Cooklang conformance 60/60; CommonMark gate
   still 652/652 with 0 mismatches; Textile suite untouched.
 

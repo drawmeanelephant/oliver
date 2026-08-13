@@ -246,23 +246,41 @@ Oliver therefore documents its own deterministic policy in
 and never claims Cooklang conformance for it. Consumers (e.g. Boris)
 may instead consume the `Recipe` IR directly and own layout.
 
-Vocabulary (as implemented):
+Vocabulary (as implemented; the richer generic policy):
 
 - recipe wrapper: `<article class="recipe">`
-- step list: `<ol class="steps">` with `<li>`; a section contributes its
-  own `<ol>` inside `<section>` + `<h2>`; a note renders `<aside
-  class="note">`; a forced line break renders `<br>`
-- ingredient: `<span class="ingredient" data-quantity="…"
+- **ingredients index**: `<section class="ingredients">` with
+  `<h2>Ingredients</h2>` and one `<li>` per **distinct** ingredient
+  (exact, case-sensitive name; first occurrence's quantity, units, and
+  preparation; first-appearance order). Each item carries
+  `data-quantity`/`data-units` when present, a visible
+  `<span class="quantity">200 g</span>`, the name, and an optional
+  `<span class="preparation">grated</span>`; recipe references appear
+  as `<li class="recipe-ref" data-ref="…">`; cookware and timers are
+  not ingredients and never appear. The index is omitted when the
+  recipe has no ingredient/reference tokens. It is a deterministic
+  summary for generic publication — aggregating quantities or building
+  shopping lists is ecosystem logic Oliver deliberately does not own.
+- sections: `<section>` with `<h2>Name</h2>` (the `<h2>` is omitted for
+  an unnamed section); each section owns its step `<ol>` and notes
+- step list: `<ol class="steps">` with `<li>`; a forced line break
+  renders `<br>`; a note renders `<aside class="note">`
+- ingredient (inline): `<span class="ingredient" data-quantity="…"
   data-units="…">name</span>` — `data-quantity`/`data-units` emitted
-  only when present; the name (or `./…` reference) is the content;
-  preparations render `<span class="preparation">…</span>` inside their
-  ingredient
+  only when present; preparations render `<span
+  class="preparation">…</span>` inside their ingredient
 - recipe reference: `<span class="recipe-ref"
   data-ref="./sauces/Hollandaise">./sauces/Hollandaise</span>` —
   distinct from a plain ingredient; never resolved
-- cookware: `<span class="cookware" …>`, timer: `<span class="timer"
-  data-quantity data-units>25 minutes</span>` (named timers render the
-  quantity text; unnamed timers show the quantity value)
+- cookware: `<span class="cookware" …>`
+- timer: `<time class="timer" data-quantity="25" data-units="minutes"
+  datetime="PT25M">25 minutes</time>` — `datetime` is an ISO-8601
+  duration emitted when the quantity is a whole number and the unit is
+  a recognized day/hour/minute/second form (singular/plural and common
+  abbreviations, case-insensitive); fractional or unknown-unit timers
+  keep the `data-quantity`/`data-units` contract without `datetime`.
+  Named timers render `eggs (3 minutes)` when braced, else the bare
+  name; unnamed timers show the quantity and units
 - text: HTML-escaped like Markdown/Textile text
 - frontmatter is **not** rendered into HTML (it is data; the Recipe IR
   carries it)
@@ -293,17 +311,14 @@ Vocabulary (as implemented):
   unterminated block comment, many steps/sections, a 100 KB single
   line) proving deterministic output and no pathological rescans.
 - **Regression wall**: the CommonMark gate stays 652/652 with 0
-  mismatches; the Textile suite stays green; `zig fmt --check` clean.
+  mismatches; the Textile suite stays green; `zig fmt --check` clean.## 9. Explicitly deferred (documented, not built)
 
-## 9. Explicitly deferred (documented, not built)
-
-Richer generic HTML recipe renderer; `.menu` profile support beyond "it
-already parses"; and all of conventions.md's application features
-(shopping lists, pantry, aisles, image discovery, search, meal
-scheduling, publication). These are consumer/ecosystem
-responsibilities, per §1. (The canonical serializer — §10 — and the
-pure scaling operation — §11 — were the first two stretch goals and
-are now implemented.)
+`.menu` profile support beyond "it already parses"; and all of
+conventions.md's application features (shopping lists, pantry, aisles,
+image discovery, search, meal scheduling, publication). These are
+consumer/ecosystem responsibilities, per §1. (The canonical serializer
+— §10 — the pure scaling operation — §11 — and the richer generic HTML
+renderer — §7 — are the first three stretch goals, now implemented.)
 
 ## 10. Canonical serializer (Oliver-owned, not byte-identical round-trip)
 
