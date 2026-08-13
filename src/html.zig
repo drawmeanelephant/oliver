@@ -111,12 +111,28 @@ fn pushChildren(
     node: *const document.Node,
     node_tight_item: bool,
 ) !void {
-    // A table's children are rows; the first is the header row, the rest
+    // A GFM table's children are rows; the first is the header row, the rest
     // body rows. The `<thead>`/`<tbody>` split is emitted between them as
     // marker frames (GFM §4.10 output; no `<tbody>` with no body rows).
-    // The table's own exit frame was already pushed by `writeOpen`.
+    // Textile tables (`.sections == false`) render as flat `<tr>` rows — the
+    // references show no thead/tbody even with header cells
+    // (docs/TEXTILE-PARITY.md §7). The table's own exit frame was already
+    // pushed by `writeOpen`.
     if (node.tag == .table) {
         const n = node.children.items.len;
+        if (!node.data.table.sections) {
+            var i = n;
+            while (i > 0) {
+                i -= 1;
+                try stack.append(gpa, .{ .enter = .{
+                    .node = node.children.items[i],
+                    .tight_item = false,
+                    .suppress_p = false,
+                    .prefix_newline = false,
+                } });
+            }
+            return;
+        }
         const has_body = n >= 2;
         var i = n;
         while (i > 1) {
@@ -190,21 +206,38 @@ fn writeOpen(
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .table => {
-            try writer.writeAll("<table>\n");
+            try writer.writeAll("<table");
+            try writeAttrs(writer, node.data.table.attrs);
+            try writer.writeAll(">\n");
             // Children (rows with thead/tbody markers) are pushed by
             // `pushChildren`; only the exit frame is set here.
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .table_row => {
-            try writer.writeAll("<tr>");
+            try writer.writeAll("<tr");
+            try writeAttrs(writer, node.data.table_row.attrs);
+            try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .table_cell => {
             const cell = node.data.table_cell;
             try writer.writeAll("\n<");
             try writer.writeAll(if (cell.header) "th" else "td");
+            // Textile cell attributes (style/class/id/lang in the fixed
+            // render order), then colspan/rowspan, then the GFM `align`.
+            try writeAttrs(writer, cell.attrs);
+            if (cell.colspan != 1) {
+                var buf: [16]u8 = undefined;
+                const attr = try std.fmt.bufPrint(&buf, " colspan=\"{d}\"", .{cell.colspan});
+                try writer.writeAll(attr);
+            }
+            if (cell.rowspan != 1) {
+                var buf: [16]u8 = undefined;
+                const attr = try std.fmt.bufPrint(&buf, " rowspan=\"{d}\"", .{cell.rowspan});
+                try writer.writeAll(attr);
+            }
             switch (cell.alignment) {
-                .none => {},
+                .none, .justify => {},
                 .left => try writer.writeAll(" align=\"left\""),
                 .center => try writer.writeAll(" align=\"center\""),
                 .right => try writer.writeAll(" align=\"right\""),
@@ -384,8 +417,9 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .block_quote => try writer.writeAll("</blockquote>\n"),
         .table => {
             // The thead/tbody split is emitted by marker frames between the
-            // rows; only the tail (tbody close, table close) is written here.
-            if (node.children.items.len >= 2) try writer.writeAll("</tbody>\n");
+            // rows; only the tail (tbody close, table close) is written here
+            // (Textile tables are flat and skip the tbody close).
+            if (node.data.table.sections and node.children.items.len >= 2) try writer.writeAll("</tbody>\n");
             try writer.writeAll("</table>\n");
         },
         .table_row => try writer.writeAll("\n</tr>\n"),
@@ -434,6 +468,19 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
 /// valid levels, so clamping is purely defensive.
 fn clampHeading(level: u8) u8 {
     return @min(@max(level, 1), 6);
+}
+
+/// Emits an ordered attribute list as ` name="value"` pairs (the fixed
+/// render order for Textile attributes: style, class, id, lang). Values
+/// are HTML-escaped like text content.
+fn writeAttrs(writer: anytype, attrs: []const document.Attribute) !void {
+    for (attrs) |a| {
+        try writer.writeByte(' ');
+        try writer.writeAll(a.name);
+        try writer.writeAll("=\"");
+        try writeEscaped(writer, a.value);
+        try writer.writeByte('"');
+    }
 }
 
 /// Percent-encodes the href per Oliver's documented URL policy (see the
@@ -861,12 +908,12 @@ test "html: table renders thead/tbody sections and alignment attributes" {
     var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
     defer doc.deinit();
     const table = try doc.createNode(.table, .{ .start = 0, .end = 0 }, .{
-        .table = .{ .alignment = &.{ .none, .center, .right } },
+        .table = .{ .alignment = &.{ .none, .center, .right }, .sections = true },
     });
     try doc.appendChild(doc.root, table);
 
     // Header row: three cells (plain, center-aligned, right-aligned).
-    const header = try doc.createNode(.table_row, .{ .start = 0, .end = 0 }, .none);
+    const header = try doc.createNode(.table_row, .{ .start = 0, .end = 0 }, .{ .table_row = .{} });
     try doc.appendChild(table, header);
     const h1 = try doc.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = true, .alignment = .none } });
     try doc.appendChild(header, h1);
@@ -880,7 +927,7 @@ test "html: table renders thead/tbody sections and alignment attributes" {
 
     // One body row: padded to the table's three columns (an empty cell
     // renders <td></td>).
-    const body = try doc.createNode(.table_row, .{ .start = 0, .end = 0 }, .none);
+    const body = try doc.createNode(.table_row, .{ .start = 0, .end = 0 }, .{ .table_row = .{} });
     try doc.appendChild(table, body);
     const b1 = try doc.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = false, .alignment = .none } });
     try doc.appendChild(body, b1);
@@ -899,9 +946,9 @@ test "html: table renders thead/tbody sections and alignment attributes" {
     // No body rows: no <tbody> section is emitted.
     var doc2 = try document.Document.init(testing.allocator, .{ .bytes = "" });
     defer doc2.deinit();
-    const t2 = try doc2.createNode(.table, .{ .start = 0, .end = 0 }, .{ .table = .{ .alignment = &.{.none} } });
+    const t2 = try doc2.createNode(.table, .{ .start = 0, .end = 0 }, .{ .table = .{ .alignment = &.{.none}, .sections = true } });
     try doc2.appendChild(doc2.root, t2);
-    const h = try doc2.createNode(.table_row, .{ .start = 0, .end = 0 }, .none);
+    const h = try doc2.createNode(.table_row, .{ .start = 0, .end = 0 }, .{ .table_row = .{} });
     try doc2.appendChild(t2, h);
     const c = try doc2.createNode(.table_cell, .{ .start = 0, .end = 0 }, .{ .table_cell = .{ .header = true, .alignment = .none } });
     try doc2.appendChild(h, c);
