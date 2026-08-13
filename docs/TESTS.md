@@ -21,12 +21,14 @@ Tests are product contracts. `zig build test` runs three suites:
    convergence), block attributes on `p.`/`hN.`/`bq.` signatures (class,
    id, style with `; ` normalization, lang, the four alignments, `(`/`)`
    padding, heading combinations, blockquote placement, and literal
-   fallbacks), a 10,000-pair phrase storm, and a 2,000-deep
-   phrase-nesting workload.
+   fallbacks), `bc.`/`pre.` code blocks (escaped vs verbatim content,
+   multi-line collection, signature-shaped content lines, blank-line
+   termination, modifier attrs, and literal fallbacks), a 10,000-pair
+   phrase storm, and a 2,000-deep phrase-nesting workload.
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 61 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 65 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -58,7 +60,10 @@ Tests are product contracts. `zig build test` runs three suites:
    `; ` normalization, lang, the four alignments, `(`/`)` padding,
    combined `h2()>.`/`h3()>[no]{color:red}.` forms, `bq` attrs on the
    `<blockquote>`, heading attrs, and literal fallback shapes;
-   docs/TEXTILE-PARITY.md §8). It
+   docs/TEXTILE-PARITY.md §8), and `bc.`/`pre.` code blocks
+   (escaped `<pre><code>` with signature-shaped content lines kept
+   verbatim, verbatim `<pre>` preserving HTML, modifier attrs on the
+   `<pre>`, and literal fallback shapes; docs/TEXTILE-PARITY.md §9). It
    also verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
    deterministic repeat rendering (list stress: 2k nested items, 10k
@@ -72,7 +77,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **167/167 tests passing** with Zig 0.16.0.
+The current complete result is **169/169 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
