@@ -63,8 +63,10 @@ class/id, lang, alignment, padding — see docs/TEXTILE-PARITY.md),
 `bc.`/`pre.` code blocks (escaped `<pre><code>` vs verbatim `<pre>`),
 extended `bq..`/`bc..`/`pre..` signatures that stay active across
 blank lines, footnotes (`[N]` references + `fnN.` blocks with
-`class="footnote"` links), and `bq.:URL` block-quote citations
-(rendered as the blockquote's `cite` attribute),
+`class="footnote"` links), `bq.:URL` block-quote citations
+(rendered as the blockquote's `cite` attribute), and the character
+replacements (curly quotes, em/en dashes, ellipsis, `(c)`/`(r)`/`(tm)`,
+fractions, degree, plus/minus, dimension sign),
 structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
@@ -81,8 +83,9 @@ The fenced-code open-leaf/model/rendering contract is
 [docs/FENCED-CODE.md](docs/FENCED-CODE.md).
 The Textile fixture audit — inventory, gaps vs. Textile 2 semantics, and
 chosen behaviors for phrase modifiers, links, images, lists, tables, link
-aliases, block attributes, code blocks, extended blocks, footnotes, and
-block-quote citations — is [docs/TEXTILE-PARITY.md](docs/TEXTILE-PARITY.md).
+aliases, block attributes, code blocks, extended blocks, footnotes,
+block-quote citations, and character replacements — is
+[docs/TEXTILE-PARITY.md](docs/TEXTILE-PARITY.md).
 The GFM tables extension contract is
 [docs/TABLES.md](docs/TABLES.md).
 Code spans, links, images, autolinks, and raw HTML ride the same
@@ -140,7 +143,7 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (179 tests)
+zig build test    # run all tests (183 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 

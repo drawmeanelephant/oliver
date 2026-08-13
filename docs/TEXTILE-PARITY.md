@@ -55,6 +55,7 @@ consulted.
 | `[N]` footnote reference | `.footnote_ref` (number) | `<sup class="footnote"><a href="#fnN">N</a></sup>` | implemented (T13) |
 | `fnN.` footnote block | `.paragraph` (attrs `class="footnote" id="fnN"`, leading `.superscript`) | `<p class="footnote" id="fnN"><sup>N</sup> body</p>` | implemented (T13) |
 | `bq.:URL` citation | `.block_quote` (`cite` URL + attrs) | `<blockquote cite="URL" style="…">` | implemented (T14) |
+| character replacements (`"`/`'` → curly, `--`/` - `, `...`, digit-adjacent `x`, `(c)`/`(r)`/`(tm)`, `(1/4)`/`(1/2)`/`(3/4)`, `(o)`, `(+/-)`) | `.text` (arena-owned replaced payload) | `“ ” ‘ ’ — – … × © ® ™ ¼ ½ ¾ ° ±` | implemented (T15) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -79,17 +80,23 @@ planned/deferred. The notable ones, so the record is honest:
   CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
   bodies literal (fixture `image-literal`).
-- **Line attributes**, **`==` escaping**, and the
-  **character-replacement macros** (curly quotes, em/en dashes, ellipsis,
-  `(c)`/`(r)`/`(tm)`). All planned/deferred in the feature matrix.
+- **Line attributes** and **`==` escaping** remain planned/deferred.
+
+The character-replacement macros — curly quotes, em/en dashes, ellipsis,
+`x` dimension sign, `(c)`/`(r)`/`(tm)`, and the fraction/degree/plus-minus
+paren forms — are now implemented (T15); see §13. Textile 2's `{...}`
+macro table (cent, pound, yen, ...) stays deferred (not documented by
+Hobix or the current docs, and the paren forms are the documented
+majority).
 
 Tables were the last large *block* gap; they are now implemented (T8) —
 see §6. The largest remaining *inline* gap, link aliases, is now
 implemented too (T9) — see §7. Block attributes are implemented (T10) —
 see §8 — `bc.`/`pre.` block code is implemented (T11) — see §9 —
 `bq..`/`bc..`/`pre..` extended blocks are implemented (T12) — see §10 —
-footnotes (`fnN.`/`[N]`) are implemented (T13) — see §11 — and
-block-quote citations (`bq.:URL`) are implemented (T14) — see §12.
+footnotes (`fnN.`/`[N]`) are implemented (T13) — see §11 —
+block-quote citations (`bq.:URL`) are implemented (T14) — see §12 — and
+the character-replacement macros are implemented (T15) — see §13.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -527,5 +534,67 @@ separator, empty content, and the undocumented `bq..:URL`
 extended-citation combination all stay ordinary text. A space after
 the period (`bq{color:red}. :URL body`) is not a citation — the
 content simply begins with a colon.
+
+## 13. Character replacements (T15): pinned behaviors
+
+All three references document the replacements: Hobix "Entities"
+(curly single/double quotes, `--` → em dash, ` - ` → en dash, `...` →
+ellipsis, `x` → dimension sign, `(TM)`/`(R)`/`(C)`), Textile 2
+"Character Replacements" (`(c)`/`(r)`/`(tm)`, em-dash), and the
+current docs "Automatic conversions" (quotes, dashes, ellipsis,
+dimension sign, `(tm)`/`(R)`/`(C)`, `(1/4)`/`(1/2)`/`(3/4)`, `(o)`,
+`(+/-)`). Oliver implements the intersection-plus-majority — every
+paren form documented by an example — and pins each rule below. The
+replacements are applied to **plain text only**, at the inline-pass
+text emission, so phrase content and link display text get them
+(Hobix's own alias example renders `it's` inside a link as a curly
+apostrophe) while verbatim payloads do not.
+
+**The rules.**
+
+- **Curly quotes.** `"` is opening `“` when the preceding source byte
+  is start-of-content, whitespace, or `([{`; otherwise closing `”`.
+  `'` is `’` between letters (apostrophe: `it's`, `I'm`), `‘` when
+  preceded by start/whitespace and followed by a letter (`'tis`), and
+  `’` otherwise (`dogs'`). The quote direction rule is local and
+  stateless (classic Textile behaves the same — `*em*"x"` renders a
+  closing `”` after the `*`), pinned by the fixtures.
+- **Em dash.** Two consecutive hyphens `--` become `—`; runs longer
+  than two are replaced left-to-right (`---` → `—` + `-`, `----` →
+  `——`). This is the majority reading — Textile 2's `--smaller--`
+  `<small>` macro is deferred, so `--smaller--` renders as plain
+  em-dashed text, never a `<small>` element.
+- **En dash.** A hyphen with a space/tab on **both** sides (` - `)
+  becomes `–`. A hyphen touching letters (`well-formed`, `foo-bar`)
+  or at the content edge is untouched.
+- **Ellipsis.** Three consecutive periods `...` become `…`;
+  left-to-right, so `....` → `…` + `.`.
+- **Dimension sign.** A lowercase `x` with a digit on each side,
+  allowing at most one space on either side, becomes `×` (`2 x 2` →
+  `2 × 2`, `2x4` → `2×4`). Plain `x` in words is untouched.
+- **Parenthesized macros.** `(c)`, `(r)`, `(tm)` — case-insensitive
+  (Hobix's uppercase forms are documented examples) — become ©, ®,
+  ™; `(1/4)`, `(1/2)`, `(3/4)` become ¼, ½, ¾; `(o)` becomes °;
+  `(+/-)` becomes ±. Any other parenthesized shape (`(1/3)`, `(cd)`,
+  `(c` unterminated) is literal.
+
+**Exemptions.** HTML-looking `<...>` regions (a `<` followed by a
+letter or `/`, through the closing `>`) are copied verbatim — a
+`title="x"` attribute keeps its straight quotes — and verbatim
+payloads never pass through the pass: `@code@` spans, `bc.`/`pre.`
+code blocks, and link/image src/alt/title (pinned by
+`char-replace-context`). The renderer still escapes the tag bytes as
+text (`<b>` → `&lt;b&gt;`, the pre-existing, pinned Textile escaping
+behavior), so the exemption is about replacements, not escaping.
+
+**Model.** Replaced text is an arena-owned payload (borrow-or-copy,
+the same contract as the Markdown entity resolver); untouched text
+still borrows the source. `hasCharMacroTrigger` is the cheap fast
+path — text with none of the trigger bytes (`"`, `'`, `-`, `.`, `(`,
+`<`, or a digit-adjacent `x`) never allocates.
+
+**Deferred.** Textile 2's `{...}` character-macro table (cent, pound,
+yen, ...) is not documented by Hobix or the current docs and stays
+literal; the `==` escaping mechanism is a separate milestone.
 
 
