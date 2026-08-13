@@ -61,8 +61,9 @@ cells, `table<mods>.` signatures, colspan/rowspan, and header-alignment
 propagation, block attributes (`p(...).`/`hN{...}.`/`bq>.` — style,
 class/id, lang, alignment, padding — see docs/TEXTILE-PARITY.md),
 `bc.`/`pre.` code blocks (escaped `<pre><code>` vs verbatim `<pre>`),
-and extended `bq..`/`bc..`/`pre..` signatures that stay active across
-blank lines,
+extended `bq..`/`bc..`/`pre..` signatures that stay active across
+blank lines, and footnotes (`[N]` references + `fnN.` blocks with
+`class="footnote"` links),
 structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
