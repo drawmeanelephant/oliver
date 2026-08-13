@@ -547,12 +547,13 @@ test "official identity rejects wrong byte count, example count, and digest" {
 test "expectation partition is complete and named divergences are exact" {
     const counts = try validateManifest(expectations.example_count);
     try std.testing.expectEqual(expectations.example_count, counts.supported + counts.not_yet + counts.divergence);
-    // Steady state after the thematic-break/Setext, fenced-code, and list
-    // milestones: 546 supported, 106 not-yet, and the former ATX
-    // trailing-backslash divergence (example 646) now conforms. These pins
-    // move only with a reviewed manifest change.
-    try std.testing.expectEqual(@as(usize, 546), counts.supported);
-    try std.testing.expectEqual(@as(usize, 106), counts.not_yet);
+    // Steady state after the tab-stop/indented-code milestone: 592
+    // supported, 60 not-yet (entity references, HTML blocks, and their
+    // dependents), and the former ATX trailing-backslash divergence
+    // (example 646) now conforms. These pins move only with a reviewed
+    // manifest change.
+    try std.testing.expectEqual(@as(usize, 592), counts.supported);
+    try std.testing.expectEqual(@as(usize, 60), counts.not_yet);
     try std.testing.expectEqual(@as(usize, 0), counts.divergence);
     try std.testing.expectEqual(expectations.Class.supported, expectations.classFor(646).?);
     try std.testing.expect(expectations.classFor(0) == null);

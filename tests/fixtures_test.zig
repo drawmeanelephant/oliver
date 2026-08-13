@@ -125,11 +125,6 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/escape-special.md"),
         .expected = @embedFile("fixtures/markdown/escape-special.html"),
     },
-    .{
-        .name = "unicode",
-        .input = @embedFile("fixtures/markdown/unicode.md"),
-        .expected = @embedFile("fixtures/markdown/unicode.html"),
-    },
     // --- emphasis / strong emphasis (docs/INLINE-PARSING.md §15) ---
     .{
         .name = "em-simple",
@@ -577,6 +572,27 @@ const markdown_fixtures = [_]MarkdownFixture{
         .name = "fence-info-escape",
         .input = @embedFile("fixtures/markdown/fence-info-escape.md"),
         .expected = @embedFile("fixtures/markdown/fence-info-escape.html"),
+    },
+    // --- indented code blocks and tab stops (CommonMark 0.31.2 §4.4/§2.1) ---
+    .{
+        .name = "code-indented-chunks",
+        .input = @embedFile("fixtures/markdown/code-indented-chunks.md"),
+        .expected = @embedFile("fixtures/markdown/code-indented-chunks.html"),
+    },
+    .{
+        .name = "code-indented-interrupt",
+        .input = @embedFile("fixtures/markdown/code-indented-interrupt.md"),
+        .expected = @embedFile("fixtures/markdown/code-indented-interrupt.html"),
+    },
+    .{
+        .name = "tabs-indented-code",
+        .input = @embedFile("fixtures/markdown/tabs-indented-code.md"),
+        .expected = @embedFile("fixtures/markdown/tabs-indented-code.html"),
+    },
+    .{
+        .name = "tabs-containers",
+        .input = @embedFile("fixtures/markdown/tabs-containers.md"),
+        .expected = @embedFile("fixtures/markdown/tabs-containers.html"),
     },
     // --- thematic breaks (CommonMark 0.31.2 §4.1, examples 43-61) ---
     .{

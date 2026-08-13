@@ -1,17 +1,20 @@
-//! Reviewed expectations for the canonical CommonMark 0.31.2 `spec.txt`.
+//! CommonMark 0.31.2 classified expectations.
 //!
-//! Every official example number belongs to exactly one adjacent range below:
-//! - `supported`: Oliver must match the normative HTML byte-for-byte.
+//! Each example in the official spec is classified as:
+//! - `supported`: Oliver's output matches the normative HTML.
 //! - `not_yet`: Oliver is known not to match yet; an unexpected pass fails the
-//!   classified gate so the manifest cannot silently become stale.
-//! - `divergence`: Oliver deliberately differs. The named record also pins the
-//!   current Oliver HTML, so either conformance or a different failure requires
-//!   an explicit review.
+//!   gate (it must be reviewed and moved to `supported`).
+//! - `divergence`: Oliver deliberately differs; the exact output is pinned
+//!   in `divergences` below.
+//!
+//! The official corpus is bound by byte count, example count, and SHA-256 in
+//! `spec_conformance.zig`; see docs/COMMONMARK-EXPECTATIONS.md.
 
 pub const spec_version = "0.31.2";
 pub const spec_url = "https://spec.commonmark.org/0.31.2/spec.txt";
 pub const spec_sha256_hex = "bfef4ddc97276b6ab6c2a28ace48478e35b1c50e60cde9f517ab8ab030aa3b82";
 pub const spec_byte_count: usize = 204_857;
+/// Normative examples in the official 0.31.2 spec.txt.
 pub const example_count: usize = 652;
 
 pub const Class = enum { supported, not_yet, divergence };
@@ -22,86 +25,44 @@ pub const Range = struct {
     class: Class,
 };
 
-/// Reviewed partition as of the thematic-break/Setext, fenced-code, and list
-/// milestones (546 supported / 106 not-yet / 0 divergences), then committed
-/// as a plain, diffable partition. Keep ranges sorted, adjacent, and
-/// nonoverlapping.
+/// Reviewed partition as of the tab-stop/indented-code milestone (592
+/// supported / 60 not-yet / 0 divergences), committed as a plain, diffable
+/// partition. Keep ranges sorted, adjacent, and nonoverlapping.
 pub const ranges = [_]Range{
-    // Tabs (examples 1-11).
-    .{ .first = 1, .last = 9, .class = .not_yet },
-    .{ .first = 10, .last = 17, .class = .supported },
-    // Backslash escapes (12-24).
-    .{ .first = 18, .last = 18, .class = .not_yet },
-    .{ .first = 19, .last = 20, .class = .supported },
+    // Tabs (1-11) and backslash escapes (12-24). Example 21 (an HTML
+    // block type 7 — a complete tag on its own line) is not-yet.
+    .{ .first = 1, .last = 20, .class = .supported },
     .{ .first = 21, .last = 21, .class = .not_yet },
     .{ .first = 22, .last = 24, .class = .supported },
-    // Entity references (25-41).
+    // Entity references (25-41): the section is not-yet (no §2.5 decode
+    // yet), though examples without references (28-30, 35-36) already pass.
     .{ .first = 25, .last = 27, .class = .not_yet },
     .{ .first = 28, .last = 30, .class = .supported },
     .{ .first = 31, .last = 34, .class = .not_yet },
-    .{ .first = 35, .last = 35, .class = .supported },
-    .{ .first = 36, .last = 41, .class = .not_yet },
-    // Block/inline precedence (42) and thematic breaks (43-61).
-    .{ .first = 42, .last = 47, .class = .supported },
-    .{ .first = 48, .last = 48, .class = .not_yet },
-    .{ .first = 49, .last = 68, .class = .supported },
-    // ATX headings (62-79).
-    .{ .first = 69, .last = 69, .class = .not_yet },
-    .{ .first = 70, .last = 84, .class = .supported },
-    // Setext headings (80-106).
-    .{ .first = 85, .last = 85, .class = .not_yet },
-    .{ .first = 86, .last = 99, .class = .supported },
-    .{ .first = 100, .last = 100, .class = .not_yet },
-    .{ .first = 101, .last = 106, .class = .supported },
-    // Indented code blocks (107-118).
-    .{ .first = 107, .last = 107, .class = .not_yet },
-    .{ .first = 108, .last = 109, .class = .supported },
-    .{ .first = 110, .last = 112, .class = .not_yet },
-    .{ .first = 113, .last = 113, .class = .supported },
-    .{ .first = 114, .last = 118, .class = .not_yet },
-    // Fenced code blocks (119-147).
-    .{ .first = 119, .last = 133, .class = .supported },
-    .{ .first = 134, .last = 134, .class = .not_yet },
-    .{ .first = 135, .last = 147, .class = .supported },
-    // HTML blocks (148-191).
+    .{ .first = 35, .last = 36, .class = .supported },
+    .{ .first = 37, .last = 41, .class = .not_yet },
+    // Precedence/thematic breaks (42-61), ATX (62-79), Setext (80-106),
+    // indented (107-118) and fenced (119-147) code.
+    .{ .first = 42, .last = 147, .class = .supported },
+    // HTML blocks (148-191): the whole family is not-yet (types 6/7 land
+    // with the entity milestone), except 168 and 187 which already pass.
     .{ .first = 148, .last = 167, .class = .not_yet },
     .{ .first = 168, .last = 168, .class = .supported },
     .{ .first = 169, .last = 186, .class = .not_yet },
     .{ .first = 187, .last = 187, .class = .supported },
     .{ .first = 188, .last = 191, .class = .not_yet },
-    // Link reference definitions (192-218).
+    // Link reference definitions (192-218) through paragraphs (219-226).
     .{ .first = 192, .last = 200, .class = .supported },
+    // Example 201: `[foo]: <bar>(baz)` — an angle destination followed by
+    // `(` is not a definition. Not yet.
     .{ .first = 201, .last = 201, .class = .not_yet },
-    .{ .first = 202, .last = 210, .class = .supported },
-    .{ .first = 211, .last = 211, .class = .not_yet },
-    .{ .first = 212, .last = 224, .class = .supported },
-    // Paragraphs (219-226).
-    .{ .first = 225, .last = 225, .class = .not_yet },
-    .{ .first = 226, .last = 230, .class = .supported },
-    // Block quotes (228-252).
-    .{ .first = 231, .last = 231, .class = .not_yet },
-    .{ .first = 232, .last = 235, .class = .supported },
-    .{ .first = 236, .last = 236, .class = .not_yet },
-    .{ .first = 237, .last = 251, .class = .supported },
-    .{ .first = 252, .last = 254, .class = .not_yet },
-    // List items (253-300).
-    .{ .first = 255, .last = 256, .class = .supported },
-    .{ .first = 257, .last = 257, .class = .not_yet },
-    .{ .first = 258, .last = 263, .class = .supported },
-    .{ .first = 264, .last = 264, .class = .not_yet },
-    .{ .first = 265, .last = 269, .class = .supported },
-    .{ .first = 270, .last = 274, .class = .not_yet },
-    .{ .first = 275, .last = 277, .class = .supported },
-    .{ .first = 278, .last = 278, .class = .not_yet },
-    .{ .first = 279, .last = 285, .class = .supported },
-    .{ .first = 286, .last = 290, .class = .not_yet },
-    .{ .first = 291, .last = 307, .class = .supported },
-    // Lists (301-326).
+    .{ .first = 202, .last = 307, .class = .supported },
+    // Lists (301-326): 308 and 309 interleave `<!-- -->` (a type-2 HTML
+    // block) with list items; they conform only once HTML blocks land.
     .{ .first = 308, .last = 309, .class = .not_yet },
-    .{ .first = 310, .last = 312, .class = .supported },
-    .{ .first = 313, .last = 313, .class = .not_yet },
-    .{ .first = 314, .last = 502, .class = .supported },
-    // Links (482-571).
+    .{ .first = 310, .last = 502, .class = .supported },
+    // Links (482-536): 503 and 506 involve entity references in
+    // destinations; they conform once §2.5 decoding lands.
     .{ .first = 503, .last = 503, .class = .not_yet },
     .{ .first = 504, .last = 505, .class = .supported },
     .{ .first = 506, .last = 506, .class = .not_yet },

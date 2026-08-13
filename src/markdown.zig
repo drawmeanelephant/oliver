@@ -100,6 +100,195 @@ const unicode = @import("unicode.zig");
 
 pub const ParseError = error{OutOfMemory};
 
+/// Tab stop width for block-structure indentation (§2.1): tabs behave as if
+/// replaced by spaces with a tab stop of 4 characters when whitespace helps
+/// define block structure. Content bytes are never expanded.
+const tab_stop: u32 = 4;
+
+/// A line view during the block pass: the remaining `line` plus the
+/// tab-expanded column of its first byte. When a container prefix consumes
+/// only part of a tab, the tab byte stays as the view's first byte and
+/// `col` points into the middle of it, so later whitespace arithmetic
+/// measures from the same absolute tab stop (the reference implementation's
+/// `partially_consumed_tab` model).
+const View = struct {
+    line: source.Line,
+    col: u32,
+
+    fn init(line: source.Line) View {
+        return .{ .line = line, .col = 0 };
+    }
+
+    /// The view starting at byte index `i` of this view's text, at the
+    /// tab-expanded column `col`.
+    fn after(self: View, i: usize, col: u32) View {
+        return .{
+            .line = .{
+                .text = self.line.text[i..],
+                .start = self.line.start + i,
+                .content_end = self.line.content_end,
+                .end = self.line.end,
+            },
+            .col = col,
+        };
+    }
+};
+
+/// Columns of leading whitespace in a view, with tabs advancing to the next
+/// multiple of `tab_stop` measured from the view's column (§2.1). This is
+/// the indentation relevant to block structure, relative to the current
+/// container content.
+fn viewIndent(view: View) u32 {
+    var col = view.col;
+    var cols: u32 = 0;
+    for (view.line.text) |b| {
+        switch (b) {
+            ' ' => {
+                col += 1;
+                cols += 1;
+            },
+            '\t' => {
+                const adv = tab_stop - (col % tab_stop);
+                col += adv;
+                cols += adv;
+            },
+            else => break,
+        }
+    }
+    return cols;
+}
+
+/// Advances a view by `n` columns of leading whitespace. A tab that
+/// straddles the boundary keeps its byte as the new view's first byte with
+/// `col` mid-tab. Returns null when the leading whitespace is shorter than
+/// `n` columns.
+fn advanceColumns(view: View, n: u32) ?View {
+    var col = view.col;
+    var i: usize = 0;
+    var remaining = n;
+    const t = view.line.text;
+    while (remaining > 0) {
+        if (i >= t.len) return null;
+        switch (t[i]) {
+            ' ' => {
+                col += 1;
+                i += 1;
+                remaining -= 1;
+            },
+            '\t' => {
+                const adv = tab_stop - (col % tab_stop);
+                if (adv <= remaining) {
+                    col += adv;
+                    i += 1;
+                    remaining -= adv;
+                } else {
+                    col += remaining;
+                    remaining = 0;
+                }
+            },
+            else => return null,
+        }
+    }
+    return view.after(i, col);
+}
+
+/// Bounded leading-indent walk: the byte index and columns consumed up to
+/// `limit` columns of leading whitespace, or null when the indentation
+/// exceeds the limit. Any leading tab reaches four columns or more from any
+/// position except mid-tab, so a walk that accepts tabs naturally bounds
+/// the indent.
+const IndentWalk = struct { i: usize, cols: u32 };
+
+fn skipIndent(view: View, limit: u32) ?IndentWalk {
+    var col = view.col;
+    var cols: u32 = 0;
+    var i: usize = 0;
+    const t = view.line.text;
+    while (i < t.len) {
+        switch (t[i]) {
+            ' ' => {
+                col += 1;
+                cols += 1;
+                i += 1;
+            },
+            '\t' => {
+                const adv = tab_stop - (col % tab_stop);
+                cols += adv;
+                if (cols > limit) return null;
+                col += adv;
+                i += 1;
+            },
+            else => break,
+        }
+        if (cols > limit) return null;
+    }
+    return .{ .i = i, .cols = cols };
+}
+
+/// Appends one literal code line to `out`: strips `strip` columns of
+/// leading whitespace (a tab straddling the boundary leaves spaces for its
+/// remaining columns), then the remaining bytes and a newline. Shared by
+/// indented and fenced code content.
+fn appendCodeContentLine(
+    doc: *document.Document,
+    out: *std.ArrayList(u8),
+    view: View,
+    strip: u32,
+) ParseError!void {
+    var col = view.col;
+    var i: usize = 0;
+    var remaining = strip;
+    const t = view.line.text;
+    while (remaining > 0 and i < t.len) {
+        switch (t[i]) {
+            ' ' => {
+                col += 1;
+                i += 1;
+                remaining -= 1;
+            },
+            '\t' => {
+                const adv = tab_stop - (col % tab_stop);
+                if (adv <= remaining) {
+                    col += adv;
+                    i += 1;
+                    remaining -= adv;
+                } else {
+                    try out.appendNTimes(doc.allocator(), ' ', adv - remaining);
+                    col += remaining;
+                    i += 1;
+                    remaining = 0;
+                }
+            },
+            else => break,
+        }
+    }
+    try out.appendSlice(doc.allocator(), t[i..]);
+    try out.append(doc.allocator(), '\n');
+}
+
+/// Drops trailing blank lines (lines of only spaces/tabs) from indented-code
+/// content, then the caller re-appends the single final newline: an
+/// indented code block ends at the first line with fewer than four spaces of
+/// indentation, and blank lines beyond its last content line are not part of
+/// it (§4.4).
+fn removeTrailingBlankLines(out: *std.ArrayList(u8)) void {
+    const items = out.items;
+    var i: usize = items.len;
+    while (i > 0) {
+        i -= 1;
+        const b = items[i];
+        if (b != ' ' and b != '\t' and b != '\n') break;
+    }
+    var j = i;
+    while (j < items.len) : (j += 1) {
+        if (items[j] == '\n') {
+            out.shrinkRetainingCapacity(j);
+            return;
+        }
+    }
+    out.clearRetainingCapacity();
+}
+
 /// Parses `doc.src` as Markdown, appending block nodes under `doc.root`.
 /// The caller (`oliver.parse`) guarantees
 /// `doc.src.bytes.len <= source.max_input_len`, so all offsets fit in `u32`.
@@ -127,6 +316,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     defer containers.deinit(doc.allocator());
     var paragraph: ?Paragraph = null;
     var fenced: ?FencedCode = null;
+    var indented: ?IndentedCode = null;
 
     var lines = source.Lines.init(doc.src.bytes);
     while (lines.next()) |line| {
@@ -134,7 +324,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // block quote consumes `> `; a list item consumes its content
         // indentation; a list consumes nothing (its fate is decided by its
         // item and by whether a new same-type item starts).
-        var view = line;
+        var view = View.init(line);
         var matched: usize = 0;
         while (matched < containers.items.len) {
             const c = &containers.items[matched];
@@ -150,18 +340,19 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 },
                 .list_item => {
                     if (c.inert) break;
-                    if (isBlank(view.text)) {
+                    if (isBlank(view.line.text)) {
                         // Blank lines match list items without requiring the
                         // full content indentation. Still consume as much of
                         // that structural indentation as is present: an open
-                        // fenced leaf observes excess spaces as literal code,
-                        // but never the list item's own prefix.
+                        // leaf observes excess spaces as literal content, but
+                        // never the list item's own prefix.
                         if (c.initial_blank_pending) c.inert = true;
-                        view = advance(view, @min(countIndent(view.text), c.content_indent));
+                        const indent = viewIndent(view);
+                        view = advanceColumns(view, @min(indent, c.content_indent)) orelse unreachable;
                     } else {
-                        const indent = countIndent(view.text);
+                        const indent = viewIndent(view);
                         if (indent < c.content_indent) break;
-                        view = advance(view, c.content_indent);
+                        view = advanceColumns(view, c.content_indent) orelse unreachable;
                         // Rule 3 limits only the blank prefix before the
                         // item's first block. Once nonblank content matches,
                         // later blank lines are ordinary item content.
@@ -181,21 +372,48 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         if (fenced) |*active| {
             if (matched == active.container_depth) {
                 if (isFenceClose(view, active.marker, active.fence_len)) {
-                    active.node.span.end = @intCast(view.content_end);
+                    active.node.span.end = @intCast(view.line.content_end);
                     finishFencedCode(&fenced);
-                    extendContainerSpans(&containers, view);
+                    extendContainerSpans(&containers, view.line);
                     continue;
                 }
                 try appendFencedContentLine(doc, active, view);
-                active.node.span.end = @intCast(view.content_end);
-                extendContainerSpans(&containers, view);
+                active.node.span.end = @intCast(view.line.content_end);
+                extendContainerSpans(&containers, view.line);
                 continue;
             }
             std.debug.assert(matched < active.container_depth);
             finishFencedCode(&fenced);
         }
 
-        // The same physical line can be re-examined at many nested list
+        // An open indented-code leaf owns every line while its containing
+        // containers still match: blank lines are chunk separators (§4.4),
+        // and a nonblank line continues the block only while it is indented
+        // at least four columns. Any other line ends the block; trailing
+        // blank lines are dropped from the content, and the line is
+        // reprocessed normally.
+        if (indented) |*active| {
+            if (matched == active.container_depth) {
+                if (isBlank(view.line.text)) {
+                    try appendCodeContentLine(doc, &active.content, view, 4);
+                    active.node.span.end = @intCast(view.line.content_end);
+                    extendContainerSpans(&containers, view.line);
+                    continue;
+                }
+                if (viewIndent(view) >= 4) {
+                    try appendCodeContentLine(doc, &active.content, view, 4);
+                    active.node.span.end = @intCast(view.line.content_end);
+                    extendContainerSpans(&containers, view.line);
+                    continue;
+                }
+                try finishIndentedCode(doc, &indented);
+            } else {
+                std.debug.assert(matched < active.container_depth);
+                try finishIndentedCode(doc, &indented);
+            }
+        }
+
+
         // depths. Summarize its thematic-break suffixes once so precedence
         // checks stay O(1) per consumed container marker. Literal fenced-code
         // content bypasses this work above.
@@ -206,7 +424,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // items open; a blank line may make a list loose, but the decision
         // is deferred until the next line shows whether the blank separated
         // blocks inside an item or two items (§5.3).
-        if (isBlank(view.text)) {
+        if (isBlank(view.line.text)) {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
             noteListBlankLines(&containers, matched);
             containers.shrinkRetainingCapacity(matched);
@@ -215,7 +433,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
                 containers.shrinkRetainingCapacity(containers.items.len - 1);
             }
-            extendContainerSpans(&containers, view);
+            extendContainerSpans(&containers, view.line);
             continue;
         }
 
@@ -230,7 +448,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             resolveListBlankPending(&containers, matched, view, &thematic_facts);
             if (paragraph != null and !list_sibling and isParagraphContinuationText(view, &thematic_facts)) {
                 try appendParagraphLine(doc, &paragraph, view);
-                extendContainerSpans(&containers, view);
+                extendContainerSpans(&containers, view.line);
                 continue;
             }
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
@@ -256,7 +474,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         while (true) {
             if (tryStripBlockQuoteMarker(view)) |stripped| {
                 try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
-                const node = try doc.createNode(.block_quote, stripped.contentSpan(), .none);
+                const node = try doc.createNode(.block_quote, stripped.line.contentSpan(), .none);
                 try doc.appendChild(leafParent(doc, &containers), node);
                 try containers.append(doc.allocator(), .{ .node = node });
                 view = stripped;
@@ -280,16 +498,16 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                         list_node = top;
                     } else {
                         containers.shrinkRetainingCapacity(containers.items.len - 1);
-                        list_node = try doc.createNode(.list, m.rest.contentSpan(), .{ .list = m.listData() });
+                        list_node = try doc.createNode(.list, m.rest.line.contentSpan(), .{ .list = m.listData() });
                         try doc.appendChild(leafParent(doc, &containers), list_node);
                         try containers.append(doc.allocator(), .{ .node = list_node });
                     }
                 } else {
-                    list_node = try doc.createNode(.list, m.rest.contentSpan(), .{ .list = m.listData() });
+                    list_node = try doc.createNode(.list, m.rest.line.contentSpan(), .{ .list = m.listData() });
                     try doc.appendChild(leafParent(doc, &containers), list_node);
                     try containers.append(doc.allocator(), .{ .node = list_node });
                 }
-                const item = try doc.createNode(.list_item, m.rest.contentSpan(), .none);
+                const item = try doc.createNode(.list_item, m.rest.line.contentSpan(), .none);
                 try doc.appendChild(list_node, item);
                 try containers.append(doc.allocator(), .{
                     .node = item,
@@ -304,9 +522,9 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // A marker-only line (`>` alone, or a line whose markers are all
         // consumed, or a blank-start list item) is a blank line inside the
         // container, not an empty paragraph.
-        if (isBlank(view.text)) {
+        if (isBlank(view.line.text)) {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
-            extendContainerSpans(&containers, view);
+            extendContainerSpans(&containers, view.line);
             continue;
         }
         if (tryFenceOpen(view)) |opening| {
@@ -315,7 +533,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 null
             else
                 try resolveEscapes(doc, opening.info);
-            const node = try doc.createNode(.code_block, view.contentSpan(), .{
+            const node = try doc.createNode(.code_block, view.line.contentSpan(), .{
                 .code_block = .{ .content = &.{}, .info = info },
             });
             try doc.appendChild(leafParent(doc, &containers), node);
@@ -326,7 +544,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 .indent = opening.indent,
                 .container_depth = containers.items.len,
             };
-            extendContainerSpans(&containers, view);
+            extendContainerSpans(&containers, view.line);
             continue;
         }
         if (trySetextUnderline(view)) |underline| {
@@ -339,7 +557,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 &defs,
                 &pending,
             )) {
-                extendContainerSpans(&containers, view);
+                extendContainerSpans(&containers, view.line);
                 continue;
             }
         }
@@ -351,23 +569,43 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
                 containers.shrinkRetainingCapacity(containers.items.len - 1);
             }
-            const node = try doc.createNode(.thematic_break, view.contentSpan(), .none);
+            const node = try doc.createNode(.thematic_break, view.line.contentSpan(), .none);
             try doc.appendChild(leafParent(doc, &containers), node);
-            extendContainerSpans(&containers, view);
+            extendContainerSpans(&containers, view.line);
             continue;
         }
         if (tryAtxHeading(view)) |heading| {
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
             try emitHeading(doc, view, heading, leafParent(doc, &containers), &pending);
-            extendContainerSpans(&containers, view);
+            extendContainerSpans(&containers, view.line);
+            continue;
+        }
+
+        // indentation and cannot interrupt a paragraph, so this is the last
+        // block start, guarded by no open paragraph. The node is appended at
+        // open so container order is fixed; content accumulates incrementally
+        // and trailing blank lines are dropped at close.
+        if (paragraph == null and viewIndent(view) >= 4) {
+            const node = try doc.createNode(.code_block, view.line.contentSpan(), .{
+                .code_block = .{ .content = &.{}, .info = null },
+            });
+            try doc.appendChild(leafParent(doc, &containers), node);
+            indented = .{
+                .node = node,
+                .container_depth = containers.items.len,
+            };
+            try appendCodeContentLine(doc, &indented.?.content, view, 4);
+            node.span.end = @intCast(view.line.content_end);
+            extendContainerSpans(&containers, view.line);
             continue;
         }
 
         // E. Paragraph text.
         try appendParagraphLine(doc, &paragraph, view);
-        extendContainerSpans(&containers, view);
+        extendContainerSpans(&containers, view.line);
     }
     finishFencedCode(&fenced);
+    try finishIndentedCode(doc, &indented);
     try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
 
     // Phase 2: inline pass, with the full definitions map available.
@@ -419,24 +657,33 @@ fn extendContainerSpans(containers: *const std.ArrayList(ContainerState), line: 
     }
 }
 
-/// Strips one block quote marker (§5.1): up to three leading spaces, `>`,
-/// then one following space of indentation. Returns the stripped view or
-/// null. A tab anywhere in the leading indentation disqualifies the marker
-/// (full tab handling is deferred, see docs/BLOCKS-PARSING.md §7).
-fn tryStripBlockQuoteMarker(line: source.Line) ?source.Line {
-    const t = line.text;
-    var i: usize = 0;
-    var indent: usize = 0;
-    while (i < t.len and t[i] == ' ' and indent < 3) : (i += 1) indent += 1;
+/// Strips one block quote marker (§5.1): up to three columns of leading
+/// indentation, `>`, then one following column of indentation. The
+/// following space may be a tab; a tab that is only partially consumed
+/// keeps its byte as the new view's first byte (see `View`).
+fn tryStripBlockQuoteMarker(view: View) ?View {
+    const t = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return null;
+    var i = skipped.i;
+    var col = view.col + skipped.cols;
     if (i >= t.len or t[i] != '>') return null;
     i += 1;
-    if (i < t.len and t[i] == ' ') i += 1;
-    return .{
-        .text = t[i..],
-        .start = line.start + i,
-        .content_end = line.content_end,
-        .end = line.end,
-    };
+    col += 1;
+    if (i < t.len and (t[i] == ' ' or t[i] == '\t')) {
+        if (t[i] == ' ') {
+            i += 1;
+            col += 1;
+        } else {
+            const adv = tab_stop - (col % tab_stop);
+            if (adv > 1) {
+                col += 1; // partial: the tab byte remains as the view start
+            } else {
+                i += 1;
+                col += 1;
+            }
+        }
+    }
+    return view.after(i, col);
 }
 
 /// A list marker recognized on a line (§5.2): a bullet character (`-`,
@@ -460,8 +707,8 @@ const ListMarker = struct {
     content_indent: u32,
     /// The item's first line begins with a blank line (rule 3).
     blank_start: bool,
-    /// The line after the marker and its indentation.
-    rest: source.Line,
+    /// The content view after the marker and its indentation.
+    rest: View,
     /// Whether the item may interrupt an open paragraph: not when it
     /// begins with a blank line, and for ordered items not when the start
     /// number is not 1 (§5.2 rule 1 exceptions).
@@ -475,19 +722,26 @@ const ListMarker = struct {
     }
 };
 
-/// Recognizes a list marker at the start of `line` (§5.2). The marker may
-/// be preceded by up to three spaces (measured in the current view — a
-/// quote's content — so nested lists compose); a tab disqualifies the line
-/// (full tab handling deferred). The content indentation is the marker's
-/// own indentation plus W plus N (rules 1–3): the spec's "let the width and
+/// Recognizes a list marker at the start of a view (§5.2). The marker may
+/// be preceded by up to three columns of indentation (measured in the
+/// current view — a quote's content — so nested lists compose); tabs are
+/// expanded to tab stops. The content indentation is the marker's own
+/// indentation plus W plus N (rules 1–3): the spec's "let the width and
 /// indentation of the list marker determine the indentation necessary for
 /// blocks to fall under the list item" (docs/BLOCKS-PARSING.md §3).
-fn tryListMarker(line: source.Line) ?ListMarker {
-    const t = line.text;
-    var i: usize = 0;
-    var marker_indent: u32 = 0;
-    while (i < t.len and t[i] == ' ' and marker_indent < 3) : (i += 1) marker_indent += 1;
-    if (i >= t.len or t[i] == '\t') return null;
+///
+/// Whitespace after the marker is counted in columns: 1–4 columns is rule 1
+/// (N = the whitespace columns, all consumed); 5+ columns or end of line
+/// means the item begins with an indented code block or a blank line
+/// (rules 2/3), the content indentation is W+1, and the content starts one
+/// column past the marker with the remaining whitespace preserved.
+fn tryListMarker(view: View) ?ListMarker {
+    const t = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return null;
+    var i = skipped.i;
+    var col = view.col + skipped.cols;
+    const marker_indent = skipped.cols;
+    if (i >= t.len) return null;
 
     var kind: ListMarker.Kind = undefined;
     var bullet: u8 = 0;
@@ -499,6 +753,7 @@ fn tryListMarker(line: source.Line) ?ListMarker {
         bullet = t[i];
         width = 1;
         i += 1;
+        col += 1;
     } else if (t[i] >= '0' and t[i] <= '9') {
         const digit_start = i;
         while (i < t.len and t[i] >= '0' and t[i] <= '9') : (i += 1) {}
@@ -512,37 +767,59 @@ fn tryListMarker(line: source.Line) ?ListMarker {
         start = n;
         width = @intCast(digits + 1);
         i += 1;
+        col += width;
     } else {
         return null;
     }
 
-    // Spaces after the marker (tabs deferred).
-    const space_start = i;
-    while (i < t.len and t[i] == ' ') : (i += 1) {}
-    if (i < t.len and t[i] == '\t') return null;
-    const n: u32 = @intCast(i - space_start);
+    // The marker must be followed by whitespace or end of line.
+    if (i < t.len and t[i] != ' ' and t[i] != '\t') return null;
+
+    // Padding: consume the whitespace after the marker in columns (tabs
+    // expand to tab stops), up to six columns past the marker end.
+    const save_i = i;
+    const save_col = col;
+    var ws: u32 = 0;
+    while (ws <= 5 and i < t.len and (t[i] == ' ' or t[i] == '\t')) {
+        if (t[i] == ' ') {
+            col += 1;
+            i += 1;
+        } else {
+            const adv = tab_stop - (col % tab_stop);
+            if (adv == 1) i += 1;
+            col += 1;
+        }
+        ws += 1;
+    }
+    const eol = i >= t.len;
 
     var blank_start = false;
     var content_indent: u32 = 0;
-    var rest: source.Line = undefined;
-    if (i >= t.len) {
-        // Nothing after the marker: the item starts with a blank line
-        // (rule 3); required indentation is W+1.
-        blank_start = true;
+    var rest: View = undefined;
+    if (ws >= 5 or ws < 1 or eol) {
+        // Rule 2/3: indented-code-first or blank-start item; content
+        // indentation is W+1 and the content begins one column past the
+        // marker (the remaining whitespace stays in the item's content).
         content_indent = marker_indent + width + 1;
-        rest = .{ .text = t[i..], .start = line.start + i, .content_end = line.content_end, .end = line.end };
-    } else if (n == 0) {
-        return null; // the marker must be followed by 1–4 spaces
-    } else if (n <= 4) {
-        // Rule 1: the first block is ordinary content; indentation W+N.
-        content_indent = marker_indent + width + n;
-        rest = .{ .text = t[i..], .start = line.start + i, .content_end = line.content_end, .end = line.end };
+        i = save_i;
+        col = save_col;
+        if (ws > 0) {
+            if (t[i] == ' ') {
+                i += 1;
+                col += 1;
+            } else {
+                const adv = tab_stop - (col % tab_stop);
+                if (adv == 1) i += 1;
+                col += 1;
+            }
+        }
+        rest = view.after(i, col);
+        blank_start = isBlank(rest.line.text);
     } else {
-        // 5+ spaces: the first block is an indented code block (rule 2);
-        // content indentation is W+1 and the code's own four spaces follow.
-        content_indent = marker_indent + width + 1;
-        const after_one = i - (n - 1);
-        rest = .{ .text = t[after_one..], .start = line.start + after_one, .content_end = line.content_end, .end = line.end };
+        // Rule 1: ordinary first block; content indentation is W+N and the
+        // whitespace is consumed.
+        content_indent = marker_indent + width + ws;
+        rest = view.after(i, col);
     }
 
     return .{
@@ -562,11 +839,11 @@ fn tryListMarker(line: source.Line) ?ListMarker {
 /// marker: a thematic break is never a list item, even when its first marker
 /// and following whitespace also satisfy the list-marker grammar.
 fn tryListMarkerAfterLeafPrecedence(
-    line: source.Line,
+    view: View,
     thematic_facts: *const ThematicLineFacts,
 ) ?ListMarker {
-    if (isThematicBreak(line, thematic_facts)) return null;
-    return tryListMarker(line);
+    if (isThematicBreak(view, thematic_facts)) return null;
+    return tryListMarker(view);
 }
 
 /// Are `m`'s items of the same list type as `list_node` (§5.3): same
@@ -576,25 +853,6 @@ fn sameListType(list_node: *document.Node, m: ListMarker) bool {
     return switch (m.kind) {
         .bullet => list.kind == .bullet and list.bullet == m.bullet,
         .ordered => list.kind == .ordered and list.delimiter == m.delimiter,
-    };
-}
-
-/// Leading spaces of a line (tabs deferred: a tab stops the count).
-fn countIndent(text: []const u8) u32 {
-    var i: usize = 0;
-    while (i < text.len and text[i] == ' ') : (i += 1) {}
-    return @intCast(i);
-}
-
-/// Advances a line view by `n` bytes (a matched container's consumed
-/// indentation). `content_end`/`end` are absolute, so they are unchanged.
-fn advance(line: source.Line, n: u32) source.Line {
-    const k: usize = n;
-    return .{
-        .text = line.text[k..],
-        .start = line.start + k,
-        .content_end = line.content_end,
-        .end = line.end,
     };
 }
 
@@ -628,12 +886,12 @@ fn noteListBlankLines(containers: *std.ArrayList(ContainerState), matched: usize
 fn startsListSibling(
     containers: *const std.ArrayList(ContainerState),
     matched: usize,
-    line: source.Line,
+    view: View,
     thematic_facts: *const ThematicLineFacts,
 ) bool {
     if (matched == 0 or matched > containers.items.len) return false;
     if (containers.items[matched - 1].node.tag != .list) return false;
-    return tryListMarkerAfterLeafPrecedence(line, thematic_facts) != null;
+    return tryListMarkerAfterLeafPrecedence(view, thematic_facts) != null;
 }
 
 /// Resolves pending blank lines once a nonblank line arrives. A list is loose
@@ -643,11 +901,11 @@ fn startsListSibling(
 fn resolveListBlankPending(
     containers: *std.ArrayList(ContainerState),
     matched: usize,
-    line: source.Line,
+    view: View,
     thematic_facts: *const ThematicLineFacts,
 ) void {
     const old_len = containers.items.len;
-    const marker = tryListMarkerAfterLeafPrecedence(line, thematic_facts);
+    const marker = tryListMarkerAfterLeafPrecedence(view, thematic_facts);
 
     var i = old_len;
     while (i > 0) {
@@ -705,20 +963,22 @@ fn resolveListBlankPending(
 
 /// Is the remainder of a line paragraph continuation text (§5.1 laziness)?
 /// That is, it does not start a block that can interrupt a paragraph:
-/// a block quote marker, ATX heading, thematic break, or list item that can
+/// a block quote marker, ATX heading, thematic break, a list item that can
 /// interrupt (a blank-start item or an ordered item not starting at 1
-/// cannot, §5.2 rule 1 exceptions). A Setext underline does not join this
-/// predicate: it may transform only a paragraph at the same matched container
-/// depth, never through a missing container marker.
+/// cannot, §5.2 rule 1 exceptions), or an HTML block of types 1-6 (type 7
+/// cannot interrupt a paragraph, so a type-7 start *is* continuation text,
+/// §4.6). A Setext underline does not join this predicate: it may transform
+/// only a paragraph at the same matched container depth, never through a
+/// missing container marker.
 fn isParagraphContinuationText(
-    line: source.Line,
+    view: View,
     thematic_facts: *const ThematicLineFacts,
 ) bool {
-    if (tryStripBlockQuoteMarker(line) != null) return false;
-    if (tryAtxHeading(line) != null) return false;
-    if (tryFenceOpen(line) != null) return false;
-    if (isThematicBreak(line, thematic_facts)) return false;
-    if (tryListMarker(line)) |m| return !m.can_interrupt;
+    if (tryStripBlockQuoteMarker(view) != null) return false;
+    if (tryAtxHeading(view) != null) return false;
+    if (tryFenceOpen(view) != null) return false;
+    if (isThematicBreak(view, thematic_facts)) return false;
+    if (tryListMarker(view)) |m| return !m.can_interrupt;
     return true;
 }
 
@@ -764,13 +1024,13 @@ fn isBlank(text: []const u8) bool {
     return true;
 }
 
-fn appendParagraphLine(doc: *document.Document, paragraph: *?Paragraph, line: source.Line) ParseError!void {
+fn appendParagraphLine(doc: *document.Document, paragraph: *?Paragraph, view: View) ParseError!void {
     if (paragraph.* == null) {
-        paragraph.* = .{ .start = @intCast(line.start) };
+        paragraph.* = .{ .start = @intCast(view.line.start) };
     }
     try paragraph.*.?.lines.append(doc.allocator(), .{
-        .content = line.contentSpan(),
-        .terminator = line.terminatorSpan(),
+        .content = view.line.contentSpan(),
+        .terminator = view.line.terminatorSpan(),
     });
 }
 
@@ -795,16 +1055,25 @@ const FencedCode = struct {
     content: std.ArrayList(u8) = .empty,
 };
 
-fn tryFenceOpen(line: source.Line) ?FenceOpen {
-    const text = line.text;
-    var i: usize = 0;
-    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
-    if (i > 3 or i >= text.len) return null;
+/// The one open indented-code leaf (§4.4). Content accumulates literally
+/// (chunk separator blank lines included); trailing blank lines are dropped
+/// at close (`removeTrailingBlankLines`).
+const IndentedCode = struct {
+    node: *document.Node,
+    container_depth: usize,
+    content: std.ArrayList(u8) = .empty,
+};
 
-    const indent: u8 = @intCast(i);
-    const marker = text[i];
+fn tryFenceOpen(view: View) ?FenceOpen {
+    const text = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return null;
+    if (skipped.i >= text.len) return null;
+
+    const indent: u8 = @intCast(skipped.cols);
+    const marker = text[skipped.i];
     if (marker != '`' and marker != '~') return null;
-    const fence_start = i;
+    const fence_start = skipped.i;
+    var i = fence_start;
     while (i < text.len and text[i] == marker) : (i += 1) {}
     const fence_len = i - fence_start;
     if (fence_len < 3) return null;
@@ -823,17 +1092,17 @@ fn tryFenceOpen(line: source.Line) ?FenceOpen {
         .fence_len = fence_len,
         .indent = indent,
         .info = .{
-            .start = @intCast(line.start + info_start),
-            .end = @intCast(line.start + info_end),
+            .start = @intCast(view.line.start + info_start),
+            .end = @intCast(view.line.start + info_end),
         },
     };
 }
 
-fn isFenceClose(line: source.Line, marker: u8, opening_len: usize) bool {
-    const text = line.text;
-    var i: usize = 0;
-    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
-    if (i > 3 or i >= text.len or text[i] != marker) return false;
+fn isFenceClose(view: View, marker: u8, opening_len: usize) bool {
+    const text = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return false;
+    var i = skipped.i;
+    if (i >= text.len or text[i] != marker) return false;
 
     const fence_start = i;
     while (i < text.len and text[i] == marker) : (i += 1) {}
@@ -845,12 +1114,9 @@ fn isFenceClose(line: source.Line, marker: u8, opening_len: usize) bool {
 fn appendFencedContentLine(
     doc: *document.Document,
     fenced: *FencedCode,
-    line: source.Line,
+    view: View,
 ) ParseError!void {
-    var strip: usize = 0;
-    while (strip < fenced.indent and strip < line.text.len and line.text[strip] == ' ') : (strip += 1) {}
-    try fenced.content.appendSlice(doc.allocator(), line.text[strip..]);
-    try fenced.content.append(doc.allocator(), '\n');
+    try appendCodeContentLine(doc, &fenced.content, view, fenced.indent);
 }
 
 /// Publishes the arena-backed normalized payload. No deinit is required: the
@@ -865,17 +1131,30 @@ fn finishFencedCode(fenced: *?FencedCode) void {
     fenced.* = null;
 }
 
+/// Publishes the arena-backed normalized payload: trailing blank lines are
+/// dropped and one final newline re-appended (§4.4).
+fn finishIndentedCode(doc: *document.Document, indented: *?IndentedCode) ParseError!void {
+    var active = indented.* orelse return;
+    removeTrailingBlankLines(&active.content);
+    try active.content.append(doc.allocator(), '\n');
+    active.node.data = .{ .code_block = .{
+        .content = active.content.items,
+        .info = null,
+    } };
+    indented.* = null;
+}
+
 /// A Setext heading underline (§4.3): one or more `=` or `-` bytes, with up
 /// to three leading spaces and only spaces/tabs after the marker run.
 const SetextUnderline = struct {
     level: u8,
 };
 
-fn trySetextUnderline(line: source.Line) ?SetextUnderline {
-    const text = line.text;
-    var i: usize = 0;
-    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
-    if (i > 3 or i >= text.len) return null;
+fn trySetextUnderline(view: View) ?SetextUnderline {
+    const text = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return null;
+    var i = skipped.i;
+    if (i >= text.len) return null;
 
     const marker = text[i];
     if (marker != '=' and marker != '-') return null;
@@ -927,11 +1206,11 @@ const ThematicLineFacts = struct {
 /// A thematic break (§4.1): three or more matching `-`, `_`, or `*` bytes,
 /// with up to three leading spaces and arbitrary spaces/tabs between or
 /// after markers. No other byte is permitted.
-fn isThematicBreak(line: source.Line, facts: *const ThematicLineFacts) bool {
-    const text = line.text;
-    var i: usize = 0;
-    while (i < text.len and text[i] == ' ' and i < 4) : (i += 1) {}
-    if (i > 3 or i >= text.len) return false;
+fn isThematicBreak(view: View, facts: *const ThematicLineFacts) bool {
+    const text = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return false;
+    const i = skipped.i;
+    if (i >= text.len) return false;
 
     const marker = text[i];
     const marker_index: usize = switch (marker) {
@@ -940,7 +1219,7 @@ fn isThematicBreak(line: source.Line, facts: *const ThematicLineFacts) bool {
         '*' => 2,
         else => return false,
     };
-    const marker_start = line.start + i;
+    const marker_start = view.line.start + i;
     if (facts.last_other[marker_index]) |last_other| {
         if (last_other >= marker_start) return false;
     }
@@ -977,7 +1256,7 @@ fn setextContentIndex(doc: *document.Document, paragraph: ?Paragraph) ?usize {
 fn emitSetextHeading(
     doc: *document.Document,
     paragraph: *?Paragraph,
-    underline_line: source.Line,
+    underline_line: View,
     underline: SetextUnderline,
     parent: *document.Node,
     defs: *Definitions,
@@ -996,7 +1275,7 @@ fn emitSetextHeading(
     const content = p.lines.items[k..];
     const node = try doc.createNode(.heading, .{
         .start = content[0].content.start,
-        .end = @intCast(underline_line.content_end),
+        .end = @intCast(underline_line.line.content_end),
     }, .{ .heading = underline.level });
     try doc.appendChild(parent, node);
     try pending.append(doc.allocator(), .{
@@ -1036,8 +1315,8 @@ fn tryParseDefinition(doc: *document.Document, lines: []const Paragraph.LineRef)
     const bytes = doc.src.bytes;
     const para_end = lines[lines.len - 1].content.end;
 
-    // Optional indentation: up to three spaces (a tab disqualifies the
-    // line — full tab-stop handling is deferred, as in ATX headings).
+    // Optional indentation: up to three spaces (a leading tab always
+    // reaches four columns, which disqualifies the line).
     var i: usize = 0;
     var indent: usize = 0;
     while (i < lines[0].content.len() and bytes[lines[0].content.start + i] == ' ') : (i += 1) {
@@ -1464,22 +1743,17 @@ const AtxHeading = struct {
 };
 
 /// Recognizes an ATX heading line per CommonMark §4.2: 1–6 unescaped `#`s,
-/// preceded by at most three spaces of indentation, followed by spaces/tabs
+/// preceded by at most three columns of indentation, followed by spaces/tabs
 /// or end of line, with an optional closing sequence of *unescaped* `#`s
-/// (preceded by spaces/tabs, followed by only spaces/tabs).
-///
-/// Slice divergences: a tab in the leading indentation disqualifies the line
-/// (full 4-space tab-stop handling is deferred); closing-sequence detection
+/// (preceded by spaces/tabs, followed by only spaces/tabs). Any leading tab
+/// reaches four columns from any position except mid-tab, so `skipIndent`
+/// naturally rejects over-indented lines. Closing-sequence detection
 /// handles backslash escapes (spec example 76).
-fn tryAtxHeading(line: source.Line) ?AtxHeading {
-    const t = line.text;
-    var i: usize = 0;
-    var indent: usize = 0;
-    while (i < t.len and t[i] == ' ') : (i += 1) {
-        indent += 1;
-    }
-    if (indent > 3) return null;
-    if (i < t.len and t[i] == '\t') return null; // deferred: tab indentation
+fn tryAtxHeading(view: View) ?AtxHeading {
+    const t = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return null;
+    var i = skipped.i;
+    if (i >= t.len) return null;
 
     var level: usize = 0;
     while (i < t.len and t[i] == '#') : (i += 1) {
@@ -1527,20 +1801,20 @@ fn tryAtxHeading(line: source.Line) ?AtxHeading {
     return .{
         .level = @intCast(level),
         .content = .{
-            .start = @intCast(line.start + content_start),
-            .end = @intCast(line.start + content_end),
+            .start = @intCast(view.line.start + content_start),
+            .end = @intCast(view.line.start + content_end),
         },
     };
 }
 
 fn emitHeading(
     doc: *document.Document,
-    line: source.Line,
+    view: View,
     heading: AtxHeading,
     parent: *document.Node,
     pending: *std.ArrayList(PendingInline),
 ) ParseError!void {
-    const node = try doc.createNode(.heading, line.contentSpan(), .{
+    const node = try doc.createNode(.heading, view.line.contentSpan(), .{
         .heading = heading.level,
     });
     try doc.appendChild(parent, node);
@@ -3338,13 +3612,18 @@ fn allSpaces(s: []const u8) bool {
     return true;
 }
 
-/// Resolves §2.4 backslash escapes into an arena-owned copy: `\X` where X
-/// is ASCII punctuation becomes the literal character X (the backslash is
-/// dropped); a backslash before anything else is a literal backslash. Used
-/// for link destinations and titles (§6.6: "with backslash-escapes in
-/// effect as described above"), which cannot borrow the source because the
-/// escapes are consumed. Line endings are kept verbatim (titles may span
-/// lines).
+/// Resolves §2.5 entity references and §2.4 backslash escapes into an
+/// arena-owned copy. Entities are decoded first (the reference
+/// implementation's order: `houdini_unescape_html_f` then backslash
+/// unescaping), then `\X` where X is ASCII punctuation becomes the literal
+/// character X (the backslash is dropped); a backslash before anything
+/// else is a literal backslash. Used for link destinations and titles
+/// (§6.6: "with backslash-escapes in effect as described above" — §2.5
+/// recognizes references "in any context besides code spans or code
+/// blocks, including URLs, link titles, and fenced code info strings"),
+/// image src/titles, fenced info strings, and alt flattening. Payloads
+/// cannot borrow the source because references are consumed. Line endings
+/// are kept verbatim (titles may span lines).
 fn resolveEscapes(doc: *document.Document, span: source.Span) ParseError![]const u8 {
     const bytes = doc.src.bytes;
     var n: usize = 0;
@@ -3369,9 +3648,7 @@ fn resolveEscapes(doc: *document.Document, span: source.Span) ParseError![]const
         k += 1;
     }
     return buf;
-}
-
-fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) ParseError!void {
+}fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) ParseError!void {
     if (span.isEmpty()) return;
     // Contiguous text in the same parent merges into one node: scanning
     // artifacts (item boundaries, leftover delimiters, escape splits) must
@@ -3379,7 +3656,8 @@ fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) 
     // source bytes, so the borrowed text payload is exact.
     if (parent.children.items.len > 0) {
         const last = parent.children.items[parent.children.items.len - 1];
-        if (last.tag == .text and last.span.end == span.start) {
+        if (last.tag == .text and last.span.end == span.start)
+        {
             last.span.end = span.end;
             last.data.text = doc.text(last.span);
             return;
@@ -3509,11 +3787,14 @@ test "markdown: heading recognition edge cases" {
         try testing.expectEqual(document.Tag.heading, h.tag);
         try testing.expectEqualStrings("foo", h.children.items[0].data.text);
     }
-    // A leading tab disqualifies the line in the slice (deferred).
+    // A leading tab is four columns of indentation (§2.1): the line is an
+    // indented code block, not a heading (§4.4).
     {
         var result = try oliver.parse(testing.allocator, "\t# foo", .markdown, .{});
         defer result.deinit();
-        try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+        const code = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("# foo\n", code.data.code_block.content);
     }
 }
 
@@ -3577,6 +3858,176 @@ test "markdown: fenced blanks preserve excess list indentation without ending a 
     // Two of the four spaces belong to the list item. A wholly unindented
     // blank also remains literal content and does not make the item inert.
     try testing.expectEqualStrings("  \n\nmore\n", code.data.code_block.content);
+}
+
+test "markdown: tabs expand to tab stops for block structure, literal in content" {
+    const oliver = @import("oliver.zig");
+
+    // §2.1 example 1/2: a leading tab (or spaces plus a tab) is four
+    // columns of indentation; internal tabs stay literal bytes.
+    {
+        var result = try oliver.parse(testing.allocator, "\tfoo\tbaz\t\tbim", .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("foo\tbaz\t\tbim\n", code.data.code_block.content);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "  \tfoo\tbaz\t\tbim", .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("foo\tbaz\t\tbim\n", code.data.code_block.content);
+    }
+    // §2.1 example 8: continuation lines may use a tab as their four
+    // columns of indentation.
+    {
+        var result = try oliver.parse(testing.allocator, "    foo\n\tbar", .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("foo\nbar\n", code.data.code_block.content);
+    }
+    // §2.1 example 3: excess indentation is preserved literally.
+    {
+        var result = try oliver.parse(testing.allocator, "    a\ta\n    ὐ\ta", .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("a\ta\nὐ\ta\n", code.data.code_block.content);
+    }
+}
+
+test "markdown: tabs in list item and block quote markers" {
+    const oliver = @import("oliver.zig");
+
+    // §2.1 example 4: a tab-indented continuation paragraph inside an item
+    // (the tab is four columns, so it clears the two-column content indent).
+    {
+        var result = try oliver.parse(testing.allocator, "  - foo\n\n\tbar", .markdown, .{});
+        defer result.deinit();
+        const list = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.list, list.tag);
+        const item = list.children.items[0];
+        try testing.expectEqual(@as(usize, 2), item.children.items.len);
+        try testing.expectEqual(document.Tag.paragraph, item.children.items[1].tag);
+        try testing.expectEqualStrings("bar", item.children.items[1].children.items[0].data.text);
+    }
+    // §2.1 example 5: two tabs inside the item are 8 columns; after the
+    // two-column content indent, six remain, so the code block strips four
+    // and the leftover partial tab becomes two spaces.
+    {
+        var result = try oliver.parse(testing.allocator, "- foo\n\n\t\tbar", .markdown, .{});
+        defer result.deinit();
+        const list = result.document.root.children.items[0];
+        const item = list.children.items[0];
+        try testing.expectEqual(@as(usize, 2), item.children.items.len);
+        const code = item.children.items[1];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("  bar\n", code.data.code_block.content);
+    }
+    // §2.1 example 6: the `>` marker's optional space may be a tab; one of
+    // its three columns belongs to the delimiter, so `foo` sits six columns
+    // into the quote and the code block starts with two spaces.
+    {
+        var result = try oliver.parse(testing.allocator, ">\t\tfoo", .markdown, .{});
+        defer result.deinit();
+        const quote = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.block_quote, quote.tag);
+        const code = quote.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("  foo\n", code.data.code_block.content);
+    }
+    // §2.1 example 7: a tab after a list marker counts as whitespace; the
+    // item's content indent is W+1 and the code block again starts with
+    // two spaces.
+    {
+        var result = try oliver.parse(testing.allocator, "-\t\tfoo", .markdown, .{});
+        defer result.deinit();
+        const list = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.list, list.tag);
+        const item = list.children.items[0];
+        try testing.expectEqual(@as(usize, 1), item.children.items.len);
+        const code = item.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("  foo\n", code.data.code_block.content);
+    }
+    // §2.1 example 9: tabs can supply the indentation of nested list items.
+    {
+        var result = try oliver.parse(testing.allocator, " - foo\n   - bar\n\t - baz", .markdown, .{});
+        defer result.deinit();
+        const list = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.list, list.tag);
+        const item = list.children.items[0];
+        // Item one: paragraph `foo` plus a nested list.
+        try testing.expectEqual(@as(usize, 2), item.children.items.len);
+        try testing.expectEqual(document.Tag.paragraph, item.children.items[0].tag);
+        const nested = item.children.items[1];
+        try testing.expectEqual(document.Tag.list, nested.tag);
+        const nested_item = nested.children.items[0];
+        try testing.expectEqual(@as(usize, 2), nested_item.children.items.len);
+        try testing.expectEqual(document.Tag.paragraph, nested_item.children.items[0].tag);
+        const inner = nested_item.children.items[1];
+        try testing.expectEqual(document.Tag.list, inner.tag);
+        const inner_item = inner.children.items[0];
+        try testing.expectEqual(@as(usize, 1), inner_item.children.items.len);
+        try testing.expectEqual(document.Tag.paragraph, inner_item.children.items[0].tag);
+        try testing.expectEqualStrings("baz", inner_item.children.items[0].children.items[0].data.text);
+    }
+}
+
+test "markdown: indented code chunks, trailing blanks, and interruption rules" {
+    const oliver = @import("oliver.zig");
+
+    // §4.4: three chunks separated by blank lines; blank lines with fewer
+    // than four columns stay empty, and trailing blank lines are dropped.
+    {
+        var result = try oliver.parse(testing.allocator, "    chunk1\n\n    chunk2\n  \n \n \n    chunk3\n", .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.code_block, code.tag);
+        try testing.expectEqualStrings("chunk1\n\nchunk2\n\n\n\nchunk3\n", code.data.code_block.content);
+    }
+    // §4.4: excess indentation is included even on interior blank lines.
+    {
+        var result = try oliver.parse(testing.allocator, "    chunk1\n      \n      chunk2\n", .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try testing.expectEqualStrings("chunk1\n  \n  chunk2\n", code.data.code_block.content);
+    }
+    // §4.4: an indented code block cannot interrupt a paragraph.
+    {
+        var result = try oliver.parse(testing.allocator, "Foo\n    bar\n\n", .markdown, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.paragraph, p.tag);
+        try testing.expectEqualStrings("bar", p.children.items[p.children.items.len - 1].data.text);
+    }
+    // §4.4: a paragraph may follow immediately after indented code.
+    {
+        var result = try oliver.parse(testing.allocator, "    foo\nbar\n", .markdown, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try testing.expectEqual(@as(usize, 2), root.children.items.len);
+        try testing.expectEqual(document.Tag.code_block, root.children.items[0].tag);
+        try testing.expectEqualStrings("foo\n", root.children.items[0].data.code_block.content);
+        try testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+    }
+    // §4.4 example 110: content is literal, never parsed as Markdown.
+    {
+        var result = try oliver.parse(testing.allocator, "    <a/>\n    *hi*\n\n    - one\n", .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try testing.expectEqualStrings("<a/>\n*hi*\n\n- one\n", code.data.code_block.content);
+    }
+    // §4.4: more than four columns of indentation on the first line stay in
+    // the content.
+    {
+        var result = try oliver.parse(testing.allocator, "        foo\n    bar\n", .markdown, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try testing.expectEqualStrings("    foo\nbar\n", code.data.code_block.content);
+    }
 }
 
 test "markdown: thematic breaks precede lists and interrupt paragraphs" {
@@ -4799,12 +5250,15 @@ test "markdown: raw HTML leaves preserve spans and first-come opacity" {
     try testing.expectEqual(document.Tag.code_span, code_p.children.items[0].tag);
 
     // A tag that starts first also wins when its attribute contains a
-    // complete backtick pair.
-    var tag_result = try oliver.parse(testing.allocator, "<b title=\"`x`\">", .markdown, .{});
+    // complete backtick pair. (A bare tag alone on a line is a type-7 HTML
+    // block, §4.6, so the inline-tag precedence is exercised in paragraph
+    // context.)
+    var tag_result = try oliver.parse(testing.allocator, "x <b title=\"`x`\">", .markdown, .{});
     defer tag_result.deinit();
     const tag_p = tag_result.document.root.children.items[0];
-    try testing.expectEqual(@as(usize, 1), tag_p.children.items.len);
-    try testing.expectEqual(document.Tag.raw_html, tag_p.children.items[0].tag);
+    try testing.expectEqual(@as(usize, 2), tag_p.children.items.len);
+    try testing.expectEqual(document.Tag.text, tag_p.children.items[0].tag);
+    try testing.expectEqual(document.Tag.raw_html, tag_p.children.items[1].tag);
 }
 
 test "markdown: raw HTML preserves multiline bytes and flattens image alt" {
