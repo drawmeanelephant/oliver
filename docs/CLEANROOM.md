@@ -462,4 +462,29 @@ is code content; a dangling marker at end of input drops silently)
 are all Oliver's conservative readings of that one sentence; no
 Textile parser implementation source was consulted.
 
+Session 20 (T25 `notextile.` raw passthrough) finding: the form is
+**not** in the Textile 2 syntax page — its Escaping section presents
+the `==` mechanism as the way to "let you put some regular HTML
+markup in your document" ("You can disable Textile formatting for a
+given block using the '==' escape mechanism"). The current Textile
+Markup Language Documentation documents it instead ("No formatting
+(override Textile)": "For blocks of elements add a notextile. or
+notextile.. at the start of the block", with the example `notextile.
+This line <em>will not</em> be *Textilised*.`). The user's request
+named the Textile 2 syntax page, but since that page does not cover
+the form, this slice implements the current-docs form — the same
+published user-facing documentation family the module doc already
+names as authoritative — and records the provenance here. The
+single/double-period line-ownership contract (single ends at the
+first blank line like `bc.`; extended keeps blanks and runs to the
+next block signature like `bc..`), the bare-marker allowance (the
+docs' "for blocks of elements" use case needs content on following
+lines), the byte-for-byte contiguous-slice emission (CRLF preserved,
+converging on the `==` payload convention), the empty-block drop, and
+the interactions (a `==` delimiter interrupts an open raw block; the
+marker is code content inside a single `bc.`; a pending `clear.` is
+dropped because the `.html_block` leaf carries no attribute list) are
+all Oliver's conservative readings of the docs' three sentences; no
+Textile parser implementation source was consulted.
+
 No Markdown or Textile parser implementation source was consulted.

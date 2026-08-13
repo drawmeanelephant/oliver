@@ -2076,6 +2076,25 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/clear-literal.textile"),
         .expected = @embedFile("fixtures/textile/clear-literal.html"),
     },
+    // `notextile.`/`notextile..` raw passthrough (current Textile docs
+    // "No formatting (override Textile)"; Textile 2 uses `==` instead):
+    // the content passes through as one raw `.html_block` — no inline
+    // formatting, no replacements, `<em>` stays a real tag — with the
+    // single period ending at a blank line and the extended form keeping
+    // blank lines until the next block signature; the bare-marker block
+    // and the literal shapes (a word merely starting with "notextile",
+    // a missing period, mid-paragraph) stay text (docs/TEXTILE-PARITY.md
+    // §23).
+    .{
+        .name = "notextile-basic",
+        .input = @embedFile("fixtures/textile/notextile-basic.textile"),
+        .expected = @embedFile("fixtures/textile/notextile-basic.html"),
+    },
+    .{
+        .name = "notextile-literal",
+        .input = @embedFile("fixtures/textile/notextile-literal.textile"),
+        .expected = @embedFile("fixtures/textile/notextile-literal.html"),
+    },
     // Inline `==...==` escaping (Textile 2 "Escaping"): phrase delimiters
     // and the character replacements inside the region stay literal, while
     // formatting outside still applies — the current docs' quote example
