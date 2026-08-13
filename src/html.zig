@@ -291,18 +291,29 @@ fn writeOpen(
         },
         .code_block => {
             const code = node.data.code_block;
-            try writer.writeAll("<pre><code");
-            if (code.info) |info| {
-                const language_end = std.mem.indexOfAny(u8, info, " \t") orelse info.len;
-                if (language_end > 0) {
-                    try writer.writeAll(" class=\"language-");
-                    try writeEscaped(writer, info[0..language_end]);
-                    try writer.writeByte('"');
+            // Textile `pre.` renders the content verbatim inside `<pre>`
+            // (no `<code>` wrapper, no escaping, no info class;
+            // docs/TEXTILE-PARITY.md §8).
+            try writer.writeAll("<pre");
+            try writeAttrs(writer, code.attrs);
+            if (!code.escape) {
+                try writer.writeByte('>');
+                try writer.writeAll(code.content);
+                try writer.writeAll("</pre>\n");
+            } else {
+                try writer.writeAll("><code");
+                if (code.info) |info| {
+                    const language_end = std.mem.indexOfAny(u8, info, " \t") orelse info.len;
+                    if (language_end > 0) {
+                        try writer.writeAll(" class=\"language-");
+                        try writeEscaped(writer, info[0..language_end]);
+                        try writer.writeByte('"');
+                    }
                 }
+                try writer.writeByte('>');
+                try writeEscaped(writer, code.content);
+                try writer.writeAll("</code></pre>\n");
             }
-            try writer.writeByte('>');
-            try writeEscaped(writer, code.content);
-            try writer.writeAll("</code></pre>\n");
         },
         .html_block => {
             // Leaf block: the verbatim container-stripped source lines, no

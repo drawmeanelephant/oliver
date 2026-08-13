@@ -234,10 +234,21 @@ pub const Heading = struct {
 /// The payload of a `.code_block` leaf. `content` uses `\n` line endings and
 /// includes one newline for every source content line. `info` is the complete
 /// trimmed, escape-resolved fence info string, or null when absent; renderers
-/// may interpret it.
+/// may interpret it. `escape` selects the Textile `pre.` verbatim form (no
+/// escaping, no `<code>` wrapper); Markdown and Textile `bc.` keep the
+/// default. `attrs` are the Textile block-attribute modifiers (`bc{...}.`),
+/// emitted on the `<pre>` element; Markdown carries none.
 pub const CodeBlock = struct {
     content: []const u8,
-    info: ?[]const u8,
+    /// The complete trimmed, escape-resolved fence info string, or null when
+    /// absent; renderers may interpret it.
+    info: ?[]const u8 = null,
+    /// Textile `pre.` renders the content verbatim inside `<pre>`; when
+    /// true (Markdown fenced/indented and Textile `bc.`) the content is
+    /// escaped inside `<pre><code>`.
+    escape: bool = true,
+    /// Textile block-attribute modifiers, emitted on the `<pre>` element.
+    attrs: []const Attribute = &.{},
 };
 
 /// `.autolink` payload: the raw content between `<` and `>`, verbatim
