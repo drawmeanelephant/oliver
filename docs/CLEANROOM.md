@@ -129,4 +129,23 @@ session-1 Textile work or T8; the pinned behaviors in
 docs/TEXTILE-PARITY.md §6 are derived from the user-facing prose and
 examples above.
 
+## Sources consulted (session 4 — Textile link aliases)
+
+- Hobix "Textile Reference" "External References: Link Aliases"
+  <https://hobix.com/textile> — the `[hobix]https://hobix.com` example
+  (definition after its uses, on the line after the paragraph), the
+  `"link to":hobix!` trailing-punctuation exclusion, and the rendered
+  HTML.
+- Movable Type "Textile 2 Syntax" "Links"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html> —
+  "place one or more links in a block of it's own (it can be anywhere
+  within your document)", the `[excom]http://example.com` / `[exorg]...`
+  definition-block example, and `"Text to display":alias` references.
+
+No Textile parser implementation source was consulted for the T9 alias
+work; the pinned behaviors in docs/TEXTILE-PARITY.md §7 are derived from
+the user-facing prose and examples above (first-definition-wins and
+case-sensitive exact matching mirror the Markdown §4.7 machinery as
+chosen, deterministic defaults where the references are silent).
+
 No Markdown or Textile parser implementation source was consulted.

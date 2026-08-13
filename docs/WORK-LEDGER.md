@@ -16,7 +16,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | lead | M5 HTML blocks types 1–5 | per-type terminator end conditions; type 1–6 paragraph interruption | after M4 | implemented on main (uncommitted) |
 | lead | M6 full conformance | §4.7 angle-destination separator rule; manifest/pins to 652/652 | after M5 | implemented on main (uncommitted) |
 | lead | M7 GFM tables extension | Markdown table open-leaf + header/delimiter/body parsing; `.table` family in model and HTML renderer; docs/TABLES.md contract | after M6 | integrated on main (PR #19) |
-| Textile worker | T8 Textile tables | Textile `|a|b|` block rows, cell/row/table modifiers, header-alignment propagation, flat-row rendering; Textile fixtures; no Markdown/core changes | after M7 (reuses the `.table` model family) | implemented on main (uncommitted) |
+| Textile worker | T8 Textile tables | Textile `|a|b|` block rows, cell/row/table modifiers, header-alignment propagation, flat-row rendering; Textile fixtures; no Markdown/core changes | after M7 (reuses the `.table` model family) | integrated on main (PR #20) |
+| Textile worker | T9 Textile link aliases | `[alias]url` definition lines + `"text":alias` references via a document-global alias table; Textile fixtures; no Markdown/core changes | after T8 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -298,7 +299,38 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   a renderer-only `sections` test, and 13 Textile fixture pairs.
 - **Parallelism:** yes; Textile + model/renderer, Markdown untouched.
 - **Integration:** after M7 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 159/159 tests green;
+- **State:** integrated on main (PR #20). 159/159 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T9 — Textile link aliases
+
+- **Objective:** implement `[alias]url` definition lines and
+  `"text":alias` references — the largest remaining documented Textile
+  gap — converging with the Markdown §4.7 definition-table machinery.
+- **Authoritative sources:** Hobix Textile Reference "External References:
+  Link Aliases" (uses before the definition; the trailing-punctuation
+  exclusion); Movable Type Textile 2 Syntax "Links" (definition blocks
+  "anywhere within your document", multiple aliases per block). Both
+  clean-room allowed.
+- **Seams:** `src/textile.zig` (pass-1 alias collection over every line,
+  the def-line recognizer, threading the alias table through the inline
+  pass, alias lookup in `scanLink` with the href span carried on
+  `LinkData`), Textile fixtures/index, feature matrix, parity
+  (new §7), test and ledger docs, README. Markdown, model, and renderer
+  untouched.
+- **Acceptance:** the Hobix example (four references resolve, the def
+  line vanishes, trailing `!` excluded); the Textile 2 definition-block
+  form; first-definition-wins; case-sensitive exact matching; an
+  undefined alias stays a relative URL; aliases resolve in headings,
+  lists, and table cells; def lines vanish mid-paragraph without
+  splitting it; literal fallback shapes.
+- **Tests:** 4 unit tests (document resolution + the Hobix render, shapes
+  and precedence, every inline context, a 2,000-definition storm), 4
+  Textile fixture pairs, and 2 shared-model convergence pairs
+  (`"x":alias` ↔ `[x][a]`, byte-identical).
+- **Parallelism:** yes; Textile-local ownership, Markdown untouched.
+- **Integration:** after T8 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 163/163 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations
