@@ -332,52 +332,16 @@ fn writeOpen(
             try writer.writeAll(content);
             if (content.len == 0 or content[content.len - 1] != '\n') try writer.writeByte('\n');
         },
-        .emphasis => {
-            try writer.writeAll("<em>");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
-        },
-        .strong => {
-            try writer.writeAll("<strong>");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
-        },
-        .bold => {
-            // Textile `**x**` renders `<b>` (docs/FEATURE-MATRIX.md, Textile
-            // inlines); Markdown never produces this tag.
-            try writer.writeAll("<b>");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
-        },
-        .italic => {
-            // Textile `__x__` renders `<i>` (docs/FEATURE-MATRIX.md, Textile
-            // inlines); Markdown never produces this tag.
-            try writer.writeAll("<i>");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
-        },
-        .deleted => {
-            try writer.writeAll("<del>");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
-        },
-        .inserted => {
-            try writer.writeAll("<ins>");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
-        },
-        .big => {
-            // Textile `++x++` renders `<big>` (Textile 2 "Inline
-            // Formatting"); Markdown never produces this tag.
-            try writer.writeAll("<big>");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
-        },
-        .small => {
-            // Textile `--x--` renders `<small>` (Textile 2 "Inline
-            // Formatting"); Markdown never produces this tag.
-            try writer.writeAll("<small>");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
-        },
-        .superscript => {
-            try writer.writeAll("<sup>");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
-        },
-        .subscript => {
-            try writer.writeAll("<sub>");
+        .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript => {
+            // Textile phrase tags. The attribute-bearing forms
+            // (`*{style}x*`, `_(class)x_`, Hobix "Phrase Attributes") write
+            // the composed attrs on the phrase's own tag; nodes without a
+            // `.phrase` payload (plain Textile phrases, all Markdown
+            // phrases) render with no attrs.
+            try writer.writeAll("<");
+            try writer.writeAll(phraseTagName(node.tag));
+            try writeAttrs(writer, phraseAttrs(node));
+            try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .footnote_ref => {
@@ -537,6 +501,34 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
 /// valid levels, so clamping is purely defensive.
 fn clampHeading(level: u8) u8 {
     return @min(@max(level, 1), 6);
+}
+
+/// The HTML tag name for the Textile phrase tags (the ones with a shared
+/// `.phrase`-or-`.none` payload). `.span` is handled separately.
+fn phraseTagName(tag: document.Tag) []const u8 {
+    return switch (tag) {
+        .emphasis => "em",
+        .strong => "strong",
+        .bold => "b",
+        .italic => "i",
+        .deleted => "del",
+        .inserted => "ins",
+        .big => "big",
+        .small => "small",
+        .superscript => "sup",
+        .subscript => "sub",
+        else => unreachable,
+    };
+}
+
+/// The composed attrs of a phrase node, or none when the node carries no
+/// `.phrase` payload (plain Textile phrases and all Markdown phrases keep
+/// `.none`, so the renderer never requires the payload).
+fn phraseAttrs(node: *const document.Node) []const document.Attribute {
+    return switch (node.data) {
+        .phrase => |p| p.attrs,
+        else => &.{},
+    };
 }
 
 /// Emits an ordered attribute list as ` name="value"` pairs (the fixed

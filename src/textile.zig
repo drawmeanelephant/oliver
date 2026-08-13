@@ -41,10 +41,11 @@
 //!   text (docs/TEXTILE-PARITY.md §4). The family includes Textile 2's
 //!   `++bigger++` → `<big>` and `--smaller--` → `<small>` (the `--` pair is
 //!   a phrase delimiter; a `--` that cannot form a pair still becomes an
-//!   em dash, docs/TEXTILE-PARITY.md §17). The `%x%` span carries the
-//!   documented phrase attributes just inside its opener (`%{style}
-//!   (class#id)[lang]x%`, Hobix "Phrase Attributes"), composing through
-//!   the block-attribute machinery (docs/TEXTILE-PARITY.md §18).
+//!   em dash, docs/TEXTILE-PARITY.md §17). Any phrase operator can carry
+//!   the documented phrase attributes just inside its opener
+//!   (`*{style}(class#id)[lang]x*`, `%{style}x%`, Hobix "Phrase
+//!   Attributes"), composing through the block-attribute machinery onto
+//!   the phrase's own HTML tag (docs/TEXTILE-PARITY.md §18/§19).
 //! - `[alias]url` lines anywhere in the document define link aliases; a
 //!   `"text":alias` link resolves to the defined URL even when the
 //!   definition comes later (both references document the lookup table).
@@ -1813,11 +1814,11 @@ const FootnoteRefData = struct {
     number: u16,
 };
 
-/// A `%x%` span's phrase-attribute run (Hobix "Phrase Attributes": "all
-/// block attributes can be applied to phrases as well by placing them just
-/// inside the opening modifier"; Textile 2 "Inline formatting operators
-/// accept the following modifiers"): the style/class/id/lang source ranges
-/// and the offset where the content begins.
+/// A phrase's phrase-attribute run (Hobix "Phrase Attributes": "all block
+/// attributes can be applied to phrases as well by placing them just inside
+/// the opening modifier"; Textile 2 "Inline formatting operators accept the
+/// following modifiers"): the style/class/id/lang source ranges and the
+/// offset where the content begins. Any phrase operator may carry one.
 const SpanMods = struct {
     style: ?Range = null,
     class: ?Range = null,
@@ -1852,10 +1853,10 @@ const InlineItemPhrase = struct {
     is_open: bool,
     is_close: bool,
     pair: ?usize,
-    /// For `%` spans: the parsed phrase-attribute run right after the
-    /// opener (`%{style}(class#id)[lang]x%`); null for plain spans and
-    /// the other operators. The run is skipped opaquely by the scan and
-    /// emits only if the span never matches.
+    /// For phrases with a modifier run right after the opener
+    /// (`*{style}(class#id)[lang]x*`, `%{style}x%`): the parsed run; null
+    /// for plain phrases. The run is skipped opaquely by the scan and
+    /// emits only if the phrase never matches.
     span_mods: ?SpanMods = null,
 };
 
@@ -1991,15 +1992,15 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                 }
                 var open_ok = canOpenPhrase(bytes, i, op.len);
                 const close_ok = canClosePhrase(bytes, i, op.len);
-                // `%` spans can carry a phrase-attribute run right after the
-                // opener (`%{style}(class#id)[lang]x%`, Hobix "Phrase
-                // Attributes"; Textile 2 "Inline formatting operators
-                // accept the following modifiers"). The run must parse and
-                // be followed by non-whitespace content, or the `%` is not
-                // an opener — a malformed run makes the construct literal,
-                // like a malformed block modifier.
+                // Any phrase can carry a phrase-attribute run right after
+                // the opener (`*{style}(class#id)[lang]x*`, `%{style}x%`,
+                // Hobix "Phrase Attributes"; Textile 2 "Inline formatting
+                // operators accept the following modifiers"). The run must
+                // parse and be followed by non-whitespace content, or the
+                // operator is not an opener — a malformed run makes the
+                // construct literal, like a malformed block modifier.
                 var span_mods: ?SpanMods = null;
-                if (op.char == '%' and open_ok and i + op.len < bytes.len and isSpanModStart(bytes[i + op.len])) {
+                if (open_ok and i + op.len < bytes.len and isSpanModStart(bytes[i + op.len])) {
                     if (scanSpanMods(bytes, i + op.len)) |m| {
                         if (m.content_start < bytes.len and !isWhitespaceByte(bytes[m.content_start])) {
                             span_mods = m;
@@ -2022,18 +2023,14 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                         .pair = null,
                         .span_mods = span_mods,
                     } });
-                    if (op.char == '%') {
-                        if (span_mods) |m| {
-                            // The modifier run is opaque to the scan: jump
-                            // past it so a `%` inside a style value cannot
-                            // close the span, and keep a text item over the
-                            // run so an unmatched span still renders it
-                            // literally.
-                            try appendTextItem(doc.allocator(), items, i + op.len, m.content_start);
-                            i = m.content_start;
-                        } else {
-                            i += op.len;
-                        }
+                    if (span_mods) |m| {
+                        // The modifier run is opaque to the scan: jump past
+                        // it so an operator character inside a style value
+                        // cannot close the phrase, and keep a text item over
+                        // the run so an unmatched phrase still renders it
+                        // literally.
+                        try appendTextItem(doc.allocator(), items, i + op.len, m.content_start);
+                        i = m.content_start;
                     } else {
                         i += op.len;
                     }
@@ -2286,20 +2283,20 @@ fn scanImageSize(bytes: []const u8, start: usize, end: usize) ?struct { width: R
     return null;
 }
 
-/// True when the byte after a `%` opener can start a phrase-attribute run:
-/// `{style}`, `(class#id)`, or `[lang]` (Textile 2's documented inline
-/// modifier set; padding and alignment are blocks-only and end the run).
+/// True when the byte after a phrase opener can start a phrase-attribute
+/// run: `{style}`, `(class#id)`, or `[lang]` (Textile 2's documented
+/// inline modifier set; padding and alignment are blocks-only and end the
+/// run).
 fn isSpanModStart(b: u8) bool {
     return b == '{' or b == '(' or b == '[';
 }
 
-/// Parses a `%x%` span's phrase-attribute run starting at `i` (the byte
-/// after the `%`): `{style}`, `(class#id)`, and `[lang]` tokens in any
-/// order, each closed and non-empty. Returns the parsed ranges plus the
-/// offset where the content begins, or null on a malformed token (an
-/// unclosed or empty spec — the whole construct stays literal, the same
-/// conservatism as a malformed block modifier). Any other byte ends the
-/// run.
+/// Parses a phrase's phrase-attribute run starting at `i` (the byte after
+/// the opener): `{style}`, `(class#id)`, and `[lang]` tokens in any order,
+/// each closed and non-empty. Returns the parsed ranges plus the offset
+/// where the content begins, or null on a malformed token (an unclosed or
+/// empty spec — the whole construct stays literal, the same conservatism
+/// as a malformed block modifier). Any other byte ends the run.
 fn scanSpanMods(bytes: []const u8, i: usize) ?SpanMods {
     var m = SpanMods{ .content_start = i };
     var j = i;
@@ -2549,32 +2546,37 @@ fn emitItems(doc: *document.Document, parent: *document.Node, content: source.Sp
                 .phrase => |p| {
                     if (p.pair) |j| {
                         const closer = scope.items[j].phrase;
-                        // `%` spans with a phrase-attribute run compose the
-                        // attrs (Hobix "Phrase Attributes") and skip the run
-                        // — which the scan kept as an opaque text item at
-                        // i+1 — when the content is non-empty. A run with no
-                        // content after it falls back to a plain span whose
-                        // content includes the run bytes.
+                        // A phrase with a modifier run composes the attrs
+                        // (Hobix "Phrase Attributes") and skips the run —
+                        // which the scan kept as an opaque text item at i+1
+                        // — when the content is non-empty. A run with no
+                        // content after it falls back to a plain phrase
+                        // whose content includes the run bytes.
                         var payload: document.Data = .none;
                         // The content starts after the opener — and after the
                         // scan's opaque text item over the modifier run when
-                        // a span carries one with non-empty content. A run
-                        // with no content after it falls back to a plain
-                        // span whose content includes the run bytes.
+                        // the phrase carries one with non-empty content. A
+                        // run with no content after it falls back to a
+                        // plain phrase whose content includes the run bytes.
                         var inner_from = i + 1;
+                        var composed_attrs: ?[]const document.Attribute = null;
+                        if (p.span_mods) |m| {
+                            if (m.content_start < closer.pos) {
+                                const style = try composeStyle(doc, if (m.style) |r| bytesOf(doc, content, r) else null, 0, 0, null, null);
+                                composed_attrs = try composeAttrs(doc, style, if (m.class) |r| bytesOf(doc, content, r) else null, if (m.id) |r| bytesOf(doc, content, r) else null, if (m.lang) |r| bytesOf(doc, content, r) else null);
+                                inner_from = i + 2;
+                            }
+                        }
                         if (p.tag == .span) {
                             // Every span node carries the payload (empty
                             // attrs for a plain `%x%`) so the renderer can
                             // always read `data.span`.
-                            var attrs: []const document.Attribute = &.{};
-                            if (p.span_mods) |m| {
-                                if (m.content_start < closer.pos) {
-                                    const style = try composeStyle(doc, if (m.style) |r| bytesOf(doc, content, r) else null, 0, 0, null, null);
-                                    attrs = try composeAttrs(doc, style, if (m.class) |r| bytesOf(doc, content, r) else null, if (m.id) |r| bytesOf(doc, content, r) else null, if (m.lang) |r| bytesOf(doc, content, r) else null);
-                                    inner_from = i + 2;
-                                }
-                            }
-                            payload = .{ .span = .{ .attrs = attrs } };
+                            payload = .{ .span = .{ .attrs = composed_attrs orelse &.{} } };
+                        } else if (composed_attrs) |attrs| {
+                            // Non-span phrase tags carry their attrs in the
+                            // `.phrase` payload (Markdown phrase nodes keep
+                            // `.none`; the renderer handles both).
+                            payload = .{ .phrase = .{ .attrs = attrs } };
                         }
                         const node = try doc.createNode(p.tag, subSpan(content, p.pos, closer.pos + closer.len), payload);
                         try doc.appendChild(scope.parent, node);
@@ -3390,6 +3392,108 @@ test "textile: span phrase-attribute fallbacks stay literal or plain" {
         "<p><span style=\"width:50%;\">x</span></p>\n",
         "<p><span>(x)</span></p>\n",
         "<p><span>{color:red}</span></p>\n",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(want, out.items);
+    }
+}
+
+test "textile: phrase attributes compose onto any phrase operator's tag" {
+    const oliver = @import("oliver.zig");
+
+    // Hobix "Phrase Attributes": "all block attributes can be applied to
+    // phrases as well by placing them just inside the opening modifier",
+    // with the examples `*{color:red}blushed*`, `_(big)sprouted_`, and
+    // `%[es]cabeza%`. The non-span forms carry their attrs in the `.phrase`
+    // payload, written on the phrase's own HTML tag.
+    {
+        var result = try oliver.parse(std.testing.allocator, "*{color:red}blushed*\n", .textile, .{});
+        defer result.deinit();
+        const strong = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqual(document.Tag.strong, strong.tag);
+        try std.testing.expectEqual(source.Span{ .start = 0, .end = 20 }, strong.span);
+        try std.testing.expectEqual(@as(usize, 1), strong.data.phrase.attrs.len);
+        try std.testing.expectEqualStrings("style", strong.data.phrase.attrs[0].name);
+        try std.testing.expectEqualStrings("color:red;", strong.data.phrase.attrs[0].value);
+        try std.testing.expectEqual(@as(usize, 1), strong.children.items.len);
+        try std.testing.expectEqualStrings("blushed", strong.children.items[0].data.text);
+        try std.testing.expectEqual(source.Span{ .start = 12, .end = 19 }, strong.children.items[0].span);
+    }
+    // A class form, and the fixed render order style/class/id/lang for a
+    // combined run — the same composition as the span forms and the blocks.
+    {
+        var result = try oliver.parse(std.testing.allocator, "_(big)sprouted_\n", .textile, .{});
+        defer result.deinit();
+        const em = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqual(document.Tag.emphasis, em.tag);
+        try std.testing.expectEqual(@as(usize, 1), em.data.phrase.attrs.len);
+        try std.testing.expectEqualStrings("class", em.data.phrase.attrs[0].name);
+        try std.testing.expectEqualStrings("big", em.data.phrase.attrs[0].value);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "*{color:red}(note#one)[fr]x*\n", .textile, .{});
+        defer result.deinit();
+        const strong = result.document.root.children.items[0].children.items[0];
+        const attrs = strong.data.phrase.attrs;
+        try std.testing.expectEqual(@as(usize, 4), attrs.len);
+        try std.testing.expectEqualStrings("style", attrs[0].name);
+        try std.testing.expectEqualStrings("color:red;", attrs[0].value);
+        try std.testing.expectEqualStrings("class", attrs[1].name);
+        try std.testing.expectEqualStrings("note", attrs[1].value);
+        try std.testing.expectEqualStrings("id", attrs[2].name);
+        try std.testing.expectEqualStrings("one", attrs[2].value);
+        try std.testing.expectEqualStrings("lang", attrs[3].name);
+        try std.testing.expectEqualStrings("fr", attrs[3].value);
+    }
+    // Hobix's own example line renders byte-for-byte, and the doubled
+    // operators compose through the same path (`**{...}x**` → `<b …>`).
+    {
+        var result = try oliver.parse(std.testing.allocator, "I seriously *{color:red}blushed* when I _(big)sprouted_ that %[es]cabeza%.\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<p>I seriously <strong style=\"color:red;\">blushed</strong> when I <em class=\"big\">sprouted</em> that <span lang=\"es\">cabeza</span>.</p>\n", out.items);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "**{color:blue}bold**\n", .textile, .{});
+        defer result.deinit();
+        const bold = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqual(document.Tag.bold, bold.tag);
+        try std.testing.expectEqualStrings("color:blue;", bold.data.phrase.attrs[0].value);
+    }
+}
+
+test "textile: non-span phrase-attribute fallbacks stay literal or plain" {
+    const oliver = @import("oliver.zig");
+
+    // The same fallback contract as the span forms: a malformed run makes
+    // the operator a non-opener (literal), a run followed by whitespace is
+    // not an opener, a run with no content after it falls back to a plain
+    // phrase whose content includes the run bytes, and an unpaired `--`
+    // still em-dashes while a paired `--{...}x--` composes attrs.
+    const cases = [_][]const u8{
+        "*{bad x*",
+        "A *{x} y*",
+        "*{color:red}*",
+        "+{unclosed",
+        "a -- b, --{color:red}paired--",
+    };
+    const expected = [_][]const u8{
+        "<p>*{bad x*</p>\n",
+        "<p>A *{x} y*</p>\n",
+        "<p><strong>{color:red}</strong></p>\n",
+        "<p>+{unclosed</p>\n",
+        "<p>a — b, <small style=\"color:red;\">paired</small></p>\n",
     };
     for (cases, expected) |input, want| {
         var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
