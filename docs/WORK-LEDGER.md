@@ -29,7 +29,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T18 image modifiers | the documented image family — alignment (`!<x!`…`!~x!`), sizing (`10x20`, `10w 20h`, `20%x40%`, `20%`), `{style}`/`(class#id)`/padding — composes onto `.image.attrs`/width/height through the §8 machinery; shared model + renderer gain defaulted width/height/attrs; Markdown untouched | after T17 | merged on main (PR #33) |
 | Textile worker | T19 big/small phrases | Textile 2's `++bigger++`/`--smaller--` → `<big>`/`<small>` slot into the phrase machinery as doubled `+`/`-` runs; a matched `--` pair is consumed (never em-dashed) while space-adjacent/intraword/numeric/unmatched `--` still em-dash; Tag gains big/small; Markdown untouched | after T18 | merged on main (PR #34) |
 | Textile worker | T20 span attrs + `{...}` macros | `%{style}(class#id)[lang]x%` phrase attributes compose onto `.span` attrs (Hobix "Phrase Attributes"; malformed runs literal, empty-content runs fall back to a plain span, a `%` inside a style cannot close the span); Textile 2's documented `{...}` macro table with mirrored orders; the brace-edge phrase rule keeps `{*}`/`{-L}` whole for the macro pass; Markdown untouched | after T19 | merged on main (PR #35) |
-| Textile worker | T21 phrase attributes on all operators | Hobix "Phrase Attributes" extended to the whole family: `*{color:red}x*` → `<strong style="color:red;">`, `_(big)x_` → `<em class="big">`, doubled/long operators included, via the shared `.phrase` payload + a combined renderer arm; same fallbacks as the span forms; a `{` after an opener is a style (macros only unattached); `--` em-dash interplay intact; Markdown untouched | after T20 | in flight (T21) |
+| Textile worker | T21 phrase attributes on all operators | Hobix "Phrase Attributes" extended to the whole family: `*{color:red}x*` → `<strong style="color:red;">`, `_(big)x_` → `<em class="big">`, doubled/long operators included, via the shared `.phrase` payload + a combined renderer arm; same fallbacks as the span forms; a `{` after an opener is a style (macros only unattached); `--` em-dash interplay intact; Markdown untouched | after T20 | merged on main (PR #36) |
+| Textile worker | T22 citation + acronyms | Hobix's `??citation??` → `<cite>` (a doubled `?` joins the phrase family with attrs + nesting) and `ABC(def)` → `<acronym title="def">`; the both-flag delimiter fix (a run that is open and close tries close first, then opens); the acronym whole-run skip keeps the scan linear; Markdown untouched | after T21 | in flight (T22) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -774,7 +775,42 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   `phrase-attr-literal`) plus the `char-macro-literal` pin update.
 - **Parallelism:** yes; Textile-only, Markdown untouched.
 - **Integration:** after T20 (the 652/652 gate is re-verified).
-- **State:** in flight (T21). 195/195 tests green; canonical
+- **State:** integrated on main (PR #36). 195/195 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T22 — Citation operator + acronyms
+
+- **Objective:** close the last two inline deferrals — Hobix's
+  `??citation??` and the `ABC(def)` acronym form.
+- **Normative source:** Hobix "Footnote-like citation" ("Use double
+  question marks to indicate citation", `??Cat's Cradle?? by
+  Vonnegut` → `<cite>Cat’s Cradle</cite>`) and Hobix "Acronyms"
+  ("Definitions for acronyms can be provided by following an acronym
+  with its definition in parens", `CSS(Cascading Style Sheets)` →
+  `<acronym title="Cascading Style Sheets">CSS</acronym>`). Neither
+  appears in Textile 2 or the current docs — the FEATURE-MATRIX
+  "Hobix only" reading holds.
+- **Dependencies:** the phrase machinery (T4) + the T21 phrase-attribute
+  generalization, the boundary contract, the character-replacement
+  pass (T15).
+- **Seams:** `src/document.zig` + `src/html.zig` (`.cite` joins the
+  phrase family; `.acronym` is a leaf with the letters + the
+  definition title) and `src/textile.zig` (a doubled `?` run in
+  phraseOpFor, the acronym scan with its whole-run skip, the emit
+  case, and the both-flag delimiter fix in matchPhrases).
+- **Acceptance:** Hobix's examples byte-for-byte; `??` accepts the
+  phrase-attribute run and nests; lone `?`/3+-runs/malformed-runs
+  literal; `I(think)`/`xCSS(no)`/`CSS()`/`CSS(open` literal while
+  `US(...)`/`(CSS(...))` work; the definition is the opaque title;
+  `@code@`/link display stay opaque; the both-flag fix lets
+  `??_(big)x_??` and `(_(big)x_)` nest; the 652/652 gate is
+  untouched.
+- **Tests:** 2 unit tests (citation model/attrs/fallbacks; acronym
+  model/fallbacks), 4 new Textile fixture pairs (`citation-basic`,
+  `citation-literal`, `acronym-basic`, `acronym-literal`).
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T21 (the 652/652 gate is re-verified).
+- **State:** in flight (T22). 197/197 tests green; canonical
   scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

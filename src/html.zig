@@ -332,7 +332,7 @@ fn writeOpen(
             try writer.writeAll(content);
             if (content.len == 0 or content[content.len - 1] != '\n') try writer.writeByte('\n');
         },
-        .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript => {
+        .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite => {
             // Textile phrase tags. The attribute-bearing forms
             // (`*{style}x*`, `_(class)x_`, Hobix "Phrase Attributes") write
             // the composed attrs on the phrase's own tag; nodes without a
@@ -426,6 +426,17 @@ fn writeOpen(
             try writeAttrs(writer, node.data.image.attrs);
             try writer.writeAll(if (options.void_trailing_slash) " />" else ">");
         },
+        .acronym => {
+            // Textile `CSS(Cascading Style Sheets)` → `<acronym
+            // title="…">CSS</acronym>` (Hobix "Acronyms"): the definition
+            // is the title and the uppercase letters are the display text,
+            // both escaped like text. Markdown never produces this tag.
+            try writer.writeAll("<acronym title=\"");
+            try writeEscaped(writer, node.data.acronym.title);
+            try writer.writeAll("\">");
+            try writeEscaped(writer, node.data.acronym.text);
+            try writer.writeAll("</acronym>");
+        },
         .text => try writeEscapedText(writer, node.data.text),
         .raw_html => {
             // Leaf tag: the raw source bytes of the construct, verbatim —
@@ -488,11 +499,12 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .small => try writer.writeAll("</small>"),
         .superscript => try writer.writeAll("</sup>"),
         .subscript => try writer.writeAll("</sub>"),
+        .cite => try writer.writeAll("</cite>"),
         .span => try writer.writeAll("</span>"),
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => unreachable,
+        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
     }
 }
 
@@ -517,6 +529,7 @@ fn phraseTagName(tag: document.Tag) []const u8 {
         .small => "small",
         .superscript => "sup",
         .subscript => "sub",
+        .cite => "cite",
         else => unreachable,
     };
 }

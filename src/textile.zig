@@ -7,9 +7,10 @@
 //! propagation). Inlines: plain text,
 //! hard line breaks, same-line `@code@` phrases, the phrase-modifier family
 //! (`*strong*`, `_emphasis_`, `**bold**`, `__italic__`, `-deleted-`,
-//! `+inserted+`, `^superscript^`, `~subscript~`, `%span%`), `"text":url`
-//! links (with `(title)`), and `!url!` images (with `(alt)` and the
-//! `!url!:href` link attachment).
+//! `+inserted+`, `^superscript^`, `~subscript~`, `%span%`,
+//! `??citation??`), `"text":url` links (with `(title)`), `!url!` images
+//! (with `(alt)` and the `!url!:href` link attachment), and Hobix's
+//! `ABC(def)` acronyms (the definition becomes the `title`).
 //! Behavior is chosen from the published user-facing Textile documentation
 //! (Hobix reference; Movable Type "Textile 2 Syntax"; Textile Markup Language
 //! Documentation) where the slice implements it; disagreements between
@@ -41,7 +42,8 @@
 //!   text (docs/TEXTILE-PARITY.md §4). The family includes Textile 2's
 //!   `++bigger++` → `<big>` and `--smaller--` → `<small>` (the `--` pair is
 //!   a phrase delimiter; a `--` that cannot form a pair still becomes an
-//!   em dash, docs/TEXTILE-PARITY.md §17). Any phrase operator can carry
+//!   em dash, docs/TEXTILE-PARITY.md §17), and `??citation??` → `<cite>`
+//!   (Hobix, the citation operator). Any phrase operator can carry
 //!   the documented phrase attributes just inside its opener
 //!   (`*{style}(class#id)[lang]x*`, `%{style}x%`, Hobix "Phrase
 //!   Attributes"), composing through the block-attribute machinery onto
@@ -1814,6 +1816,15 @@ const FootnoteRefData = struct {
     number: u16,
 };
 
+/// A Textile acronym `CSS(Cascading Style Sheets)` (Hobix "Acronyms"):
+/// the uppercase letters and the parenthesized definition, as relative
+/// ranges into the line. The definition is the `title`; the letters are
+/// the display text.
+const AcronymData = struct {
+    text: Range,
+    title: Range,
+};
+
 /// A phrase's phrase-attribute run (Hobix "Phrase Attributes": "all block
 /// attributes can be applied to phrases as well by placing them just inside
 /// the opening modifier"; Textile 2 "Inline formatting operators accept the
@@ -1839,6 +1850,7 @@ const InlineItem = union(enum) {
     link: LinkData,
     image: ImageData,
     footnote: FootnoteRefData,
+    acronym: AcronymData,
     /// A matched `==...==` escaped region (Textile 2 "Escaping"). `span`
     /// is the inner content range only, delimiters excluded; the content
     /// emits as literal text with no formatting and no replacements.
@@ -1869,12 +1881,12 @@ const PhraseOp = struct {
 /// The phrase-modifier family the references document: single `*`/`_` are
 /// strong/emphasis, doubled `**`/`__` are bold/italic, and `-`, `+`, `^`,
 /// `~`, `%` are del/ins/sup/sub/span. Textile 2's `++`/`--` (big/small)
-/// complete the family — implemented per the user's request, with the
-/// em-dash interaction pinned in docs/TEXTILE-PARITY.md §13/§17. Runs
-/// longer than the recognized lengths stay entirely literal.
+/// and Hobix's `??` (citation) complete the family, with the em-dash
+/// interaction pinned in docs/TEXTILE-PARITY.md §13/§17. Runs longer than
+/// the recognized lengths stay entirely literal.
 fn phraseOpFor(bytes: []const u8, i: usize) ?PhraseOp {
     const c = bytes[i];
-    if (c != '*' and c != '_' and c != '-' and c != '+' and c != '^' and c != '~' and c != '%') return null;
+    if (c != '*' and c != '_' and c != '-' and c != '+' and c != '^' and c != '~' and c != '%' and c != '?') return null;
     var j = i + 1;
     while (j < bytes.len and bytes[j] == c) : (j += 1) {}
     const run = j - i;
@@ -1886,6 +1898,7 @@ fn phraseOpFor(bytes: []const u8, i: usize) ?PhraseOp {
         '^' => if (run == 1) .{ .char = '^', .len = 1, .tag = .superscript } else null,
         '~' => if (run == 1) .{ .char = '~', .len = 1, .tag = .subscript } else null,
         '%' => if (run == 1) .{ .char = '%', .len = 1, .tag = .span } else null,
+        '?' => if (run == 2) .{ .char = '?', .len = 2, .tag = .cite } else null,
         else => null,
     };
 }
@@ -1979,6 +1992,22 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                 i += 1;
                 continue;
             }
+            if (b >= 'A' and b <= 'Z') {
+                if (scanAcronym(bytes, i)) |a| {
+                    try appendTextItem(doc.allocator(), items, run_start, i);
+                    try items.append(doc.allocator(), .{ .acronym = a });
+                    run_start = a.title.end + 1;
+                    i = run_start;
+                    continue;
+                }
+                // A run that cannot form an acronym is plain text: skip
+                // the whole uppercase run so it cannot reseed a shorter
+                // acronym from inside itself (keeps the pass linear).
+                var j = i + 1;
+                while (j < bytes.len and bytes[j] >= 'A' and bytes[j] <= 'Z') : (j += 1) {}
+                i = j;
+                continue;
+            }
             if (phraseOpFor(bytes, i)) |op| {
                 // A phrase operator directly adjacent to a brace is not
                 // recognized: `{*}` and `{-L}` are character macros (Textile
@@ -2043,10 +2072,11 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                 // (conservative; docs/TEXTILE-PARITY.md §4.1).
                 i += op.len;
                 continue;
-            } else if (b == '*' or b == '_' or b == '-' or b == '+' or b == '^' or b == '~' or b == '%') {
+            } else if (b == '*' or b == '_' or b == '-' or b == '+' or b == '^' or b == '~' or b == '%' or b == '?') {
                 // Long runs (3+ for `*`/`_`/`-`/`+` — the operators with a
-                // doubled form — 2+ for the rest) stay entirely literal;
-                // skip the whole run so it cannot reseed a shorter operator
+                // doubled form — 2+ for the rest, including a lone `?`
+                // which is never an operator) stay entirely literal; skip
+                // the whole run so it cannot reseed a shorter operator
                 // from inside itself.
                 var j = i + 1;
                 while (j < bytes.len and bytes[j] == b) : (j += 1) {}
@@ -2335,6 +2365,24 @@ fn scanSpanMods(bytes: []const u8, i: usize) ?SpanMods {
     return null;
 }
 
+/// Recognizes Hobix's acronym form `ABC(def)`: a run of 2+ uppercase ASCII
+/// letters at an inline boundary, directly followed by a non-empty
+/// parenthesized definition. The definition closes at the first `)`. Every
+/// other shape stays literal text — a single letter (`I(think)`), an
+/// intraword run, a missing or empty definition, an unclosed paren — so
+/// sentence-like `X(y)` shapes never become acronyms. The definition is
+/// opaque: no phrase formatting and no character replacements.
+fn scanAcronym(bytes: []const u8, i: usize) ?AcronymData {
+    if (!isInlineBoundaryBefore(bytes, i)) return null;
+    var j = i;
+    while (j < bytes.len and bytes[j] >= 'A' and bytes[j] <= 'Z') : (j += 1) {}
+    if (j - i < 2) return null;
+    if (j >= bytes.len or bytes[j] != '(') return null;
+    const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ')') orelse return null;
+    if (close == j + 1) return null;
+    return .{ .text = .{ .start = i, .end = j }, .title = .{ .start = j + 1, .end = close } };
+}
+
 /// Recognizes `!url!`, `!url(alt)!` (Hobix) / `!url (alt)!` (Textile 2), and
 /// the `!url!:href` link attachment, plus the documented image modifiers:
 /// an optional alignment/style/class/padding run right after `!`, and a
@@ -2497,6 +2545,13 @@ fn matchPhrases(doc: *document.Document, items: *std.ArrayList(InlineItem)) Pars
     for (items.items, 0..) |item, idx| {
         switch (item) {
             .phrase => |p| {
+                // A delimiter can qualify as both opener and closer — the
+                // byte before is a boundary and the byte after is too, as
+                // when a mods run follows (`?_(big)x_` — `_` sits between
+                // punctuation and a `(`). Try closing against the stack
+                // first; only when the top does not match does the run act
+                // as a fresh opener (the standard delimiter-stack rule).
+                var matched = false;
                 if (p.is_close) {
                     if (stack.items.len > 0) {
                         const top = stack.items[stack.items.len - 1];
@@ -2505,9 +2560,11 @@ fn matchPhrases(doc: *document.Document, items: *std.ArrayList(InlineItem)) Pars
                             items.items[top].phrase.pair = idx;
                             items.items[idx].phrase.pair = top;
                             _ = stack.pop();
+                            matched = true;
                         }
                     }
-                } else if (p.is_open) {
+                }
+                if (!matched and p.is_open) {
                     try stack.append(doc.allocator(), idx);
                 }
             },
@@ -2609,6 +2666,20 @@ fn emitItems(doc: *document.Document, parent: *document.Node, content: source.Sp
                 },
                 .footnote => |f| {
                     const node = try doc.createNode(.footnote_ref, subSpan(content, f.span.start, f.span.end), .{ .footnote_ref = f.number });
+                    try doc.appendChild(scope.parent, node);
+                    i += 1;
+                },
+                .acronym => |a| {
+                    // The letters are a verbatim source slice; the
+                    // definition is the arena-owned title, opaque to
+                    // phrases and the character replacements (Hobix
+                    // "Acronyms").
+                    const node = try doc.createNode(.acronym, subSpan(content, a.text.start, a.title.end + 1), .{
+                        .acronym = .{
+                            .text = doc.text(subSpan(content, a.text.start, a.text.end)),
+                            .title = try doc.allocator().dupe(u8, bytesOf(doc, content, a.title)),
+                        },
+                    });
                     try doc.appendChild(scope.parent, node);
                     i += 1;
                 },
@@ -3494,6 +3565,113 @@ test "textile: non-span phrase-attribute fallbacks stay literal or plain" {
         "<p><strong>{color:red}</strong></p>\n",
         "<p>+{unclosed</p>\n",
         "<p>a — b, <small style=\"color:red;\">paired</small></p>\n",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(want, out.items);
+    }
+}
+
+test "textile: ??x?? citations render a cite with phrase attributes" {
+    const oliver = @import("oliver.zig");
+
+    // Hobix: "Use double question marks to indicate citation" —
+    // `??Cat's Cradle?? by Vonnegut` → `<cite>Cat’s Cradle</cite>` (the
+    // curly-apostrophe replacement applies inside like any phrase).
+    {
+        var result = try oliver.parse(std.testing.allocator, "??Cat's Cradle?? by Vonnegut\n", .textile, .{});
+        defer result.deinit();
+        const cite = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqual(document.Tag.cite, cite.tag);
+        try std.testing.expectEqual(source.Span{ .start = 0, .end = 16 }, cite.span);
+        try std.testing.expectEqual(@as(usize, 1), cite.children.items.len);
+        try std.testing.expectEqualStrings("Cat’s Cradle", cite.children.items[0].data.text);
+        try std.testing.expectEqual(source.Span{ .start = 2, .end = 14 }, cite.children.items[0].span);
+    }
+    // `??` is a phrase operator: it accepts the phrase-attribute run and
+    // nests the other operators through the shared machinery.
+    {
+        var result = try oliver.parse(std.testing.allocator, "??{color:red}*b*??\n", .textile, .{});
+        defer result.deinit();
+        const cite = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), cite.data.phrase.attrs.len);
+        try std.testing.expectEqualStrings("style", cite.data.phrase.attrs[0].name);
+        try std.testing.expectEqualStrings("color:red;", cite.data.phrase.attrs[0].value);
+        try std.testing.expectEqual(document.Tag.strong, cite.children.items[0].tag);
+    }
+    // The same fallback contract as the family: a lone `?` or a run of 3+
+    // is literal, a malformed/whitespace mods run is not an opener, and a
+    // run with no content after it falls back to a plain cite whose
+    // content includes the run bytes.
+    const cases = [_][]const u8{
+        "Really??",
+        "???x???",
+        "??{bad x??",
+        "??{x} y??",
+        "??{color:red}??",
+    };
+    const expected = [_][]const u8{
+        "<p>Really??</p>\n",
+        "<p>???x???</p>\n",
+        "<p>??{bad x??</p>\n",
+        "<p>??{x} y??</p>\n",
+        "<p><cite>{color:red}</cite></p>\n",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(want, out.items);
+    }
+}
+
+test "textile: ABC(def) acronyms carry the definition as the title" {
+    const oliver = @import("oliver.zig");
+
+    // Hobix: "Definitions for acronyms can be provided by following an
+    // acronym with its definition in parens." — `CSS(Cascading Style
+    // Sheets)` → `<acronym title="Cascading Style Sheets">CSS</acronym>`.
+    {
+        var result = try oliver.parse(std.testing.allocator, "We use CSS(Cascading Style Sheets).\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        const acr = p.children.items[1];
+        try std.testing.expectEqual(document.Tag.acronym, acr.tag);
+        try std.testing.expectEqual(source.Span{ .start = 7, .end = 34 }, acr.span);
+        try std.testing.expectEqualStrings("CSS", acr.data.acronym.text);
+        try std.testing.expectEqualStrings("Cascading Style Sheets", acr.data.acronym.title);
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<p>We use <acronym title=\"Cascading Style Sheets\">CSS</acronym>.</p>\n", out.items);
+    }
+    // A single letter, an intraword run, an empty or unclosed definition,
+    // and a two-letter acronym all follow the conservative contract.
+    const cases = [_][]const u8{
+        "I(think)",
+        "xCSS(no)",
+        "CSS()",
+        "CSS(open",
+        "US(United States)",
+    };
+    const expected = [_][]const u8{
+        "<p>I(think)</p>\n",
+        "<p>xCSS(no)</p>\n",
+        "<p>CSS()</p>\n",
+        "<p>CSS(open</p>\n",
+        "<p><acronym title=\"United States\">US</acronym></p>\n",
     };
     for (cases, expected) |input, want| {
         var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
