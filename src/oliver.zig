@@ -26,6 +26,11 @@ pub const document = @import("document.zig");
 pub const markdown = @import("markdown.zig");
 pub const textile = @import("textile.zig");
 pub const html = @import("html.zig");
+/// Cooklang: a first-class frontend with its own typed `Recipe` model (not
+/// the Markdown/Textile document IR). See docs/COOKLANG.md.
+pub const cooklang = @import("cooklang.zig");
+/// The deterministic Cooklang HTML rendering policy (docs/COOKLANG.md §C).
+pub const cooklang_html = @import("cooklang_html.zig");
 
 pub const version = "0.0.0";
 

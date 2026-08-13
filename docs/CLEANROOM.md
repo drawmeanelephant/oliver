@@ -487,4 +487,46 @@ dropped because the `.html_block` leaf carries no attribute list) are
 all Oliver's conservative readings of the docs' three sentences; no
 Textile parser implementation source was consulted.
 
+Session 21 (C1 Cooklang frontend) provenance record: all Cooklang
+material comes from the official published specification,
+conventions, released proposals, EBNF, canonical corpus, and examples.
+Exact sources and revisions:
+
+- Specification: https://cooklang.org/docs/spec/ (fetched 2026-08-13).
+- Repository `cooklang/spec` at commit
+  `6c4788644004e604ae1da110af6d2400e3c9c7b0` (2026-04-10, MIT):
+  `EBNF.md` (explicitly marked WIP/outdated), `conventions.md`,
+  `tests/canonical.yaml` (version 7, 60 tests), `tests/README.md`,
+  `examples/*.cook` (4 recipes), and the Released proposals
+  `0005-note-blocks.md` and `0006-sections.md`.
+
+No parser implementation source was consulted: cooklang-rs, CookCLI
+internals, tree-sitter grammars, and every third-party parser listed on
+cooklang.org/docs/for-developers/ were explicitly excluded. The
+canonical corpus is the executable conformance evidence (vendored at
+`tests/cooklang/canonical.yaml` with its LICENSE and README); the
+conformance harness compares against it without any implementation
+behavior leaking in.
+
+Chosen-behavior findings (all narrowest-defensible from published
+material, pinned by Oliver-owned tests): (1) the EBNF is outdated
+relative to the spec/proposals (no frontmatter/sections/preps/refs),
+so the spec governs those; (2) the EBNF's multiword name runs to the
+first `{` on the line — the raw EBNF reading would name the whole run
+up to the first `{`, but the current spec page's own example ("Add
+@salt and @ground black pepper{}") proves `@salt` stays single-word,
+so the name region also stops early at a following token marker
+(`@`/`#`/`~`), at P-category punctuation, and at non-`-`/`.`/`/`
+boundaries — pinned by Oliver-owned tests; (3) single-word boundaries
+are Unicode whitespace or **P-category punctuation only** — the
+corpus's `@🧂` (So) requires a P-only predicate, so `src/unicode.zig`
+gains a deliberately generalized `isPunctuationP` primitive; (4)
+invalid tokens degrade to text per the corpus's invalid tests (those
+near-misses stay silent); (5) structural malformation not pinned by
+the corpus — an unclosed `[-`, an unclosed `{`, an unclosed `(`
+preparation, a never-closed frontmatter fence — degrades to literal
+text *and* emits a structured warning diagnostic (literal-fallback
+policy, four stable codes); (6) frontmatter requires both fences at
+the file start.
+
 No Markdown or Textile parser implementation source was consulted.

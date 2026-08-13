@@ -34,6 +34,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T23 dl. definition lists | Textile 2's `dl. term:definition` → `<dl>`/`<dt>`/`<dd>`, converging on the shared list model (a `.definition` kind + role-bearing `.list_item` payload); multi-line definitions, `dl<mods>.` attrs, the term-run rule, literal signature fallbacks; Markdown untouched | after T22 | merged on main (PR #38) |
 | Textile worker | T24 clear. marker | Textile 2's lone `clear.`/`clear<.`/`clear>.` line parks a CSS fragment (`clear:both`/`left`/`right`) that the next block folds ahead of its own style via the §8 block-attribute machinery; applies to every block family, closes open extended blocks, literal lookalikes; Markdown untouched | after T23 | merged on main (PR #40) |
 | Textile worker | T25 notextile. raw passthrough | the audit's last deferral: `notextile.`/`notextile..` (current Textile docs "No formatting"; Textile 2 uses `==` instead) opens a raw block emitted as one `.html_block` leaf — unformatted, unescaped, CRLF preserved — the signature form of the `==` escape; single-period blank termination, extended runs to the next signature, bare-marker blocks, literal lookalikes; Markdown untouched | after T24 | merged on main (PR #41) |
+| Cooklang worker | CK1 Cooklang frontend | a first-class `*.cook` frontend: a typed Recipe model (blocks/steps/ingredients/cookware/timers/notes/sections/preps/recipe-refs/frontmatter) with exact spans, built from the official spec + EBNF + canonical corpus (pinned revision, MIT) under clean-room rules; canonical conformance harness; Oliver-owned tests; deterministic HTML policy; `--from cooklang` CLI; Markdown/Textile untouched | after the Textile audit (T1–T25) | merged (PR #43) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -923,13 +924,56 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   pass that followed (TEXTILE-PARITY §24) re-verified every matrix row
   against the live renderer, corrected the fixture count to 275 Markdown
   / 105 Textile pairs, and closed the audit with a coverage scorecard —
-  the deferral pile is empty.
+  the deferral pile is empty.## CK1 — Cooklang frontend
+
+- **Objective:** add Cooklang as a first-class Oliver frontend: bytes → a
+  typed Recipe semantic model with exact source spans and structured
+  diagnostics, plus a deterministic HTML rendering policy and CLI
+  access, without touching Markdown/Textile (gate stays 652/652).
+- **Normative sources:** the official Cooklang specification
+  (https://cooklang.org/docs/spec/), the `cooklang/spec` repository at
+  commit `6c4788644004e604ae1da110af6d2400e3c9c7b0` (EBNF — marked
+  WIP/outdated — conventions, released proposals 0005/0006, the
+  canonical test corpus `tests/canonical.yaml` version 7, examples),
+  all MIT. Full provenance and the chosen-behavior record in
+  docs/CLEANROOM.md session 21 and docs/COOKLANG.md.
+- **Dependencies:** `src/source.zig` spans, `src/diagnostic.zig`,
+  arena ownership, `unicode.isWhitespace` + a new P-only punctuation
+  predicate, `source.Lines`. No filesystem/network/global state in the
+  parser.
+- **Seams:** `src/cooklang.zig` (typed Recipe model + parser),
+  `src/cooklang_html.zig` (Oliver-owned HTML policy),
+  `tools/cooklang_conformance.zig` (canonical wall),
+  `tests/fixtures/cooklang/`, `src/unicode.zig` (P-only predicate),
+  `src/main.zig` (`--from cooklang`), `build.zig`
+  (`cooklang-conformance` step), public API `oliver.cooklang.parse`.
+- **Acceptance:** the full canonical corpus passes; every semantic
+  family has Oliver-owned unit/fixture/adversarial tests; malformed
+  input degrades to text deterministically (no crash/hang, no
+  pathological rescans); the 652/652 CommonMark gate and the Textile
+  suite stay green; docs (README, ARCHITECTURE, FEATURE-MATRIX,
+  DOCUMENT-MODEL/COOKLANG, TESTS, CLEANROOM, WORK-LEDGER, CLI)
+  describe the resulting capability.
+- **Tests:** canonical conformance wall (60 tests), Oliver-owned unit
+  tests per family, fixture pairs, adversarial/resource tests,
+  deterministic repeat-render checks.
+- **Parallelism:** no (touchpoints: unicode.zig, oliver.zig, main.zig,
+  build.zig, fixtures_test.zig, docs).
+- **Integration:** after the Textile audit; the CommonMark gate is
+  re-verified at every commit.
+- **State:** merged on main (PR #43). 206/206 tests green; Cooklang
+  canonical conformance 60/60; CommonMark gate still 652/652 with 0
+  mismatches; Textile suite untouched. Parser (typed Recipe: steps,
+  ingredients, cookware, timers, notes, sections, preparations, recipe
+  references, frontmatter boundary), structured diagnostics (four
+  warning codes, literal-fallback policy), conformance harness, 4
+  fixture pairs + adversarial storms, deterministic HTML policy, and
+  `--from cooklang` CLI all landed. Remaining stretch goals recorded
+  in docs/COOKLANG.md §9.
 
 ## C1 — Classified conformance expectations
 
-- **Objective:** bind the conformance harness to the exact 0.31.2 corpus and
-  classify each example as supported, not-yet-implemented, or a named Oliver
-  divergence.
+- **Objective:** bind the conformance harness to the exact 0.31.2 corpus and classify each example as supported, not-yet-implemented, or a named Oliver divergence.
 - **Normative source:** official CommonMark 0.31.2 `spec.txt` and its license.
 - **Dependencies:** none; keep parser semantics out of scope.
 - **Expected seams:** `tools/spec_conformance.zig`, versioned expectation data,

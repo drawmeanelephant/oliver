@@ -2,9 +2,10 @@
 
 Tests are product contracts. `zig build test` runs three suites:
 
-1. **Library module tests** — 147 `test` blocks inside `src/*.zig` covering
+1. **Library module tests** — 188 `test` blocks inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
-   frontends, Unicode case folding, the HTML renderer, and the public API.
+   frontends, the Cooklang frontend, Unicode case folding, the HTML
+   renderers, and the public API.
    Markdown tests pin the container stack, thematic-break/list precedence,
    multiline Setext transformation, reference-definition interaction,
    terminal-backslash behavior, fenced-code payload/spans, every implemented
@@ -137,7 +138,13 @@ Tests are product contracts. `zig build test` runs three suites:
    docs/TEXTILE-PARITY.md §18). Every Textile fixture family in the
    index is counted in the final coverage scorecard,
    docs/TEXTILE-PARITY.md §24 — one fixture pair per row, summing to the
-   105 Textile pairs here. The suite also
+   105 Textile pairs here. The Cooklang wall covers the semantic
+   families end-to-end through Oliver's deterministic HTML policy
+   (`cooklang-basic`, `cooklang-sections`, `cooklang-frontmatter`,
+   `cooklang-literal`; docs/COOKLANG.md) plus adversarial storms
+   (huge marker/brace runs, thousands of adjacent ingredients, deep
+   preparations, an unterminated block comment, 5,000 steps, a 100 KB
+   single line) that must render twice to identical bytes. The suite also
    verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
    deterministic repeat rendering (list stress: 2k nested items, 10k
@@ -151,7 +158,13 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **203/203 tests passing** with Zig 0.16.0.
+The current complete result is **206/206 tests passing** with Zig 0.16.0
+(188 library module tests + 11 fixture/adversarial tests + 7
+conformance-harness tests). On top of the unit gate: the CommonMark
+0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the
+Textile wall stays fully green, and the Cooklang canonical corpus passes
+**60/60** via `zig build cooklang-conformance -- canonical.yaml`
+(vendored provenance in docs/COOKLANG.md §2).
 
 ## Fixture convention
 
@@ -162,7 +175,8 @@ tests/fixtures/<dialect>/<name>.<ext>   # input
 tests/fixtures/<dialect>/<name>.html    # exact expected output
 ```
 
-- `<ext>` is `.md` for Markdown and `.textile` for Textile.
+- `<ext>` is `.md` for Markdown, `.textile` for Textile, and `.cook` for
+  Cooklang.
 - Expected output is compared byte for byte. Generated block output ends in
   `\n`; raw HTML may preserve source line-ending bytes inside its span.
 - Dialects have separate directories even when their normalized documents
@@ -196,7 +210,16 @@ reference links/images, definitions, autolinks, inline raw HTML, block quotes,
 fenced code blocks, thematic breaks, Setext headings, escapes, breaks, paragraphs, and ATX
 headings. The Textile wall covers the same families through the Textile
 syntax plus the Textile-only phrase modifiers, links, images, and lists
-(docs/TEXTILE-PARITY.md §5). The leaf-block slice adds four thematic-break fixture groups, eight
+(docs/TEXTILE-PARITY.md §5). The Cooklang wall covers every semantic
+family (single-word and braced ingredients, integer/fraction/unit
+quantities, fixed and absent quantities, preparations, text interleaving,
+cookware, unnamed/named timers, multiple semantic items per step,
+blank-line steps, forced line breaks, line/block comments, notes,
+sections and their marker forms, recipe references, YAML front matter
+boundaries, malformed delimiters, near misses that stay literal, empty
+input, Unicode, CRLF/LF, NUL/malformed UTF-8, exact spans, and
+structured diagnostics) — see src/cooklang.zig's 22 unit tests and the
+60-test canonical corpus. The leaf-block slice adds four thematic-break fixture groups, eight
 Setext groups, a terminal-backslash fixture, exact AST/span tests, renderer
 profile tests, and a deterministic 10,000-cycle heading/break workload. The
 fenced-code slice adds 13 fixture groups spanning the normative rule families,

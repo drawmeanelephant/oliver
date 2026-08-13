@@ -3,18 +3,20 @@
 A small, freestanding markup parsing and rendering library in Zig.
 
 ```text
-Markdown ─┐
-          ├─> normalized typed document ─> deterministic HTML
-Textile ──┘
+Markdown ──> normalized typed document ──> deterministic HTML
+Textile ───> normalized typed document ──> deterministic HTML
+Cooklang ──> typed Recipe (its own model) ─> deterministic HTML policy
 ```
 
 Oliver is **markup infrastructure**: it parses a byte slice, produces a typed
-document, and renders it deterministically. Filesystem, templates, site
+document (or, for Cooklang, a typed Recipe), and renders it deterministically.
+Filesystem, templates, site
 graphs, plugins, publication — none of that lives here; consumers build it
 around Oliver.
 
 Oliver is a **clean-room implementation** of the *behavior* specified by the
-CommonMark specification and the published Textile syntax documentation. It
+CommonMark specification, the published Textile syntax documentation, and the
+published Cooklang specification and canonical test corpus. It
 does not study or imitate existing parser implementations. See
 [docs/CLEANROOM.md](docs/CLEANROOM.md).
 
@@ -86,6 +88,16 @@ the next block folds ahead of its own style), and `notextile.`/
 `notextile..` raw passthrough (block content emitted unformatted
 and unescaped, `<em>` staying a real tag),
 structured diagnostics, and a provisional CLI.
+The **Cooklang frontend** (`docs/COOKLANG.md`) is a first-class third
+frontend with its own typed Recipe model — not the Markdown/Textile
+document IR — preserving ingredient/cookware/timer semantics, quantities
+and units as source text, shorthand preparations, recipe references
+(parsed, never resolved), steps with forced line breaks, notes, sections,
+`--`/`[- -]` comments, and the YAML front-matter boundary (recognized,
+raw payload preserved, never faked as parsed YAML). It passes the official
+canonical corpus 60/60 (`zig build cooklang-conformance -- canonical.yaml`)
+and ships a deterministic Oliver-owned HTML policy
+(`src/cooklang_html.zig`) plus `oliver render --from cooklang`.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
 implemented, planned, and deferred. The emphasis/strong algorithm contract
@@ -107,6 +119,9 @@ attributes, and image modifiers — is
 [docs/TEXTILE-PARITY.md](docs/TEXTILE-PARITY.md).
 The GFM tables extension contract is
 [docs/TABLES.md](docs/TABLES.md).
+The Cooklang frontend's design contract, source hierarchy, provenance,
+model, diagnostics policy, and the Oliver/Boris boundary is
+[docs/COOKLANG.md](docs/COOKLANG.md).
 Code spans, links, images, autolinks, and raw HTML ride the same
 scan → match → emit seam.
 
@@ -162,8 +177,9 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (183 tests)
+zig build test    # run all tests (206 tests)
 zig build         # build the static library and CLI into zig-out/
+zig build cooklang-conformance -- path/to/canonical.yaml   # Cooklang corpus
 ```
 
 ## Library use
@@ -179,15 +195,28 @@ defer aw.deinit();
 try oliver.html.render(allocator, &aw.writer, &result.document, .{});
 ```
 
-The caller supplies the allocator; the document owns an arena and borrows the
+Cooklang parses into its own typed model through an explicit entry point
+(the result is a `Recipe`, not a `document.Document`):
+
+```zig
+const cooked = try oliver.cooklang.parse(allocator, recipe_bytes, .{});
+defer cooked.deinit();
+// cooked.recipe.blocks / .frontmatter / .diagnostics
+
+try oliver.cooklang_html.render(allocator, &aw.writer, &cooked.recipe, .{});
+```
+
+The caller supplies the allocator; the document (or recipe) owns an arena and
+borrows the
 input bytes; rendering streams to any writer. No global state, no hidden
 caches, deterministic output.
 
 ## CLI (provisional)
 
 ```bash
-oliver render --from markdown < document.md > document.html
-oliver render --from textile  < document.textile
+oliver render --from markdown  < document.md
+oliver render --from textile   < document.textile
+oliver render --from cooklang  < recipe.cook
 ```
 
 A thin stdin/stdout adapter — all semantics live in the library.
