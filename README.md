@@ -163,6 +163,8 @@ src/                        the library + provisional CLI
 tests/                      fixture-driven tests (fixtures live here too)
 docs/                       clean-room rules, architecture, feature matrix,
                             document model, test conventions, session report
+.github/                    CI gate (workflow) and the draft main-branch
+                            protection ruleset (BRANCH-PROTECTION.md)
 ```
 
 ## Design values

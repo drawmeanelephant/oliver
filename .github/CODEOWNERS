@@ -1,0 +1,5 @@
+# Every path requires review by the repository owner.
+# Pairs with "Require review from Code Owners" in the "Protect main"
+# ruleset (.github/BRANCH-PROTECTION.md). Update the handle if ownership
+# moves to a team.
+* @drawmeanelephant
