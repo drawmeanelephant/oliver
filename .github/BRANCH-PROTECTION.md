@@ -1,9 +1,12 @@
-# Main-branch protection (draft, ready to apply)
+# Main-branch protection
 
-Draft configuration for protecting `main`. It is deliberately **not yet
-enabled** — it needs repository-admin access to apply, either through the
-GitHub UI or the Rulesets API. The one check the ruleset requires is the CI
-job from `.github/workflows/ci.yml`:
+The `Protect main` ruleset is **applied and active** on this repository
+(`enforcement: active`, `bypass_actors: []`). This document is the
+source of truth for what it enforces, how it was applied, and what to
+flip when the project gains a second contributor.
+
+The one check the ruleset requires is the CI job from
+`.github/workflows/ci.yml`:
 
 > **`fmt + tests + conformance gate`** — runs `zig fmt --check`, `zig build
 > test` (148 tests), fetches the official CommonMark 0.31.2 corpus, and
@@ -12,61 +15,48 @@ job from `.github/workflows/ci.yml`:
 If that check name ever changes (for example if the CI job is renamed or
 split), update the ruleset to match, or merges to `main` will block.
 
-## Option 1 — Apply in the GitHub UI
+## What the ruleset enforces
 
-Repository **Settings → Rules → Rulesets → New ruleset → New branch
-ruleset**:
+- **Pull requests only** — no direct pushes to `main`. In a solo repo the
+  only path in is a PR, and with `bypass_actors: []` even the repository
+  admin cannot force a merge.
+- **Required CI check** — `fmt + tests + conformance gate` must pass, with
+  *branches up to date* (`strict_required_status_checks_policy: true`), so
+  every merge runs against the latest `main`.
+- **Solo mode: `required_approving_review_count: 0`** — GitHub does not
+  allow a PR author to approve their own pull request (verified
+  empirically: `GraphQL: Review Can not approve your own pull request`),
+  so with 1 required approval and one contributor, every PR deadlocks and
+  `main` becomes unmergeable. With 0 approvals the status check is the
+  gate: green CI = mergeable.
+- **Block force pushes** (`non_fast_forward`) and **block branch
+  deletion** (`deletion`).
+- **No bypass** — `bypass_actors: []`; nobody, not even the admin, skips
+  the rules.
 
-1. **Name:** `Protect main`
-2. **Enforcement status:** `Active`
-3. **Bypass list:** remove every actor (the default entry is *Repository
-   admin*). An empty list is the "no bypass" ask — nobody, not even the
-   admin, skips the rules. If you later want an admin escape hatch, add the
-   `Repository admin` role back deliberately.
-4. **Targets:** `Include default branch` (this follows the default branch
-   even if it is ever renamed).
-5. **Rules** — add:
-   - **Require a pull request before merging**
-     - Required approvals: `1`
-     - *Dismiss stale pull request approvals when new commits are pushed*:
-       ON (a new push re-runs the gate)
-     - *Require review from Code Owners*: ON (pairs with
-       `.github/CODEOWNERS`)
-     - *Require conversation resolution before merging*: ON
-     - *Require the most recent push to be approved by someone other than
-       the person who pushed it*: OFF for now (solo repo; turn ON when a
-       second contributor joins)
-   - **Require status checks to pass before merging**
-     - Add check: search and select `fmt + tests + conformance gate`
-     - *Require branches to be up to date before merging*: ON
-   - **Block force pushes**: ON
-   - **Block branch deletion**: ON (optional but recommended)
-6. **Create.**
+## When a second contributor joins
 
-For comparison, the equivalent classic branch-protection route is
-Settings → Branches → *Add branch protection rule* for `main`, checking
-*Require a pull request*, *Require status checks*, and *Do not allow
-bypassing the above settings* — but **rulesets are preferred** (they
-supersede branch protection and apply the "no bypass" setting cleanly).
+In one edit to `.github/ruleset-main.json` (then `PATCH` via the API, or
+the UI toggles), flip the solo-mode values back to collaborative mode:
 
-## Option 2 — Apply via the Rulesets API
+- `required_approving_review_count`: `0` → `1`
+- `require_code_owner_review`: `false` → `true` (pairs with
+  `.github/CODEOWNERS`)
+- `require_last_push_approval`: keep `false` unless you want the final
+  push to a PR approved by someone other than the pusher.
 
-The identical ruleset is ready in `.github/ruleset-main.json`. Requires an
+Keep everything else (status checks, strict policy, no bypass, force-push
+and deletion blocks) unchanged.
+
+## Reapplying or modifying
+
+UI: Repository **Settings → Rules → Rulesets → Protect main** → Edit.
+
+API: `.github/ruleset-main.json` is the current payload. With an
 admin-scoped token (repo *Administration* write permission):
 
 ```bash
-gh api --method POST repos/drawmeanelephant/oliver/rulesets --input .github/ruleset-main.json
-```
-
-Or with a personal access token:
-
-```bash
-curl -X POST \
-  -H "Accept: application/vnd.github+json" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "X-GitHub-Api-Version: 2026-03-10" \
-  https://api.github.com/repos/drawmeanelephant/oliver/rulesets \
-  -d @.github/ruleset-main.json
+gh api --method PUT repos/drawmeanelephant/oliver/rulesets/<id> --input .github/ruleset-main.json
 ```
 
 Notes on the JSON:
@@ -75,14 +65,11 @@ Notes on the JSON:
   ask). Omitting the field instead allows repository admins to bypass.
 - `strict_required_status_checks_policy: true` — the "branches up to date"
   requirement.
-- `require_last_push_approval: false` — a solo developer cannot approve
-  their own final push; flip to `true` when a second contributor joins.
 - `allowed_merge_methods` is intentionally omitted: all of merge, squash,
   and rebase stay permitted.
 
 ## Pairing files
 
-- `.github/CODEOWNERS` — every path is owned by the repository owner; with
-  *Require review from Code Owners* ON, the owner must approve changes
-  even from future collaborators.
+- `.github/CODEOWNERS` — every path is owned by the repository owner;
+  relevant once `require_code_owner_review` is turned back on.
 - `.github/workflows/ci.yml` — the gate whose check this ruleset requires.
