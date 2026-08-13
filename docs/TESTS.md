@@ -2,10 +2,10 @@
 
 Tests are product contracts. `zig build test` runs three suites:
 
-1. **Library module tests** — 188 `test` blocks inside `src/*.zig` covering
+1. **Library module tests** — 212 `test` blocks inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
-   frontends, the Cooklang frontend, Unicode case folding, the HTML
-   renderers, and the public API.
+   frontends, the Cooklang frontend (parser + canonical serializer),
+   Unicode case folding, the HTML renderers, and the public API.
    Markdown tests pin the container stack, thematic-break/list precedence,
    multiline Setext transformation, reference-definition interaction,
    terminal-backslash behavior, fenced-code payload/spans, every implemented
@@ -31,7 +31,7 @@ Tests are product contracts. `zig build test` runs three suites:
    10,000-pair phrase storm, and a 2,000-deep phrase-nesting workload.
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
-2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
+2. **Fixture and adversarial tests** — 12 tests in `tests/fixtures_test.zig`.
    The explicit index contains 275 Markdown and 105 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
@@ -141,7 +141,10 @@ Tests are product contracts. `zig build test` runs three suites:
    105 Textile pairs here. The Cooklang wall covers the semantic
    families end-to-end through Oliver's deterministic HTML policy
    (`cooklang-basic`, `cooklang-sections`, `cooklang-frontmatter`,
-   `cooklang-literal`; docs/COOKLANG.md) plus adversarial storms
+   `cooklang-literal`; docs/COOKLANG.md) and the canonical serializer
+   round-trip pairs (`serialize-basic`, `serialize-literal` — input
+   `.cook` → expected canonical `.cook`, pinning the fixed-point and
+   literal/degraded round trips; docs/COOKLANG.md §10) plus adversarial storms
    (huge marker/brace runs, thousands of adjacent ingredients, deep
    preparations, an unterminated block comment, 5,000 steps, a 100 KB
    single line) that must render twice to identical bytes. The suite also
@@ -158,13 +161,15 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **206/206 tests passing** with Zig 0.16.0
-(188 library module tests + 11 fixture/adversarial tests + 7
+The current complete result is **231/231 tests passing** with Zig 0.16.0
+(212 library module tests + 12 fixture/adversarial tests + 7
 conformance-harness tests). On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the
 Textile wall stays fully green, and the Cooklang canonical corpus passes
-**60/60** via `zig build cooklang-conformance -- canonical.yaml`
-(vendored provenance in docs/COOKLANG.md §2).
+**60/60** via `zig build cooklang-conformance` (bare: the vendored
+corpus `tests/cooklang/canonical.yaml` is the default — provenance in
+docs/COOKLANG.md §2 — and the harness additionally asserts the
+serializer's semantic fixed point over every corpus source).
 
 ## Fixture convention
 

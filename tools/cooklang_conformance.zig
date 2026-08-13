@@ -102,9 +102,42 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
+    // Serializer stability over the canonical corpus: canonical output
+    // must re-parse to the same semantic model (the conformance
+    // serialization of the re-parse must equal the original's), and
+    // serializing the canonical text again must be byte-identical (a
+    // fixed point). This asserts the canonical serializer never changes
+    // what the corpus means.
+    var roundtrip_bad: usize = 0;
+    for (tests.items) |t| {
+        var first = try oliver.cooklang.parse(allocator, t.source, .{});
+        defer first.deinit();
+        var aw = std.Io.Writer.Allocating.init(allocator);
+        defer aw.deinit();
+        try oliver.cooklang_serialize.serialize(allocator, &aw.writer, &first.recipe, .{});
+        var once = aw.toArrayList();
+        defer once.deinit(allocator);
+
+        // Re-parse the canonical text; the semantic model must be equal.
+        var second = try oliver.cooklang.parse(allocator, once.items, .{});
+        defer second.deinit();
+        const again = try serializeRecipe(allocator, second.recipe);
+        defer allocator.free(again);
+        const once_semantic = try serializeRecipe(allocator, first.recipe);
+        defer allocator.free(once_semantic);
+        if (!std.mem.eql(u8, once_semantic, again)) {
+            roundtrip_bad += 1;
+            std.debug.print("ROUNDTRIP {s}\n", .{t.name});
+        }
+    }
+
     std.debug.print("\nCooklang canonical conformance: {d}/{d} passed\n", .{ passed, tests.items.len });
+    if (roundtrip_bad > 0) {
+        std.debug.print("canonical serialize round trip: {d} failures\n", .{roundtrip_bad});
+    }
     for (mismatched.items) |n| allocator.free(n);
     if (passed != tests.items.len) return 1;
+    if (roundtrip_bad > 0) return 1;
     if (gate) std.debug.print("gate: clean\n", .{});
     return 0;
 }

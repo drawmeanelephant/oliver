@@ -31,6 +31,19 @@ pub const html = @import("html.zig");
 pub const cooklang = @import("cooklang.zig");
 /// The deterministic Cooklang HTML rendering policy (docs/COOKLANG.md §C).
 pub const cooklang_html = @import("cooklang_html.zig");
+/// The canonical Cooklang serializer (semantic Recipe -> valid .cook;
+/// docs/COOKLANG.md §10).
+pub const cooklang_serialize = @import("cooklang_serialize.zig");
+
+comptime {
+    // The Cooklang modules have their own entry points and are never
+    // referenced from `parse`/`html.render`, so Zig's lazy analysis would
+    // drop them — and their unit tests with them — from the library test
+    // binary. Force analysis so `zig build test` runs the Cooklang
+    // parser and serializer unit tests (docs/TESTS.md).
+    _ = cooklang;
+    _ = cooklang_serialize;
+}
 
 pub const version = "0.0.0";
 

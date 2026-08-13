@@ -1,8 +1,9 @@
 //! Provisional CLI: a thin adapter over the library for shell integration.
 //!
-//!     oliver render --from markdown < document.md > document.html
-//!     oliver render --from textile  < document.textile
-//!     oliver render --from cooklang < recipe.cook
+//!     oliver render    --from markdown < document.md > document.html
+//!     oliver render    --from textile  < document.textile
+//!     oliver render    --from cooklang < recipe.cook
+//!     oliver serialize --from cooklang < recipe.cook > canonical.cook
 //!
 //! All parser and renderer semantics live in the library; this file only
 //! handles arguments and stdio. It uses the Zig 0.16 `std.process.Init`
@@ -20,6 +21,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     var dialect: ?oliver.Dialect = null;
     var cooklang = false;
+    var serialize = false;
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--from")) {
             const value = it.next() orelse return usage();
@@ -32,11 +34,16 @@ pub fn main(init: std.process.Init) !u8 {
             } else return usage();
         } else if (std.mem.eql(u8, arg, "render")) {
             // Subcommand; the dialect flag is what matters.
+        } else if (std.mem.eql(u8, arg, "serialize")) {
+            serialize = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return usage();
         } else return usage();
     }
     if (!cooklang and dialect == null) return usage();
+    // Serialization is a Cooklang capability only (Markdown/Textile have
+    // no canonical form; the shared renderer is the output for those).
+    if (serialize and !cooklang) return usage();
 
     // Read all of stdin into memory.
     var input = std.ArrayList(u8).empty;
@@ -62,10 +69,17 @@ pub fn main(init: std.process.Init) !u8 {
             return 1;
         };
         defer result.deinit();
-        oliver.cooklang_html.render(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
-            std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
-            return 1;
-        };
+        if (serialize) {
+            oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
+                std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
+                return 1;
+            };
+        } else {
+            oliver.cooklang_html.render(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
+                std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
+                return 1;
+            };
+        }
     } else {
         const d = dialect.?;
         var result = oliver.parse(gpa, input.items, d, .{}) catch |err| {
@@ -85,8 +99,10 @@ pub fn main(init: std.process.Init) !u8 {
 fn usage() u8 {
     std.debug.print(
         \\usage: oliver render --from <markdown|textile|cooklang>
+        \\       oliver serialize --from cooklang
         \\
-        \\Reads a document from stdin and writes rendered HTML to stdout.
+        \\Reads a document from stdin and writes rendered HTML (or, for
+        \\serialize, canonical Cooklang text) to stdout.
         \\
     , .{});
     return 1;

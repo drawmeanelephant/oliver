@@ -37,3 +37,10 @@ jobs:
 
       - name: Classified conformance gate (652/652)
         run: zig build spec-conformance -- spec.txt --gate
+
+      # The Cooklang canonical wall runs the vendored corpus
+      # (tests/cooklang/canonical.yaml, pinned commit, digest-bound) — no
+      # network needed — and additionally asserts the serializer's
+      # semantic fixed point over every corpus source.
+      - name: Cooklang canonical conformance gate (60/60)
+        run: zig build cooklang-conformance
