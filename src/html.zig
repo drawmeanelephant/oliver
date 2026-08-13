@@ -267,11 +267,24 @@ fn writeOpen(
                         try writer.writeAll(tag);
                     }
                 },
+                .definition => {
+                    // Textile `dl.` definition list (Textile 2
+                    // "Definition lists"); its items render `<dt>`/`<dd>`.
+                    // A `dl<mods>.` signature's attrs land on the `<dl>`.
+                    try writer.writeAll("<dl");
+                    try writeAttrs(writer, list.attrs);
+                    try writer.writeAll(">\n");
+                },
             }
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .list_item => {
-            try writer.writeAll("<li>");
+            // Textile definition-list items carry their role (term →
+            // `<dt>`, definition → `<dd>`); plain list items are `<li>`.
+            switch (node.data) {
+                .list_item => |li| try writer.writeAll(if (li.role == .definition) "<dd>" else "<dt>"),
+                else => try writer.writeAll("<li>"),
+            }
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .paragraph => {
@@ -472,9 +485,15 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
             switch (node.data.list.kind) {
                 .bullet => try writer.writeAll("</ul>\n"),
                 .ordered => try writer.writeAll("</ol>\n"),
+                .definition => try writer.writeAll("</dl>\n"),
             }
         },
-        .list_item => try writer.writeAll("</li>\n"),
+        .list_item => {
+            switch (node.data) {
+                .list_item => |li| try writer.writeAll(if (li.role == .definition) "</dd>\n" else "</dt>\n"),
+                else => try writer.writeAll("</li>\n"),
+            }
+        },
         .paragraph => {
             if (suppress_p) {
                 // Tight-list paragraphs are inline content of `<li>`; a
