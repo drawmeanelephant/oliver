@@ -296,4 +296,29 @@ Textile parser implementation source was consulted; the boundary and
 fallback pins in docs/TEXTILE-PARITY.md §14 are Oliver's conservative
 deterministic rules, derived from the user-facing prose above.
 
+Session 12 (T17 line attributes) finding:
+
+- Movable Type "Textile 2 Syntax" "Block Formatting"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html>
+  — the only pipe-delimited block parameter is the **`|filter|`**
+  filter form ("A filter may be invoked to further format the text for
+  this signature"); there is no pipe-attribute paragraph form.
+- Checked and confirmed absent in: Hobix Textile Reference
+  <https://hobix.com/textile/>, the current Textile docs
+  <https://textile-lang.com/> (including the paragraphs and category
+  pages), the original Dean Allen reference (archived textism.com),
+  the RedCloth reference manual, Learn X in Y Minutes
+  <https://learnxinyminutes.com/textile/>, and the php-textile
+  README/reference.
+
+Finding: the `|...|.` pipe-attribute line form is **not** documented by
+any consulted user-facing source, so the T17 implementation follows the
+user's specification — the pipe wrapping is per-spec — while every
+modifier token and its composition is the reference-documented §8 block
+set from all three references (Hobix "Block Attributes"; Textile 2
+"Block Formatting"; the current docs "Formatting modifiers"). No
+Textile parser implementation source was consulted; the pins in
+docs/TEXTILE-PARITY.md §15 are Oliver's conservative deterministic
+rules on the user-defined grammar.
+
 No Markdown or Textile parser implementation source was consulted.
