@@ -45,6 +45,7 @@ comptime {
     // binary. Force analysis so `zig build test` runs the Cooklang
     // parser and serializer unit tests (docs/TESTS.md).
     _ = cooklang;
+    _ = cooklang_html;
     _ = cooklang_serialize;
     _ = cooklang_scale;
 }
