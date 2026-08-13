@@ -17,7 +17,7 @@ Tests are product contracts. `zig build test` runs three suites:
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 246 Markdown and 39 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 39 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -25,8 +25,12 @@ Tests are product contracts. `zig build test` runs three suites:
    marker/delimiter separation, tight/loose propagation, and quote/list
    composition),   reference links, autolinks, raw HTML, thematic breaks,
    Setext headings, fenced and indented code blocks (§4.4 chunks,
-   interruption, tab-stop indentation in markers/containers), and tab-stop
-   handling (§2.1); the Textile wall covers `bq.`
+   interruption, tab-stop indentation in markers/containers), tab-stop
+   handling (§2.1), and GFM pipe tables (the normative §4.10 examples
+   byte-for-byte plus alignment colons, escaped pipes including the
+   `<code>|</code>` code-span form, container nesting, inline-parsed
+   cells, padding/truncation, and literal non-table fallbacks;
+   docs/TABLES.md); the Textile wall covers `bq.`
    quotes, `@code@` spans, the full phrase-modifier family
    (strong/emphasis/bold/italic/del/ins/sup/sub/span, nesting, and literal
    boundary fallbacks), links (`"text":url`, titles, the bracket trick,
@@ -46,7 +50,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **148/148 tests passing** with Zig 0.16.0.
+The current complete result is **151/151 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 

@@ -15,6 +15,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | lead | M4 §2.5 entities + HTML blocks types 6/7 | entity table + decode seams; `.html_block` leaf; info/dest/title normalization | after M3 | implemented on main (uncommitted) |
 | lead | M5 HTML blocks types 1–5 | per-type terminator end conditions; type 1–6 paragraph interruption | after M4 | implemented on main (uncommitted) |
 | lead | M6 full conformance | §4.7 angle-destination separator rule; manifest/pins to 652/652 | after M5 | implemented on main (uncommitted) |
+| lead | M7 GFM tables extension | Markdown table open-leaf + header/delimiter/body parsing; `.table` family in model and HTML renderer; docs/TABLES.md contract | after M6 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -232,6 +233,38 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Integration:** after M6 (the Markdown corpus is untouched, so the
   652/652 gate is unaffected).
 - **State:** implemented on main (uncommitted). 148/148 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## M7 — GFM tables extension
+
+- **Objective:** promote the "tables (GFM extension)" row from planned to
+  implemented per recorded ambiguity 21 and issue #17: document the chosen
+  syntax first, then implement GFM §4.10 pipe tables in the Markdown
+  frontend.
+- **Normative source:** GFM spec §4.10 (github.github.com/gfm,
+  clean-room allowed); recorded ambiguity 21's update points.
+- **Dependencies:** shared model/renderer; the phase-1 paragraph open-leaf
+  and phase-2 single-line inline seams.
+- **Seams:** new `.table`/`.table_row`/`.table_cell` tags in
+  `src/document.zig` (alignment on the table, header/alignment on the
+  cell), `<table><thead><tbody>` output in `src/html.zig`, the table
+  open-leaf + delimiter-row conversion in `src/markdown.zig` (with the
+  cell code-span pipe-escape post-fix), docs/TABLES.md, Markdown
+  fixtures/index, feature matrix, model, test and ledger docs. Textile and
+  the CommonMark corpus untouched.
+- **Acceptance:** the normative §4.10 examples byte-for-byte (basic,
+  alignment incl. the single-hyphen `:-:`, escaped pipes incl.
+  `<code>|</code>`, break-at-blockquote, pipe-less body rows, mismatch
+  stays a paragraph, pad/truncate, no-`<tbody>`); containers and
+  inline-parsed cells (links/emphasis/code, reference links); non-table
+  pipe lines stay paragraphs.
+- **Tests:** 2 unit tests (node structure/alignment, escaped pipes +
+  mismatch/literal fallbacks), a renderer-only table test, and 11 Markdown
+  fixture pairs.
+- **Parallelism:** yes; Markdown + model/renderer, Textile untouched.
+- **Integration:** after M6 (corpus untouched; the 652/652 gate is
+  re-verified).
+- **State:** implemented on main (uncommitted). 151/151 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations
