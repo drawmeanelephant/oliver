@@ -1401,6 +1401,49 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/code-same-line.textile"),
         .expected = @embedFile("fixtures/textile/code-same-line.html"),
     },
+    // Textile `_`/`*` phrase modifiers, doubled semantic aliases, and
+    // line-local boundary/opacity choices are pinned in
+    // docs/TEXTILE-EMPHASIS.md.
+    .{
+        .name = "emphasis-basic",
+        .input = @embedFile("fixtures/textile/emphasis-basic.textile"),
+        .expected = @embedFile("fixtures/textile/emphasis-basic.html"),
+    },
+    .{
+        .name = "emphasis-nested",
+        .input = @embedFile("fixtures/textile/emphasis-nested.textile"),
+        .expected = @embedFile("fixtures/textile/emphasis-nested.html"),
+    },
+    .{
+        .name = "emphasis-boundaries",
+        .input = @embedFile("fixtures/textile/emphasis-boundaries.textile"),
+        .expected = @embedFile("fixtures/textile/emphasis-boundaries.html"),
+    },
+    .{
+        .name = "emphasis-opacity",
+        .input = @embedFile("fixtures/textile/emphasis-opacity.textile"),
+        .expected = @embedFile("fixtures/textile/emphasis-opacity.html"),
+    },
+    .{
+        .name = "emphasis-line-local",
+        .input = @embedFile("fixtures/textile/emphasis-line-local.textile"),
+        .expected = @embedFile("fixtures/textile/emphasis-line-local.html"),
+    },
+    .{
+        .name = "emphasis-unicode",
+        .input = @embedFile("fixtures/textile/emphasis-unicode.textile"),
+        .expected = @embedFile("fixtures/textile/emphasis-unicode.html"),
+    },
+    .{
+        .name = "emphasis-contexts",
+        .input = @embedFile("fixtures/textile/emphasis-contexts.textile"),
+        .expected = @embedFile("fixtures/textile/emphasis-contexts.html"),
+    },
+    .{
+        .name = "emphasis-nearmiss",
+        .input = @embedFile("fixtures/textile/emphasis-nearmiss.textile"),
+        .expected = @embedFile("fixtures/textile/emphasis-nearmiss.html"),
+    },
     .{
         .name = "special-chars",
         .input = @embedFile("fixtures/textile/special-chars.textile"),
@@ -1469,6 +1512,11 @@ test "shared model: equivalent inputs render identically through one renderer" {
             .markdown = "> quote",
             .textile = "bq. quote",
             .expected = "<blockquote>\n<p>quote</p>\n</blockquote>\n",
+        },
+        .{
+            .markdown = "**bold** and *em*",
+            .textile = "*bold* and _em_",
+            .expected = "<p><strong>bold</strong> and <em>em</em></p>\n",
         },
     };
     for (pairs) |p| {

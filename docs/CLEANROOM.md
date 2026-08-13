@@ -78,13 +78,15 @@ allowed; source code of parsers is not.**
 - Hobix "Textile Reference" (Dean Allen)
   <https://hobix.com/textile> — user-facing Textile syntax: paragraphs,
   `hN.` headings, `bq.` block quotations, line breaks, phrase modifiers
-  including its `@r.to_html@` code-phrase example, attributes, lists, links,
-  images, tables.
+  including its `_emphasis_`, `*strong*`, doubled emphasis/strong, and
+  `@r.to_html@` code-phrase examples, attributes, lists, links, images,
+  tables.
 - Movable Type "Textile 2 Syntax" documentation (Brad Choate)
   <https://movabletype.org/documentation/author/textile-2-syntax.html> —
   block signatures, `p.`/`hN.`/`bq.` marker rules, block-quote structure,
   `<br />` line-break policy, `==` escaping, inline `@code@`, entity escaping,
-  generic phrase-boundary/forcing guidance, tables, character replacements.
+  generic phrase-boundary/forcing guidance (including the `c*oo*l`
+  intraword near-miss), tables, character replacements.
 - Textile Markup Language Documentation, "Block quotations"
   <https://textile-lang.com/doc/block-quotations> — current user-facing
   documentation for blank-line termination of single-period `bq.`, the

@@ -53,6 +53,9 @@ The thematic-break/Setext precedence contract is
 [docs/LEAF-BLOCKS.md](docs/LEAF-BLOCKS.md).
 The fenced-code open-leaf/model/rendering contract is
 [docs/FENCED-CODE.md](docs/FENCED-CODE.md).
+The Textile `@code@` and `_`/`*` phrase contracts are
+[docs/TEXTILE-INLINE-CODE.md](docs/TEXTILE-INLINE-CODE.md) and
+[docs/TEXTILE-EMPHASIS.md](docs/TEXTILE-EMPHASIS.md).
 Code spans, links, images, autolinks, and raw HTML ride the same
 scan → match → emit seam.
 
@@ -70,7 +73,7 @@ wall (see docs/TESTS.md for the current 546/652 scorecard and how to fetch
 the spec).
 
 ```bash
-zig build test    # run all tests (130 tests)
+zig build test    # run all tests (135 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 

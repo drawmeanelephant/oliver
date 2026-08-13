@@ -160,7 +160,7 @@ emit them in a fixed documented order.
 | ATX/Setext heading | `hN.` heading | `.heading` (level) |
 | thematic break | (planned) | `.thematic_break` |
 | fenced code block | `bc.` / `pre.` (planned) | `.code_block` (owned content/info) |
-| `emphasis` / `strong` | (Textile inline markers: later) | `.emphasis` / `.strong` |
+| `emphasis` / `strong` | `_x_` / `*x*` plus doubled runs | `.emphasis` / `.strong` |
 | `` `code span` `` | `@code@` | `.code_span` (arena-owned payload: Markdown §6.1-normalized vs Textile-verbatim) |
 | `[x](url "title")` | (Textile `"text":url`: later) | `.link` (arena-owned href/title) |
 | `![alt](url "title")` | (Textile `!url(alt)!`: later) | `.image` (arena-owned src/alt/title) |
@@ -168,7 +168,7 @@ emit them in a fixed documented order.
 | raw HTML tag (`<tag>`, comment, PI, declaration, CDATA) | literal text | `.raw_html` in Markdown; `.text` in Textile |
 | plain text | plain text | `.text` |
 | newline in paragraph | newline in paragraph | `.soft_break` (MD) / `.hard_break` (Textile) |
-| `*x*` / `**x**` | `_x_` / `*x*` (Textile, planned) | `.emphasis` / `.strong` |
+| `*x*` / `**x**` | `_x_` / `*x*` (plus `__x__` / `**x**`) | `.emphasis` / `.strong` |
 
 The same HTML renderer consumes both; `tests/fixtures_test.zig` proves the
 convergence (equivalent Markdown/Textile inputs render byte-identically).

@@ -114,9 +114,9 @@ below).
 | feature | status | Oliver behavior / notes |
 | --- | --- | --- |
 | plain text | implemented | Verbatim bytes; escaped at render like Markdown (shared renderer). |
-| emphasis `_x_` | planned | → `<em>`. Both references agree. |
-| strong `*x*` | planned | → `<strong>`. Both references agree. |
-| bold `**x**` / italic `__x__` | planned | → `<b>` / `<i>`. Both references agree (Hobix: "doubling the underscores or asterisks"). |
+| emphasis `_x_` | implemented | → shared `.emphasis` / `<em>`. Hobix and Textile 2 agree; operators require outside Unicode whitespace/punctuation boundaries and touch non-whitespace content. |
+| strong `*x*` | implemented | → shared `.strong` / `<strong>`. Same boundary contract as emphasis; intraword `c*oo*l` remains literal per Textile 2. |
+| bold `**x**` / italic `__x__` | implemented | Doubled runs are mapped to the shared `.strong` / `.emphasis` IR (`<strong>` / `<em>`). Hobix documents `<b>` / `<i>` presentation aliases; Oliver keeps one semantic renderer contract and records that convergence in `docs/TEXTILE-EMPHASIS.md`. |
 | deleted `-x-` / inserted `+x+` | planned | → `<del>` / `<ins>`. Both references agree. |
 | superscript `^x^` / subscript `~x~` | planned | → `<sup>` / `<sub>`. Both references agree. |
 | code `@x@` | implemented | Same-line code phrase → shared opaque `.code_span` → `<code>`; payload bytes are verbatim and the full `@...@` source range is the node span. Textile 2 explicitly requires `<`/`>` escaping; the shared renderer also escapes `&`, `"`, and NUL. Open/close operators must touch non-whitespace content and use outside Unicode whitespace/punctuation boundaries; intraword, empty, edge-whitespace, unmatched, embedded-`@`, and cross-line shapes fall back literally. Backslash has no escape role in the cited references. Exact clean-room contract: `docs/TEXTILE-INLINE-CODE.md`. |
@@ -128,7 +128,7 @@ below).
 | acronyms | deferred | `CSS(Cascading Style Sheets)` → `<acronym title=...>`. Hobix only. |
 | escaping | planned | `==...==` inline region (Textile 2). Backslash escaping varies by version and is unresolved in the references; Oliver will choose one documented form when implementing. |
 | character replacements | deferred | Curly quotes, `--`→em-dash, `...`→ellipsis, `(c)`/`(r)`/`(tm)`, Textile 2 macros. Oliver deliberately defers all implicit typography: implicit text transformation is the kind of magic a library should make explicit, and it is not needed by the migration consumers. |
-| whitespace sensitivity | planned | Textile 2: inline operators need whitespace before/after to be recognized; brackets/braces can force recognition. The boundary rule is implemented for `@code@`; bracket/brace forcing and the remaining phrase operators stay planned. |
+| whitespace sensitivity | implemented | Textile 2: `_`/`*` operators need outside whitespace/punctuation boundaries and must touch non-whitespace content. The same line-local boundary contract is used by `@code@`; bracket/brace forcing and the remaining phrase operators stay planned. |
 
 ## Recorded ambiguities and chosen behaviors
 
@@ -219,3 +219,12 @@ below).
     the only closer candidate; invalid shapes remain literal; backslash is
     inert.** Bracket/brace forcing and `==...==` escaping are later features.
     See `docs/TEXTILE-INLINE-CODE.md`.
+18. **Textile emphasis delimiter edges.** Hobix and Textile 2 agree on single
+    and doubled `_`/`*` phrase modifiers and on whitespace-sensitive
+    intraword rejection, but do not specify mixed crossing, three-byte runs,
+    or cross-line matching. **Oliver: one/two-byte runs only; Unicode
+    whitespace/punctuation boundaries; top-of-stack same-marker/length pairing;
+    same-line scopes; unmatched/empty/mixed-crossing near-misses stay literal.**
+    Doubled runs converge to the shared semantic `.emphasis`/`.strong` tags
+    rather than introducing renderer-only `<i>`/`<b>` nodes. See
+    `docs/TEXTILE-EMPHASIS.md`.

@@ -1,6 +1,6 @@
 # Oliver Inline Parsing: Emphasis and Strong Emphasis
 
-**Status: implemented (Markdown), with code spans (§6.6), inline links
+**Status: implemented (Markdown and Textile), with code spans (§6.6), inline links
 (§6.6), inline images (§6.7), autolinks (§6.8), reference links, and
 reference-style images (§4.7 + §6.6 reference forms) landed on the
 same scan → match → emit seam.** This
@@ -26,8 +26,10 @@ any inline parsing, since a use may precede its definition), and the
 inline pass then resolves the full `[text][label]`, collapsed `[text][]`,
 and shortcut `[text]` forms against that map in discovery — labels are
 Unicode case-folded with whitespace collapsed per §6.3. Both land exactly
-as the §17 implementation order predicted. Textile inline markers (`_`/`*`/`**`/`__`) are a later
-milestone and will ride the same seam. Every deliberate choice below that
+as the §17 implementation order predicted. Textile inline markers (`_`/`*`/`**`/`__`)
+are implemented by the separate clean-room contract in
+`docs/TEXTILE-EMPHASIS.md`; they share the model tags but use Textile's
+boundary and line-local rules. Every deliberate choice below that
 the implementation deviates from — the two §16 open questions, the
 contiguous-text merge rule, and the front/back consumption model in §8.3 —
 is recorded at the point of deviation.
@@ -566,11 +568,10 @@ only reading consistent with the spec text; it is pinned with a fixture.
   (docs/AUTOLINKS.md), and raw HTML is discovered over the whole paragraph
   and merged with code spans before that scan (docs/RAW-HTML.md). This is why
   the scan must remain a real tokenizer rather than a tower of regexes.
-- **Textile:** the roadmap maps Textile `_`/`*`/`**`/`__` onto the same
-  document nodes. The scan → match → emit pipeline and the stack are
-  dialect-agnostic; the *classification rules* (flanking, intraword policy)
-  are dialect-owned and will be defined from Textile documentation, not from
-  CommonMark, in the Textile milestone.
+- **Textile:** Textile `_`/`*`/`**`/`__` map onto the same document nodes via
+  the line-local scan → match → emit pipeline. Their boundary, nesting,
+  mixed-run, and code-opacity choices are dialect-owned and documented in
+  `docs/TEXTILE-EMPHASIS.md`, not borrowed from CommonMark.
 
 ---
 

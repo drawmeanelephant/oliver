@@ -12,6 +12,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | lead | M2 fenced code blocks | Markdown open-leaf state; shared code-block model; HTML rendering | stacked after M1 | integrated on main (PR #13) |
 | conformance worker | Q1 list conformance wall | list fixture pairs and list-only hostile tests; no parser files | independent; merge after M1 only to minimize fixture-index conflict | integrated on main (PR #11) |
 | Textile worker | T1 `p.`/break-span repairs + `bq.` | Textile frontend, Textile fixtures/provenance; no Markdown/core model | independent | integrated on main (PR #12) |
+| Textile worker | T3 emphasis / strong | Textile frontend, Textile fixtures/provenance; no Markdown/core model | stacked after T2; merge after fixture-index reconciliation | implementation complete on `codex/textile-emphasis`; awaiting review |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -143,5 +144,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **T2 Textile `@code@`:** integrated on main (PR #14); Textile-local inline
   scanner using the existing `.code_span` IR, with opacity and delimiter-storm
   tests (docs/TEXTILE-INLINE-CODE.md).
-- **T3 Textile emphasis/strong:** follows T2; same-line boundary/nesting policy
-  must be pinned from authoritative Textile documentation first.
+- **T3 Textile emphasis/strong:** implementation complete on
+  `codex/textile-emphasis`; same-line boundary/nesting policy is pinned in
+  `docs/TEXTILE-EMPHASIS.md`, with exact spans, code opacity, Unicode
+  boundaries, malformed fallback, and a deterministic marker storm. Ready for
+  parent review and fixture-index reconciliation.
