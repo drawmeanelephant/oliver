@@ -20,6 +20,19 @@ published Cooklang specification and canonical test corpus. It
 does not study or imitate existing parser implementations. See
 [docs/CLEANROOM.md](docs/CLEANROOM.md).
 
+## Documentation
+
+The full documentation lives in `docs/` — [docs/index.md](docs/index.md)
+is the home page with a site map, and [docs/nav.json](docs/nav.json) is
+the renderer-ready navigation manifest. As a user, start with
+[docs/CAPABILITIES.md](docs/CAPABILITIES.md) (what each frontend parses
+and renders). As a contributor, start with
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[docs/DOCUMENT-MODEL.md](docs/DOCUMENT-MODEL.md),
+[docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md),
+[docs/TESTS.md](docs/TESTS.md), [docs/CLEANROOM.md](docs/CLEANROOM.md),
+and [docs/WORK-LEDGER.md](docs/WORK-LEDGER.md).
+
 ## Status
 
 Implemented so far: paragraphs, ATX and Setext headings, thematic breaks,
