@@ -355,7 +355,11 @@ fn tryFrontmatter(p: *Parser, lines: *source.Lines, first_out: *?source.Line) Pa
     var raw_start: ?u32 = null;
     while (lines.next()) |line| {
         if (isFence(line.text)) {
-            const raw = p.src.bytes[raw_start.?..@intCast(line.start)];
+            // The payload runs from the first content line to the closing
+            // fence's line start; when the fences are adjacent (an empty
+            // front matter block) the payload is the empty slice.
+            const start: u32 = raw_start orelse @intCast(line.start);
+            const raw = p.src.bytes[start..@intCast(line.start)];
             return .{
                 .raw = raw,
                 .span = .{ .start = @intCast(first.start), .end = @intCast(line.end) },
