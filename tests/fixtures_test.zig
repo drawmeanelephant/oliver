@@ -1522,13 +1522,45 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/bq-interrupt.textile"),
         .expected = @embedFile("fixtures/textile/bq-interrupt.html"),
     },
-    // This fixture includes malformed signatures plus valid Textile forms
-    // deliberately deferred by this slice (`bq..` and citation `bq.:URL`);
-    // all remain literal under the recorded Oliver contract.
+    // This fixture pins the literal fallback shapes: empty `bq.` and `bq..`
+    // signatures, a period without a following space, and a `bq.:` citation
+    // with no whitespace after the URL. Valid citations are covered by the
+    // `bq-cite-*` fixtures (docs/TEXTILE-PARITY.md §12).
     .{
         .name = "bq-malformed",
         .input = @embedFile("fixtures/textile/bq-malformed.textile"),
         .expected = @embedFile("fixtures/textile/bq-malformed.html"),
+    },
+    // The current Textile docs' citation example byte-for-byte: `bq.:URL`
+    // renders the URL as the blockquote's `cite` attribute with the inner
+    // paragraph unmarked (docs/TEXTILE-PARITY.md §12).
+    .{
+        .name = "bq-cite-basic",
+        .input = @embedFile("fixtures/textile/bq-cite-basic.textile"),
+        .expected = @embedFile("fixtures/textile/bq-cite-basic.html"),
+    },
+    // The §8 block modifiers combine with the citation (cite attribute
+    // first, then attrs in the fixed order), and sentence punctuation after
+    // the URL is trimmed like an inline link destination.
+    .{
+        .name = "bq-cite-mods",
+        .input = @embedFile("fixtures/textile/bq-cite-mods.textile"),
+        .expected = @embedFile("fixtures/textile/bq-cite-mods.html"),
+    },
+    // Malformed citation shapes stay literal: a space after the colon, no
+    // content, no URL, and the undocumented `bq..:URL` extended-citation
+    // combination.
+    .{
+        .name = "bq-cite-literal",
+        .input = @embedFile("fixtures/textile/bq-cite-literal.textile"),
+        .expected = @embedFile("fixtures/textile/bq-cite-literal.html"),
+    },
+    // A citation signature is a block signature: it terminates an open
+    // extended `bq..` quote, which renders with its own cite.
+    .{
+        .name = "bq-cite-extended",
+        .input = @embedFile("fixtures/textile/bq-cite-extended.textile"),
+        .expected = @embedFile("fixtures/textile/bq-cite-extended.html"),
     },
     .{
         .name = "bq-unicode",

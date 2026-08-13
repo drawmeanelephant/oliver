@@ -25,8 +25,9 @@
 //!   (recorded ambiguity; see docs/FEATURE-MATRIX.md).
 //! - A single-period `bq.` block continues through unmarked lines until a blank
 //!   line or another recognized block marker. Its content is one paragraph
-//!   inside a block quote. Extended `bq..` and citation `bq.:URL` forms remain
-//!   literal until their separate milestones.
+//!   inside a block quote. Extended `bq..` keeps the quote active across blank
+//!   lines (docs/TEXTILE-PARITY.md §10), and the citation form `bq.:URL`
+//!   renders the URL as the blockquote's `cite` attribute (§12).
 //! - `bq.` followed only by separator whitespace is literal: the user-facing
 //!   documentation does not define an empty block-quote form.
 //! - A newline inside a paragraph is a hard line break (Textile 2: "newlines
@@ -164,7 +165,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 try closeBlock(doc, &block, &defs);
                 // Fall through: the signature line opens its own block.
             } else {
-                try appendBlockContent(doc, &block, .block_quote, &.{}, line.contentSpan(), line.terminatorSpan());
+                try appendBlockContent(doc, &block, .block_quote, &.{}, line.contentSpan(), line.terminatorSpan(), null);
                 continue;
             }
         }
@@ -209,13 +210,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         if (try tryParagraphMarker(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try appendBlockContent(doc, &block, .paragraph, sig.attrs, sig.content, line.terminatorSpan());
+            try appendBlockContent(doc, &block, .paragraph, sig.attrs, sig.content, line.terminatorSpan(), null);
             continue;
         }
         if (try tryBlockQuoteMarker(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try appendBlockContent(doc, &block, .block_quote, sig.attrs, sig.content, line.terminatorSpan());
+            try appendBlockContent(doc, &block, .block_quote, sig.attrs, sig.content, line.terminatorSpan(), sig.cite);
             continue;
         }
         if (try tryFootnoteMarker(doc, line)) |sig| {
@@ -234,7 +235,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // §5, chosen behavior).
         if (lists.items.len > 0) closeLists(&lists);
         const kind: BlockKind = if (block) |active| active.kind else .paragraph;
-        try appendBlockContent(doc, &block, kind, &.{}, line.contentSpan(), line.terminatorSpan());
+        try appendBlockContent(doc, &block, kind, &.{}, line.contentSpan(), line.terminatorSpan(), null);
     }
     try closeBlock(doc, &block, &defs);
     closeLists(&lists);
@@ -252,6 +253,9 @@ const ActiveBlock = struct {
     /// Block attributes from the opening signature's modifiers (empty for
     /// unmarked paragraphs).
     attrs: []const document.Attribute = &.{},
+    /// The `bq.:URL` citation (arena-owned), emitted as the blockquote's
+    /// `cite` attribute; null for ordinary quotes.
+    cite: ?[]const u8 = null,
     lines: std.ArrayList(LineRef) = .empty,
     /// Extended `bq..`: blank lines separate paragraphs inside one
     /// blockquote instead of ending the block (docs/TEXTILE-PARITY.md §10).
@@ -290,9 +294,10 @@ fn appendBlockContent(
     attrs: []const document.Attribute,
     content: source.Span,
     terminator: source.Span,
+    cite: ?[]const u8,
 ) ParseError!void {
     if (block.* == null) {
-        block.* = .{ .kind = kind, .start = content.start, .end = content.end, .attrs = attrs };
+        block.* = .{ .kind = kind, .start = content.start, .end = content.end, .attrs = attrs, .cite = cite };
     }
     std.debug.assert(block.*.?.kind == kind);
     block.*.?.end = content.end;
@@ -322,9 +327,10 @@ fn closeBlock(doc: *document.Document, block: *?ActiveBlock, defs: *const AliasT
     var parent = doc.root;
     var para_attrs: []const document.Attribute = active.attrs;
     if (active.kind == .block_quote) {
-        // The `bq` signature's attributes belong to the `<blockquote>`;
-        // the single inner paragraph is unmarked.
-        const quote = try doc.createNode(.block_quote, span, .{ .block_quote = .{ .attrs = active.attrs } });
+        // The `bq` signature's attributes (and optional `bq.:URL` cite)
+        // belong to the `<blockquote>`; the single inner paragraph is
+        // unmarked.
+        const quote = try doc.createNode(.block_quote, span, .{ .block_quote = .{ .attrs = active.attrs, .cite = active.cite } });
         try doc.appendChild(doc.root, quote);
         parent = quote;
         para_attrs = &.{};
@@ -1417,18 +1423,63 @@ fn tryParagraphMarker(doc: *document.Document, line: source.Line) ParseError!?Bl
     return parseBlockSignature(doc, line, 1);
 }
 
-/// Recognizes the single-period `bq.` block-quote signature (with optional
-/// block modifiers: `bq{color:red}.`, `bq>.`, ...). Published Textile
-/// documentation requires a period followed by a space; Oliver consistently
-/// accepts a tab as signature separator too. An empty content range is not a
-/// quote: empty `bq.` behavior is unspecified by the documentation, so the
-/// whole line remains literal. This also deliberately excludes the separately
-/// documented extended (`bq..`) and citation (`bq.:URL`) forms.
-fn tryBlockQuoteMarker(doc: *document.Document, line: source.Line) ParseError!?BlockSignature {
+/// The parsed result of a `bq.`/`bq.:URL` signature line.
+const BlockQuoteSig = struct {
+    attrs: []const document.Attribute,
+    content: source.Span,
+    /// The citation URL (arena-owned), or null for an uncited quote.
+    cite: ?[]const u8 = null,
+};
+
+/// Scans the citation portion after the signature's period: a `:` followed
+/// by a non-whitespace URL run, then whitespace and non-empty content (the
+/// current Textile docs: "Block quotes may include a citation URL
+/// immediately following the period"; Learn X in Y Minutes agrees). The URL
+/// run stops at whitespace and its trailing punctuation is trimmed exactly
+/// like an inline link destination, and the URL is arena-duped like the
+/// link href. Any malformed shape (no URL, no separator, empty content)
+/// stays literal.
+fn scanCiteUrl(doc: *document.Document, line: source.Line, dot: usize, mods: Mods) ParseError!?BlockQuoteSig {
+    const t = line.text;
+    const url_start = dot + 2;
+    if (url_start >= t.len or isWhitespaceByte(t[url_start])) return null;
+    var run_end = url_start;
+    while (run_end < t.len and !isUrlStop(t[run_end])) : (run_end += 1) {}
+    if (run_end >= t.len or !isWhitespaceByte(t[run_end])) return null; // needs a separator
+    var url_end = run_end;
+    while (url_end > url_start and isLinkTrailingPunct(t[url_end - 1])) : (url_end -= 1) {}
+    if (url_end == url_start) return null;
+    var i = run_end + 1;
+    while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+    if (i == t.len) return null; // empty content stays literal
+    const style = try composeStyle(doc, mods.user_style, mods.pad_left, mods.pad_right, halignFragment(mods.halign), mods.valign);
+    const attrs = try composeAttrs(doc, style, mods.class, mods.id, mods.lang);
+    const cite = try doc.allocator().dupe(u8, t[url_start..url_end]);
+    return .{
+        .attrs = attrs,
+        .cite = cite,
+        .content = .{
+            .start = @intCast(line.start + i),
+            .end = @intCast(line.content_end),
+        },
+    };
+}
+
+/// Recognizes the single-period `bq.` block-quote signature: with optional
+/// block modifiers (`bq{color:red}.`, `bq>.`, ...), and with an optional
+/// `:URL` citation immediately after the period (`bq.:URL Cited.`, the
+/// current Textile docs' citation form). Published Textile documentation
+/// requires a period followed by a space; Oliver consistently accepts a tab
+/// as signature separator too. An empty content range is not a quote: empty
+/// `bq.` behavior is unspecified by the documentation, so the whole line
+/// remains literal. The extended `bq..` form is the separately documented
+/// extended marker and stays with it.
+fn tryBlockQuoteMarker(doc: *document.Document, line: source.Line) ParseError!?BlockQuoteSig {
     const t = line.text;
     if (t.len < 4) return null;
     if (!std.mem.eql(u8, t[0..2], "bq")) return null;
     if (t[2] == '.') {
+        if (t[3] == ':') return scanCiteUrl(doc, line, 2, Mods{});
         if (t[3] != ' ' and t[3] != '\t') return null;
         var i: usize = 3;
         while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
@@ -1441,9 +1492,24 @@ fn tryBlockQuoteMarker(doc: *document.Document, line: source.Line) ParseError!?B
             },
         };
     }
-    const sig = (try parseBlockSignature(doc, line, 2)) orelse return null;
-    if (sig.content.start >= sig.content.end) return null;
-    return sig;
+    const scan = scanMods(t, 2, .block) orelse return null;
+    if (!scan.dot_terminated) return null;
+    const dot = scan.end;
+    if (dot + 1 >= t.len) return null;
+    if (t[dot + 1] == ':') return scanCiteUrl(doc, line, dot, scan.mods);
+    if (!isWhitespaceByte(t[dot + 1])) return null;
+    var i = dot + 2;
+    while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+    if (i == t.len) return null;
+    const style = try composeStyle(doc, scan.mods.user_style, scan.mods.pad_left, scan.mods.pad_right, halignFragment(scan.mods.halign), scan.mods.valign);
+    const attrs = try composeAttrs(doc, style, scan.mods.class, scan.mods.id, scan.mods.lang);
+    return .{
+        .attrs = attrs,
+        .content = .{
+            .start = @intCast(line.start + i),
+            .end = @intCast(line.content_end),
+        },
+    };
 }
 
 fn emitHeading(doc: *document.Document, line: source.Line, heading: Heading, defs: *const AliasTable) ParseError!void {
@@ -2335,14 +2401,15 @@ test "textile: matched and near-miss at-sign storms stay deterministic" {
 test "textile: empty block-quote signatures and the citation form stay literal" {
     const oliver = @import("oliver.zig");
     // Empty single- and extended-period signatures (behavior unspecified by
-    // the references) and the deferred `bq:` citation form stay literal;
-    // `bq..` with content is now the implemented extended quote.
+    // the references) stay literal; `bq..` with content is now the
+    // implemented extended quote. Citations are covered by their own tests.
     const cases = [_][]const u8{
         "bq.",
         "bq. \t",
         "bq..",
         "bq.. \t",
-        "bq.:https://example.test/ Cited",
+        "bq.:nourl",
+        "bq.: https://example.test/ Cited",
     };
     for (cases) |input| {
         var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
@@ -3663,5 +3730,83 @@ test "textile: footnote literal fallbacks and marker edges" {
         try std.testing.expectEqual(document.Tag.block_quote, root.children.items[0].tag);
         try std.testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
         try std.testing.expectEqualStrings("fn1", root.children.items[1].data.paragraph.attrs[1].value);
+    }
+}
+
+test "textile: bq.:URL citations render the blockquote cite attribute" {
+    const oliver = @import("oliver.zig");
+    // The current Textile docs' citation example (docs/TEXTILE-PARITY.md
+    // §12): the URL becomes the blockquote's cite attribute, the inner
+    // paragraph is unmarked, and the block's span covers the content.
+    var result = try oliver.parse(std.testing.allocator, "bq.:http://textpattern.com/ A cited quotation.\n", .textile, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try std.testing.expectEqual(@as(usize, 1), root.children.items.len);
+    const quote = root.children.items[0];
+    try std.testing.expectEqual(document.Tag.block_quote, quote.tag);
+    try std.testing.expectEqualStrings("http://textpattern.com/", quote.data.block_quote.cite.?);
+    try std.testing.expectEqual(@as(usize, 0), quote.data.block_quote.attrs.len);
+    try std.testing.expectEqualStrings("A cited quotation.", quote.children.items[0].children.items[0].data.text);
+
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings(
+        "<blockquote cite=\"http://textpattern.com/\">\n<p>A cited quotation.</p>\n</blockquote>\n",
+        out.items,
+    );
+}
+
+test "textile: citation URL trims trailing punctuation like link destinations" {
+    const oliver = @import("oliver.zig");
+    // Sentence punctuation after the URL is excluded from the cite value,
+    // exactly like the inline link trailing-punctuation rule; the separator
+    // check runs on the raw run so a trimmed URL still parses.
+    var result = try oliver.parse(std.testing.allocator, "bq.:http://x.example.com. Cited.\n", .textile, .{});
+    defer result.deinit();
+    const quote = result.document.root.children.items[0];
+    try std.testing.expectEqual(document.Tag.block_quote, quote.tag);
+    try std.testing.expectEqualStrings("http://x.example.com", quote.data.block_quote.cite.?);
+
+    // A run with no whitespace separator stays literal (the separator
+    // check runs on the raw run, so the trimmed sentence period cannot
+    // double as one).
+    var literal = try oliver.parse(std.testing.allocator, "bq.:http://x.example.com\n", .textile, .{});
+    defer literal.deinit();
+    try std.testing.expectEqual(document.Tag.paragraph, literal.document.root.children.items[0].tag);
+}
+
+test "textile: citation combines with block modifiers" {
+    const oliver = @import("oliver.zig");
+    // The §8 modifier set sits between the signature and the period; the
+    // citation follows the period. The cite attribute comes first, then the
+    // composed attrs (fixed render order).
+    var result = try oliver.parse(std.testing.allocator, "bq{color:red}.:http://example.test/ Styled cited.\n", .textile, .{});
+    defer result.deinit();
+    const quote = result.document.root.children.items[0];
+    try std.testing.expectEqual(document.Tag.block_quote, quote.tag);
+    try std.testing.expectEqualStrings("http://example.test/", quote.data.block_quote.cite.?);
+    try std.testing.expectEqual(@as(usize, 1), quote.data.block_quote.attrs.len);
+    try std.testing.expectEqualStrings("style", quote.data.block_quote.attrs[0].name);
+    try std.testing.expectEqualStrings("color:red;", quote.data.block_quote.attrs[0].value);
+}
+
+test "textile: malformed citation shapes stay literal" {
+    const oliver = @import("oliver.zig");
+    // The citation needs a non-whitespace URL, a whitespace separator, and
+    // non-empty content; the extended `bq..:URL` combination is not
+    // documented by any reference and stays literal too.
+    const cases = [_][]const u8{
+        "bq.: Cited\n",
+        "bq.: http://x.example.com/ Cited\n",
+        "bq.:http://x.example.com/\n",
+        "bq..:http://x.example.com/ Cited\n",
+    };
+    for (cases) |input| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
     }
 }

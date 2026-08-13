@@ -54,6 +54,7 @@ consulted.
 | `bc..`/`pre..` extended code | `.code_block` with blank lines as content | `<pre><code>` / verbatim `<pre>` | implemented (T12) |
 | `[N]` footnote reference | `.footnote_ref` (number) | `<sup class="footnote"><a href="#fnN">N</a></sup>` | implemented (T13) |
 | `fnN.` footnote block | `.paragraph` (attrs `class="footnote" id="fnN"`, leading `.superscript`) | `<p class="footnote" id="fnN"><sup>N</sup> body</p>` | implemented (T13) |
+| `bq.:URL` citation | `.block_quote` (`cite` URL + attrs) | `<blockquote cite="URL" style="…">` | implemented (T14) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -78,8 +79,7 @@ planned/deferred. The notable ones, so the record is honest:
   CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
   bodies literal (fixture `image-literal`).
-- **Block-quote citations (`bq.:URL`)**, **line attributes**,
-  **`==` escaping**, and the
+- **Line attributes**, **`==` escaping**, and the
   **character-replacement macros** (curly quotes, em/en dashes, ellipsis,
   `(c)`/`(r)`/`(tm)`). All planned/deferred in the feature matrix.
 
@@ -88,7 +88,8 @@ see §6. The largest remaining *inline* gap, link aliases, is now
 implemented too (T9) — see §7. Block attributes are implemented (T10) —
 see §8 — `bc.`/`pre.` block code is implemented (T11) — see §9 —
 `bq..`/`bc..`/`pre..` extended blocks are implemented (T12) — see §10 —
-and footnotes (`fnN.`/`[N]`) are implemented (T13) — see §11.
+footnotes (`fnN.`/`[N]`) are implemented (T13) — see §11 — and
+block-quote citations (`bq.:URL`) are implemented (T14) — see §12.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -487,5 +488,44 @@ brackets (`[x]`, `[abc]`), a digit run not closed by `]` (`[1x]`), a
 marker without a digit run (`fn.`), a non-digit marker (`fnx.`), and
 empty signatures all stay ordinary text. `[N]` is recognized in any
 inline position, including inside a footnote block itself.
+
+## 12. Block-quote citations (T14): pinned behaviors
+
+The current Textile Markup Language Documentation documents the
+citation form on its "Block quotations" page — "Block quotes may
+include a citation URL immediately following the period" — with the
+example `bq.:http://textpattern.com/ A cited quotation.` Learn X in
+Y Minutes states the same syntax. Neither Hobix nor Textile 2 mentions
+it; the syntax is documented, so Oliver implements it, rendering the
+URL as the blockquote's `cite` attribute.
+
+**Rendering.** `bq.:URL body` renders
+`<blockquote cite="URL"><p>body</p></blockquote>` with the inner
+paragraph unmarked, like a plain `bq.`. The cite attribute follows
+the link href policy: non-ASCII bytes are percent-encoded and the
+result HTML-escaped at render (the renderer's `writeEscapedHref`),
+and sentence punctuation at the end of the URL run is trimmed exactly
+like an inline link destination (`bq.:http://x.example.com. Cited.`
+→ `cite="http://x.example.com"`; the separator check runs on the
+raw run, so the trimmed period cannot double as the required
+whitespace). The URL is arena-duped like the link href.
+
+**Modifiers.** The §8 block-attribute set combines with the citation:
+the modifiers sit between the signature and the period, the citation
+follows it (`bq{color:red}.:URL`, `bq(fig#demo).:URL`). The cite
+attribute is emitted first, then the composed attrs in the fixed
+render order (cite/class/id/style/lang ordering is pinned by
+`bq-cite-mods`).
+
+**Block behavior.** A citation signature is a block signature like any
+other: it interrupts an open block and terminates an open extended
+`bq..` quote (pinned by `bq-cite-extended`).
+
+**Literal fallbacks (pinned by `bq-cite-literal`).** `bq.:` with no
+URL, a space between the colon and the URL, a URL with no whitespace
+separator, empty content, and the undocumented `bq..:URL`
+extended-citation combination all stay ordinary text. A space after
+the period (`bq{color:red}. :URL body`) is not a citation — the
+content simply begins with a colon.
 
 

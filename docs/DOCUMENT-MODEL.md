@@ -84,7 +84,10 @@ produces it).
 6. `.block_quote` children are blocks (it is a container, §5.1); its span
    covers its lines' content with markers stripped, and text inside it
    slices the stripped content (marker bytes are excluded from child
-   spans).
+   spans). The Textile payload carries the block attributes plus an
+   optional arena-owned `cite` URL (`bq.:URL`, emitted as the
+   blockquote's `cite` attribute; docs/TEXTILE-PARITY.md §12); Markdown
+   never sets either.
 7. `.list` children are `.list_item` blocks; `.list_item` children are
    blocks, and list payloads record bullet/ordered type, marker metadata,
    ordered start, and tight/loose state.
@@ -169,6 +172,7 @@ emit them in a fixed documented order.
 | paragraph | paragraph / `p.` | `.paragraph` |
 | ATX/Setext heading | `hN.` heading | `.heading` (level) |
 | (no Markdown equivalent) | Textile block attributes `p(...).`, `hN{...}.`, `bq>.` (`{style}`, `(class#id)`, `[lang]`, alignment, padding) | ordered `attrs` (style/class/id/lang) on `.paragraph` / `.heading` / `.block_quote` (docs/TEXTILE-PARITY.md §8) |
+| (no Markdown equivalent) | Textile `bq.:URL` block-quote citation | `cite` URL on `.block_quote` (docs/TEXTILE-PARITY.md §12) |
 | thematic break | (planned) | `.thematic_break` |
 | fenced code block | `bc.` / `pre.` | `.code_block` (owned content/info; `pre.` sets the verbatim `escape` flag, docs/TEXTILE-PARITY.md §9) |
 | HTML block (Markdown §4.6 types 6/7) | (Textile has no HTML blocks; literal) | `.html_block` (owned verbatim content) |
