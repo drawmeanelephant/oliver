@@ -178,6 +178,7 @@ emit them in a fixed documented order.
 | `![alt](url "title")` | Textile `!url!`, `!url(alt)!`, `!url!:href` | `.image` (arena-owned src/alt/title) |
 | `<scheme:...>` / `<a@b.c>` | (Textile has no autolink; literal) | `.autolink` (arena-owned href/label) |
 | raw HTML tag (`<tag>`, comment, PI, declaration, CDATA) | literal text | `.raw_html` in Markdown; `.text` in Textile |
+| GFM pipe table (GFM §4.10) | Textile `|a|b|` tables (planned) | `.table` → `.table_row` → `.table_cell` (alignment on the table, header/alignment on the cell) |
 | plain text | plain text | `.text` |
 | newline in paragraph | newline in paragraph | `.soft_break` (MD) / `.hard_break` (Textile) |
 | `*x*` / `**x**` | `_x_` / `*x*` (Textile, planned) | `.emphasis` / `.strong` |

@@ -319,6 +319,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var fenced: ?FencedCode = null;
     var indented: ?IndentedCode = null;
     var html: ?HtmlBlock = null;
+    var table: ?TableBlock = null;
 
     var lines = source.Lines.init(doc.src.bytes);
     while (lines.next()) |line| {
@@ -452,6 +453,30 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // checks stay O(1) per consumed container marker. Literal fenced-code
         // content bypasses this work above.
         const thematic_facts = ThematicLineFacts.init(line);
+
+        // An open table leaf (GFM §4.10 extension) owns every line while
+        // its containing containers still match. A blank line or the start
+        // of another block-level structure ends the table (the line is then
+        // reprocessed normally); any other line is a body row — including a
+        // pipe-less line, which becomes a single-cell row (spec example:
+        // `bar` after the rows is one row, `bar` after a blank line is a
+        // paragraph).
+        if (table) |*active| {
+            if (matched == active.container_depth) {
+                if (isBlank(view.line.text) or !isParagraphContinuationText(doc, view, &thematic_facts)) {
+                    finishTable(&table);
+                } else {
+                    const cells = try splitRowCells(doc, view.line.contentSpan());
+                    try appendTableRow(doc, active.node, view.line.contentSpan(), cells, false, &pending);
+                    active.node.span.end = @intCast(view.line.content_end);
+                    extendContainerSpans(&containers, view.line);
+                    continue;
+                }
+            } else {
+                std.debug.assert(matched < active.container_depth);
+                finishTable(&table);
+            }
+        }
 
         // B. Blank line: close the leaf and any container whose marker was
         // absent. Blank lines keep block quotes (marker-blank) and list
@@ -661,12 +686,21 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         }
 
         // E. Paragraph text.
+        // GFM tables extension (§4.10): a fresh single-line paragraph whose
+        // line parses as a table header row becomes a table when the
+        // current line is a matching delimiter row. Otherwise the line is
+        // ordinary paragraph text.
+        if (try tryEmitTable(doc, &paragraph, view, leafParent(doc, &containers), containers.items.len, &table, &pending)) {
+            extendContainerSpans(&containers, view.line);
+            continue;
+        }
         try appendParagraphLine(doc, &paragraph, view);
         extendContainerSpans(&containers, view.line);
     }
     finishFencedCode(&fenced);
     try finishIndentedCode(doc, &indented);
     finishHtmlBlock(&html);
+    finishTable(&table);
     try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
 
     // Phase 2: inline pass, with the full definitions map available.
@@ -675,6 +709,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             .paragraph => |pp| try parseParagraphInlines(doc, pp.node, pp.lines, &defs),
             .heading => |hh| try parseHeadingInlines(doc, hh.node, hh.span, &defs),
             .setext_heading => |hh| try parseSetextHeadingInlines(doc, hh.node, hh.lines, &defs),
+            .table_cell => |tc| try parseTableCellInlines(doc, tc.node, tc.span, &defs),
         }
     }
 }
@@ -1053,6 +1088,7 @@ const PendingInline = union(enum) {
     paragraph: struct { node: *document.Node, lines: []const Paragraph.LineRef },
     heading: struct { node: *document.Node, span: source.Span },
     setext_heading: struct { node: *document.Node, lines: []const Paragraph.LineRef },
+    table_cell: struct { node: *document.Node, span: source.Span },
 };
 
 /// A paragraph under construction. `content` is the full raw line span
@@ -1097,6 +1133,215 @@ fn appendParagraphLine(doc: *document.Document, paragraph: *?Paragraph, view: Vi
         .content = view.line.contentSpan(),
         .terminator = view.line.terminatorSpan(),
     });
+}
+
+// ---------------------------------------------------------------------------
+// GFM tables extension (§4.10): a header row + delimiter row open a table;
+// body rows continue it until a blank line or another block-level structure.
+// docs/TABLES.md is the chosen-syntax contract for the corners the GFM spec
+// leaves open (pipe-less headers, hyphen counts, `\|` consumption).
+// ---------------------------------------------------------------------------
+
+/// The one open table leaf. Rows accumulate as children of the table node
+/// (header row first); `data.table.alignment` carries the per-column alignment
+/// and the column count. The node's span grows with each row.
+const TableBlock = struct {
+    node: *document.Node,
+    container_depth: usize,
+};
+
+fn finishTable(table: *?TableBlock) void {
+    table.* = null;
+}
+
+/// The parsed delimiter row of a GFM table: the per-column alignment. The
+/// column count is `alignment.len` (arena-owned).
+const DelimiterParse = struct {
+    alignment: []const document.TableAlign,
+};
+
+/// True when `span` could be a GFM table header row: it contains at least
+/// one unescaped `|` — a real cell separator. Leading/trailing marker
+/// pipes count; an escaped `\|` does not. Chosen behavior (docs/TABLES.md
+/// §3): a pipe-less line can never be a table header, so `abc` followed by
+/// `| --- |` stays a paragraph, and a header whose only pipes are escaped
+/// is not a candidate either.
+fn tableHeaderCandidate(doc: *document.Document, span: source.Span) bool {
+    const bytes = doc.src.bytes;
+    var i = span.start;
+    while (i < span.end) : (i += 1) {
+        if (bytes[i] == '|' and !isEscaped(bytes, i)) return true;
+    }
+    return false;
+}
+
+/// Parses `span` as a GFM table delimiter row (§4.10) and returns the
+/// per-column alignment, or null. Delimiter cells must match the chosen
+/// grammar `:?-+:?`: at least three hyphens, or at least one hyphen when a
+/// colon is present (docs/TABLES.md §3 — the GFM spec's alignment example
+/// uses the single-hyphen `:-:`). Leading/trailing pipes are optional and
+/// stripped escape-aware; the alignment is arena-allocated on success.
+fn tryTableDelimiter(doc: *document.Document, view: View) ParseError!?DelimiterParse {
+    const bytes = doc.src.bytes;
+    const t = bytes[view.line.contentSpan().start..view.line.contentSpan().end];
+    var lo: usize = 0;
+    var hi: usize = t.len;
+    while (lo < hi and (t[lo] == ' ' or t[lo] == '\t')) lo += 1;
+    while (hi > lo and (t[hi - 1] == ' ' or t[hi - 1] == '\t')) hi -= 1;
+    if (lo < hi and t[lo] == '|') lo += 1;
+    if (hi > lo and t[hi - 1] == '|' and !isEscaped(t, hi - 1)) hi -= 1;
+
+    var aligns = std.ArrayList(document.TableAlign).empty;
+    defer aligns.deinit(doc.allocator());
+    var start = lo;
+    var i = lo;
+    while (i <= hi) : (i += 1) {
+        if (i == hi or (t[i] == '|' and !isEscaped(t, i))) {
+            var a = start;
+            var b = i;
+            while (a < b and (t[a] == ' ' or t[a] == '\t')) a += 1;
+            while (b > a and (t[b - 1] == ' ' or t[b - 1] == '\t')) b -= 1;
+            const al = parseDelimiterCell(t[a..b]) orelse return null;
+            try aligns.append(doc.allocator(), al);
+            start = i + 1;
+        }
+    }
+    if (aligns.items.len == 0) return null;
+    return .{ .alignment = try aligns.toOwnedSlice(doc.allocator()) };
+}
+
+/// One delimiter cell's alignment from its bytes (`---` unaligned, `:---`
+/// left, `---:` right, `:---:` center), or null when the cell is not a
+/// valid delimiter cell (empty, non-hyphen content, or fewer than the
+/// chosen minimum hyphens without a colon).
+fn parseDelimiterCell(cell: []const u8) ?document.TableAlign {
+    var i: usize = 0;
+    var hyphens: usize = 0;
+    var has_colon = false;
+    if (i < cell.len and cell[i] == ':') {
+        has_colon = true;
+        i += 1;
+    }
+    while (i < cell.len and cell[i] == '-') : (i += 1) hyphens += 1;
+    if (hyphens == 0) return null;
+    var right = false;
+    if (i < cell.len and cell[i] == ':') {
+        right = true;
+        has_colon = true;
+        i += 1;
+    }
+    if (i != cell.len) return null;
+    if (hyphens < 3 and !has_colon) return null;
+    return if (!has_colon) .none else if (!right) .left else if (cell[0] == ':') .center else .right;
+}
+
+/// One cell of a split GFM table row: the trimmed raw content span, a
+/// source slice. The cell's inline pass runs the standard machinery over
+/// it; only opaque code-span content is post-processed for the consumed
+/// `\|` (see `fixCellCodeSpans`).
+const CellSpan = struct {
+    content: source.Span,
+};
+
+/// Splits a GFM table row line into cells, escape-aware (docs/TABLES.md
+/// §4): optional leading/trailing pipe markers are dropped (trailing only
+/// when unescaped), unescaped `|` separates cells, and `\|` is an escaped
+/// pipe — content, never a separator. Spaces/tabs between pipes and cell
+/// content are trimmed. The result borrows the source; padding/truncation
+/// to the table's column count happens at emit. A pipe-less line yields
+/// one cell (the spec's `bar` body-row example).
+fn splitRowCells(doc: *document.Document, span: source.Span) ParseError![]CellSpan {
+    const bytes = doc.src.bytes;
+    const t = bytes[span.start..span.end];
+    var lo: usize = 0;
+    var hi: usize = t.len;
+    while (lo < hi and (t[lo] == ' ' or t[lo] == '\t')) lo += 1;
+    while (hi > lo and (t[hi - 1] == ' ' or t[hi - 1] == '\t')) hi -= 1;
+    if (lo < hi and t[lo] == '|') lo += 1;
+    if (hi > lo and t[hi - 1] == '|' and !isEscaped(t, hi - 1)) hi -= 1;
+
+    var cells = std.ArrayList(CellSpan).empty;
+    defer cells.deinit(doc.allocator());
+    var start = lo;
+    var i = lo;
+    while (i <= hi) : (i += 1) {
+        if (i == hi or (t[i] == '|' and !isEscaped(t, i))) {
+            var a = start;
+            var b = i;
+            while (a < b and (t[a] == ' ' or t[a] == '\t')) a += 1;
+            while (b > a and (t[b - 1] == ' ' or t[b - 1] == '\t')) b -= 1;
+            try cells.append(doc.allocator(), .{ .content = .{
+                .start = @intCast(span.start + a),
+                .end = @intCast(span.start + b),
+            } });
+            start = i + 1;
+        }
+    }
+    return cells.toOwnedSlice(doc.allocator());
+}
+
+/// Converts the open single-line paragraph to a GFM table when the current
+/// line is a matching delimiter row (§4.10). Returns true when the table
+/// was opened (the delimiter line is consumed). The header row keeps the
+/// paragraph's cell count; a column mismatch leaves the paragraph open
+/// ("a table will not be recognized"). Chosen precedence: a table opening
+/// wins over §4.7 link-reference-definition extraction for a single-line
+/// paragraph (docs/TABLES.md §6).
+fn tryEmitTable(
+    doc: *document.Document,
+    paragraph: *?Paragraph,
+    view: View,
+    parent: *document.Node,
+    container_depth: usize,
+    table: *?TableBlock,
+    pending: *std.ArrayList(PendingInline),
+) ParseError!bool {
+    const p = paragraph.* orelse return false;
+    if (p.lines.items.len != 1) return false;
+    const header_span = p.lines.items[0].content;
+    if (!tableHeaderCandidate(doc, header_span)) return false;
+    const delim = (try tryTableDelimiter(doc, view)) orelse return false;
+    const cols = delim.alignment.len;
+    const header_cells = try splitRowCells(doc, header_span);
+    if (header_cells.len != cols) return false;
+
+    const node = try doc.createNode(.table, .{
+        .start = @intCast(header_span.start),
+        .end = @intCast(view.line.content_end),
+    }, .{ .table = .{ .alignment = delim.alignment } });
+    try doc.appendChild(parent, node);
+    try appendTableRow(doc, node, header_span, header_cells, true, pending);
+    paragraph.* = null;
+    table.* = .{ .node = node, .container_depth = container_depth };
+    return true;
+}
+
+/// Appends one row (header or body) to a table: a `table_row` node with
+/// one `table_cell` child per column. Cells are padded with empty cells
+/// when the line has fewer, and truncated when it has more (GFM §4.10).
+/// The cell's header flag and column alignment are resolved here; nonempty
+/// cells get a phase-2 inline job.
+fn appendTableRow(
+    doc: *document.Document,
+    table_node: *document.Node,
+    line_span: source.Span,
+    cells: []CellSpan,
+    header: bool,
+    pending: *std.ArrayList(PendingInline),
+) ParseError!void {
+    const alignment = table_node.data.table.alignment;
+    const row = try doc.createNode(.table_row, line_span, .none);
+    try doc.appendChild(table_node, row);
+    for (0..alignment.len) |j| {
+        const content = if (j < cells.len) cells[j].content else source.Span{ .start = line_span.start, .end = line_span.start };
+        const cell = try doc.createNode(.table_cell, content, .{
+            .table_cell = .{ .header = header, .alignment = alignment[j] },
+        });
+        try doc.appendChild(row, cell);
+        if (!content.isEmpty()) {
+            try pending.append(doc.allocator(), .{ .table_cell = .{ .node = cell, .span = content } });
+        }
+    }
 }
 
 /// A recognized CommonMark §4.5 opening fence. `info` is the trimmed source
@@ -2084,6 +2329,83 @@ fn emitHeading(
     if (!heading.content.isEmpty()) {
         try pending.append(doc.allocator(), .{ .heading = .{ .node = node, .span = heading.content } });
     }
+}
+
+/// Phase 2 inline pass for a GFM table cell (§4.10): the cell's raw
+/// content parses like a single-line block's inlines (code spans, raw
+/// HTML, links/images, emphasis). After matching, code-span nodes are
+/// post-processed for the pipe escape the row splitter consumed
+/// (docs/TABLES.md §5): code-span content is opaque to the inline pass, so
+/// a `\|` there keeps its backslash and must be dropped to match the
+/// spec's §4.10 example (`` `\|` `` renders `<code>|</code>`).
+fn parseTableCellInlines(
+    doc: *document.Document,
+    node: *document.Node,
+    content: source.Span,
+    defs: *Definitions,
+) ParseError!void {
+    var items = std.ArrayList(InlineItem).empty;
+    defer items.deinit(doc.allocator());
+    var spans = std.ArrayList(CodeSpan).empty;
+    defer spans.deinit(doc.allocator());
+    try discoverCodeSpans(doc, &[_]source.Span{content}, &spans);
+    var tags = std.ArrayList(HtmlTag).empty;
+    defer tags.deinit(doc.allocator());
+    try discoverHtmlTags(doc, &[_]source.Span{content}, &tags);
+    var constructs = std.ArrayList(Construct).empty;
+    defer constructs.deinit(doc.allocator());
+    try mergeConstructs(doc, spans.items, tags.items, &constructs);
+    var exclude: u32 = 0;
+    try scanLine(doc, &items, content, content, constructs.items, &exclude);
+    try discoverLinksAndImages(doc, &items, content.end, defs);
+    try matchInlines(doc, node, items.items);
+    try fixCellCodeSpans(doc, node);
+}
+
+/// Reproduces the §4.10 pipe escape in the one place the inline pass
+/// cannot resolve it: code-span content is opaque, so a backslash directly
+/// before a pipe survives there and must be dropped (`` `\|` `` →
+/// `<code>|</code>`). Image alts flattened from a cell carry the same
+/// artifact (a code span inside an image description). Iterative walk, so
+/// hostile cell nesting cannot overflow the call stack.
+fn fixCellCodeSpans(doc: *document.Document, cell: *document.Node) ParseError!void {
+    var it = try document.Document.Iterator.init(doc.allocator(), cell);
+    defer it.deinit();
+    while (try it.next()) |n| {
+        switch (n.tag) {
+            .code_span => {
+                const content = n.data.code_span;
+                if (std.mem.indexOf(u8, content, "\\|") == null) continue;
+                n.data.code_span = try dropPipeEscapeBackslashes(doc, content);
+            },
+            .image => {
+                const alt = n.data.image.alt;
+                if (std.mem.indexOf(u8, alt, "\\|") == null) continue;
+                n.data.image.alt = try dropPipeEscapeBackslashes(doc, alt);
+            },
+            else => {},
+        }
+    }
+}
+
+/// Returns a copy of `s` with the backslash dropped from every `\|` pair
+/// — the pipe positions whose preceding backslash run is odd, i.e. exactly
+/// the positions the row splitter consumed as escaped pipes. Other bytes
+/// (including other backslash escapes) are kept verbatim.
+fn dropPipeEscapeBackslashes(doc: *document.Document, s: []const u8) ParseError![]const u8 {
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(doc.allocator());
+    var run_start: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (s[i] == '|' and i > 0 and isEscaped(s, i)) {
+            try buf.appendSlice(doc.allocator(), s[run_start .. i - 1]);
+            try buf.append(doc.allocator(), '|');
+            run_start = i + 1;
+        }
+    }
+    try buf.appendSlice(doc.allocator(), s[run_start..]);
+    return buf.toOwnedSlice(doc.allocator());
 }
 
 /// Phase 2 inline pass for a heading (see `emitHeading`).
@@ -4080,6 +4402,72 @@ test "markdown: paragraphs, soft breaks, ATX headings end to end" {
     try testing.expectEqual(document.Tag.heading, result.document.root.children.items[1].tag);
     try testing.expectEqual(@as(u8, 1), result.document.root.children.items[1].data.heading);
     try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[2].tag);
+}
+
+test "markdown: GFM tables parse into table/row/cell nodes" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "| a | b |\n| :- | -: |\n| 1 | 2 |\n| 3 |\n",
+        .markdown,
+        .{},
+    );
+    defer result.deinit();
+
+    const table = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.table, table.tag);
+    // Alignment from the delimiter row: left, right.
+    try testing.expectEqual(@as(usize, 2), table.data.table.alignment.len);
+    try testing.expectEqual(document.TableAlign.left, table.data.table.alignment[0]);
+    try testing.expectEqual(document.TableAlign.right, table.data.table.alignment[1]);
+    // Three rows: header + two body rows (the second body row is padded).
+    try testing.expectEqual(@as(usize, 3), table.children.items.len);
+    const header = table.children.items[0];
+    try testing.expectEqual(document.Tag.table_row, header.tag);
+    try testing.expectEqual(@as(usize, 2), header.children.items.len);
+    try testing.expectEqual(document.Tag.table_cell, header.children.items[0].tag);
+    try testing.expect(header.children.items[0].data.table_cell.header);
+    try testing.expectEqual(document.TableAlign.left, header.children.items[0].data.table_cell.alignment);
+    const body = table.children.items[2];
+    try testing.expect(!body.children.items[0].data.table_cell.header);
+    // A short body row is padded with an empty cell; header cells have
+    // inline text children.
+    try testing.expectEqual(@as(usize, 2), body.children.items.len);
+    try testing.expectEqualStrings("3", body.children.items[0].children.items[0].data.text);
+    try testing.expectEqual(@as(usize, 0), body.children.items[1].children.items.len);
+    try testing.expectEqualStrings("a", header.children.items[0].children.items[0].data.text);
+}
+
+test "markdown: GFM tables consume escaped pipes and stay paragraphs on mismatch" {
+    const oliver = @import("oliver.zig");
+
+    // `\|` is an escaped pipe: the cell splitter keeps it out of the
+    // separator set, and a code span inside the cell drops the backslash
+    // (GFM §4.10 example: `` `\|` `` renders <code>|</code>).
+    {
+        var result = try oliver.parse(testing.allocator, "| b `\\|` az |\n| --------- |\n", .markdown, .{});
+        defer result.deinit();
+        const table = result.document.root.children.items[0];
+        const cell = table.children.items[0].children.items[0];
+        // Children: text "b ", the code span, text " az".
+        try testing.expectEqual(@as(usize, 3), cell.children.items.len);
+        const code = cell.children.items[1];
+        try testing.expectEqual(document.Tag.code_span, code.tag);
+        try testing.expectEqualStrings("|", code.data.code_span);
+    }
+    // Header/delimiter column mismatch: "a table will not be recognized".
+    {
+        var result = try oliver.parse(testing.allocator, "| abc | def |\n| --- |\n| bar |\n", .markdown, .{});
+        defer result.deinit();
+        try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+    }
+    // A pipe-less header line can never be a table header: `abc` followed
+    // by a one-column delimiter stays a paragraph.
+    {
+        var result = try oliver.parse(testing.allocator, "abc\n| --- |\n", .markdown, .{});
+        defer result.deinit();
+        try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+    }
 }
 
 test "markdown: heading recognition edge cases" {

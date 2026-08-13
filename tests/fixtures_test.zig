@@ -1386,6 +1386,64 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/raw-closing-attr.md"),
         .expected = @embedFile("fixtures/markdown/raw-closing-attr.html"),
     },
+    // --- GFM tables extension (docs/TABLES.md); each entry is one
+    // normative GFM §4.10 example, byte-for-byte from the GFM spec, plus
+    // container and inline-content coverage. ---
+    .{
+        .name = "table-basic",
+        .input = @embedFile("fixtures/markdown/table-basic.md"),
+        .expected = @embedFile("fixtures/markdown/table-basic.html"),
+    },
+    .{
+        .name = "table-alignment",
+        .input = @embedFile("fixtures/markdown/table-alignment.md"),
+        .expected = @embedFile("fixtures/markdown/table-alignment.html"),
+    },
+    .{
+        .name = "table-escaped-pipes",
+        .input = @embedFile("fixtures/markdown/table-escaped-pipes.md"),
+        .expected = @embedFile("fixtures/markdown/table-escaped-pipes.html"),
+    },
+    .{
+        .name = "table-break-blockquote",
+        .input = @embedFile("fixtures/markdown/table-break-blockquote.md"),
+        .expected = @embedFile("fixtures/markdown/table-break-blockquote.html"),
+    },
+    .{
+        .name = "table-body-rows-vary",
+        .input = @embedFile("fixtures/markdown/table-body-rows-vary.md"),
+        .expected = @embedFile("fixtures/markdown/table-body-rows-vary.html"),
+    },
+    .{
+        .name = "table-mismatch",
+        .input = @embedFile("fixtures/markdown/table-mismatch.md"),
+        .expected = @embedFile("fixtures/markdown/table-mismatch.html"),
+    },
+    .{
+        .name = "table-pad-truncate",
+        .input = @embedFile("fixtures/markdown/table-pad-truncate.md"),
+        .expected = @embedFile("fixtures/markdown/table-pad-truncate.html"),
+    },
+    .{
+        .name = "table-no-body",
+        .input = @embedFile("fixtures/markdown/table-no-body.md"),
+        .expected = @embedFile("fixtures/markdown/table-no-body.html"),
+    },
+    .{
+        .name = "table-in-quote",
+        .input = @embedFile("fixtures/markdown/table-in-quote.md"),
+        .expected = @embedFile("fixtures/markdown/table-in-quote.html"),
+    },
+    .{
+        .name = "table-inline-content",
+        .input = @embedFile("fixtures/markdown/table-inline-content.md"),
+        .expected = @embedFile("fixtures/markdown/table-inline-content.html"),
+    },
+    .{
+        .name = "table-literal",
+        .input = @embedFile("fixtures/markdown/table-literal.md"),
+        .expected = @embedFile("fixtures/markdown/table-literal.html"),
+    },
 };
 
 const TextileFixture = struct {

@@ -94,4 +94,17 @@ allowed; source code of parsers is not.**
   — official library documentation: `std.Io.Writer`, `std.process.Init`,
   `std.ArrayList`, `std.heap.ArenaAllocator`, build API.
 
+## Sources consulted (session 2 — GFM tables)
+
+- GitHub Flavored Markdown Spec 0.29-gfm (2019-04-06),
+  §4.10 Tables (extension) <https://github.github.com/gfm/#tables-extension->
+  — the normative tables behavior: header + delimiter + body rows, cell
+  splitting and trimming, alignment colons, escaped pipes (including the
+  `` `\|` `` → `<code>|</code>` code-span example), body-row padding/
+  truncation, and termination at blank lines or other block structures.
+  The spec's prose ("cells whose only content are hyphens", no count
+  stated) and its `:-:` alignment example were reconciled with the issue
+  contract ("3+ hyphens per column") as a chosen minimum, recorded in
+  docs/TABLES.md §3.
+
 No Markdown or Textile parser implementation source was consulted.
