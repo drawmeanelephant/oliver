@@ -32,7 +32,7 @@ divergences.
 | fenced code blocks | implemented | §4.5, per docs/FENCED-CODE.md. Backtick or tilde opener of length ≥3 with ≤3 leading columns; same-marker closer at least as long, ≤3-column indent, trailing spaces/tabs only. Backtick info strings reject backticks; the complete trimmed info string resolves §2.4 backslash escapes and §2.5 entities, is retained, and its first word becomes an escaped `language-…` class. Content is literal, removes up to the opener indentation, normalizes every content line ending to `\n`, and closes without backtracking at the containing block/document end. Emits arena-owned `.code_block { content, info }` and deterministic `<pre><code>`. **Scorecard: 29/29**. |
 | indented code blocks | implemented | §4.4. One or more chunks of lines each indented ≥4 columns (tabs expand to four-column tab stops), separated by blank lines. Cannot interrupt a paragraph; ends at the first line with <4 columns of indentation, so a paragraph may follow immediately. Content is the literal bytes minus four columns of indentation — a tab straddling the boundary leaves its remaining columns as spaces — with blank lines between chunks retained, trailing blank lines dropped, and one final newline. List and quote composition follows the container stack. Emits arena-owned `.code_block { content, info = null }`. **Scorecard: 12/12**. |
 | HTML blocks | implemented | §4.6, all seven types, per docs/HTML-BLOCKS.md. Type 1 (`<script|pre|style|textarea`, case-insensitive), type 2 (`<!--`), type 3 (`<?`), type 4 (`<!` + letter), type 5 (`<![CDATA[`) end at their matching terminator on the line (`</script>` etc., `-->`, `?>`, `>`, `]]>`) or a blank line; type 6 (`<`/`</` + one of the 62 HTML block-tag names) and type 7 (a complete open/closing tag on its own line) end at a blank line (or containing-block boundary). Types 1–6 can interrupt a paragraph; type 7 cannot. Content is the container-stripped remainder with leading whitespace preserved, emitted verbatim as a `.html_block` leaf (pass-through policy, same as inline HTML). **Scorecard: 44/44**. |
-| tables (GFM extension) | planned | Not part of CommonMark. Oliver will define tables as an explicit extension with its own chosen syntax (GFM-style `|` rows + delimiter row), documented before implementation. |
+| tables (GFM extension) | planned | Not part of CommonMark. Oliver will define tables as an explicit extension with its own chosen syntax (GFM-style `|` rows + delimiter row), documented before implementation. This row is the contract doc the docs-authorship decision points at (recorded ambiguity 21). |
 | link reference definitions | implemented | §4.7: `[label]: destination ["title"]` collected during the block pass, before any inline parsing (a use may precede its definition). Extracted at paragraph close: the first line must be `[` + label + `]` + optional spaces/tabs + destination; an optional title may follow on the same line (separated by spaces/tabs) or on the next line; nothing else may follow the title on its line; indentation beyond 3 spaces cannot start a definition. First definition wins per label; labels are case-folded (Unicode full case fold, §6.3) with internal whitespace collapsed to a single space; an unclosed `[` cannot be a definition. Paragraphs consisting solely of definitions disappear from output; a definition may sit inside a paragraph of other content (the surrounding paragraph keeps its own inline pass). |
 | blank lines | implemented | §3; whitespace-only lines separate blocks and are never part of content. |
 
@@ -246,3 +246,18 @@ below).
     line, a block signature, or a non-marker line closes the tree; a
     different marker at the same depth starts a sibling list; a depth jump
     opens empty intermediate items.** See docs/TEXTILE-PARITY.md §3.
+21. **The repo's own docs use GFM tables by choice.** The authoring docs
+    (README.md plus ten `docs/*.md`: ARCHITECTURE, BLOCKS-PARSING,
+    DOCUMENT-MODEL, ENTITIES, FEATURE-MATRIX, IMAGES-PARSING,
+    INLINE-PARSING, TESTS, TEXTILE-PARITY, WORK-LEDGER) use GFM table
+    syntax, which Oliver renders literally today. This is deliberate: the
+    docs are read on GitHub and in source, where GFM tables are the native
+    format, and no Oliver consumer renders them (Oliver is markup
+    infrastructure; static-site generation is a documented non-goal).
+    Converting them to raw-HTML `<table>` blocks would let Oliver render
+    them today but would impose an authoring tax on every future table.
+    **Oliver: defer. The update points when the GFM tables extension lands
+    are the "tables (GFM extension)" row above (the contract doc) and the
+    table-shaped assertions that pin it — the DOCUMENT-MODEL.md
+    convergence table, the fixture index, and the shared-model convergence
+    pairs in tests/fixtures_test.zig.**
