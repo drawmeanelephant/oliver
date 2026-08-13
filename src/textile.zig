@@ -3097,7 +3097,7 @@ fn emitItems(doc: *document.Document, parent: *document.Node, content: source.Sp
                     i += 1;
                 },
                 .footnote => |f| {
-                    const node = try doc.createNode(.footnote_ref, subSpan(content, f.span.start, f.span.end), .{ .footnote_ref = f.number });
+                    const node = try doc.createNode(.footnote_ref, subSpan(content, f.span.start, f.span.end), .{ .footnote_ref = .{ .number = f.number } });
                     try doc.appendChild(scope.parent, node);
                     i += 1;
                 },
@@ -5763,7 +5763,7 @@ test "textile: [N] footnote references in every inline context" {
         try std.testing.expectEqual(@as(usize, 3), p.children.items.len); // text + ref + text
         const ref = p.children.items[1];
         try std.testing.expectEqual(document.Tag.footnote_ref, ref.tag);
-        try std.testing.expectEqual(@as(u16, 1), ref.data.footnote_ref);
+        try std.testing.expectEqual(@as(u16, 1), ref.data.footnote_ref.number);
     }
     // Refs resolve in headings, list items, and table cells (the shared
     // inline seam).
@@ -5787,7 +5787,7 @@ test "textile: [N] footnote references in every inline context" {
     {
         var result = try oliver.parse(std.testing.allocator, "Note[12].\n", .textile, .{});
         defer result.deinit();
-        try std.testing.expectEqual(@as(u16, 12), result.document.root.children.items[0].children.items[1].data.footnote_ref);
+        try std.testing.expectEqual(@as(u16, 12), result.document.root.children.items[0].children.items[1].data.footnote_ref.number);
     }
 }
 
@@ -5815,7 +5815,7 @@ test "textile: footnote literal fallbacks and marker edges" {
         defer result2.deinit();
         const root = result2.document.root;
         try std.testing.expectEqual(document.Tag.footnote_ref, root.children.items[1].children.items[1].tag);
-        try std.testing.expectEqual(@as(u16, 0), root.children.items[1].children.items[1].data.footnote_ref);
+        try std.testing.expectEqual(@as(u16, 0), root.children.items[1].children.items[1].data.footnote_ref.number);
     }
 
     // A `fnN.` signature terminates an open extended quote.

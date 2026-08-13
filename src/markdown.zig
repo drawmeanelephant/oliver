@@ -104,6 +104,24 @@ pub const ParseError = error{OutOfMemory};
 /// Tab stop width for block-structure indentation (§2.1): tabs behave as if
 /// replaced by spaces with a tab stop of 4 characters when whitespace helps
 /// define block structure. Content bytes are never expanded.
+/// Markdown dialect extensions. All are **off by default**: the Markdown
+/// frontend is byte-exact CommonMark 0.31.2 unless a consumer opts in, so
+/// the CommonMark conformance corpus stays green. Each extension is a
+/// documented, principled addition with its own contract doc and tests
+/// (docs/MARKDOWN-EXTENSIONS.md).
+pub const Options = struct {
+    /// Pandoc-style footnotes: `[^label]` references plus `[^label]:`
+    /// definitions, rendered as a footnotes section with back-references.
+    footnotes: bool = false,
+    /// Pandoc-style definition lists: a term paragraph immediately followed
+    /// by `:` (or `~`) definition lines, rendered as `<dl><dt><dd>`.
+    definition_lists: bool = false,
+    /// Kramdown/MultiMarkdown-style heading attribute lists: a trailing
+    /// `{#id .class}` on ATX and Setext headings, consumed as the heading's
+    /// explicit `id`/`class`.
+    heading_attributes: bool = false,
+};
+
 const tab_stop: u32 = 4;
 
 /// A line view during the block pass: the remaining `line` plus the
@@ -293,7 +311,7 @@ fn removeTrailingBlankLines(out: *std.ArrayList(u8)) void {
 /// Parses `doc.src` as Markdown, appending block nodes under `doc.root`.
 /// The caller (`oliver.parse`) guarantees
 /// `doc.src.bytes.len <= source.max_input_len`, so all offsets fit in `u32`.
-pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnostic)) ParseError!void {
+pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnostic), options: Options) ParseError!void {
     _ = diags;
 
     // Two-phase parse (spec appendix "A parsing strategy"): phase 1 builds
@@ -320,6 +338,10 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var indented: ?IndentedCode = null;
     var html: ?HtmlBlock = null;
     var table: ?TableBlock = null;
+    // Markdown definition-list state (extension): the open `.definition_list`
+    // node and its current `.definition_body` node, null when inactive.
+    var def_list: ?*document.Node = null;
+    var def_body: ?*document.Node = null;
 
     var lines = source.Lines.init(doc.src.bytes);
     while (lines.next()) |line| {
@@ -484,7 +506,12 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // is deferred until the next line shows whether the blank separated
         // blocks inside an item or two items (§5.3).
         if (isBlank(view.line.text)) {
-            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            // A definition body's paragraph closes into its `<dd>`, not the
+            // document root.
+            const close_parent = if (def_body != null) def_body.? else leafParent(doc, &containers);
+            try closeParagraph(doc, &paragraph, close_parent, &defs, &pending, options);
+            def_list = null;
+            def_body = null;
             noteListBlankLines(&containers, matched);
             containers.shrinkRetainingCapacity(matched);
             // A blank line with only a dead item on the stack (an inert
@@ -494,6 +521,65 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             }
             extendContainerSpans(&containers, view.line);
             continue;
+        }
+
+        // B2. Markdown definition lists (extension): a `:`/`~` definition
+        // marker directly after a term paragraph, or a continuation line
+        // (1–3 columns indented) of an open definition body. Only runs when
+        // every open container matched (a def marker that fails its
+        // container is a lazy paragraph continuation, decided in C). A
+        // marker line closes the previous body (if any), or turns the open
+        // paragraph into a term under the (possibly new) `<dl>`; an
+        // unindented or 4+-column line ends the open body while the list
+        // stays open for a following term.
+        if (options.definition_lists and matched == containers.items.len and
+            (paragraph != null or def_list != null))
+        {
+            if (tryDefListMarker(view)) |rest| {
+                if (paragraph == null and def_body == null) {
+                    // A stale open list with no pending term (a block
+                    // interrupted it): reset and fall through, so the
+                    // marker stays ordinary text.
+                    def_list = null;
+                    def_body = null;
+                } else if (def_body != null) {
+                    // The open paragraph (if any) belongs to the previous
+                    // definition; close it there.
+                    try closeParagraph(doc, &paragraph, def_body.?, &defs, &pending, options);
+                } else {
+                    // The open paragraph is a term.
+                    if (def_list == null) {
+                        const list_node = try doc.createNode(.definition_list, .{
+                            .start = paragraph.?.start,
+                            .end = @intCast(view.line.content_end),
+                        }, .none);
+                        try doc.appendChild(leafParent(doc, &containers), list_node);
+                        def_list = list_node;
+                    }
+                    try closeParagraphAs(doc, &paragraph, def_list.?, &defs, &pending, options, .definition_term);
+                }
+                const body = try doc.createNode(.definition_body, .{
+                    .start = @intCast(view.line.start),
+                    .end = @intCast(view.line.content_end),
+                }, .none);
+                try doc.appendChild(def_list.?, body);
+                def_body = body;
+                try appendParagraphLine(doc, &paragraph, rest);
+                extendContainerSpans(&containers, view.line);
+                continue;
+            }
+            if (def_body != null) {
+                // A non-marker line: continuation of the definition body's
+                // paragraph (1–3 columns), or the end of the body.
+                const indent = viewIndent(view);
+                if (indent >= 1 and indent < 4 and paragraph != null) {
+                    try appendParagraphLine(doc, &paragraph, view);
+                    extendContainerSpans(&containers, view.line);
+                    continue;
+                }
+                try closeParagraph(doc, &paragraph, def_body.?, &defs, &pending, options);
+                def_body = null;
+            }
         }
 
         // C. Lazy continuation (§5.1 rule 2, §5.2 rule 5): a line that
@@ -510,7 +596,9 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 extendContainerSpans(&containers, view.line);
                 continue;
             }
-            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+            def_list = null;
+            def_body = null;
             containers.shrinkRetainingCapacity(matched);
             if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
                 const top_list = containers.items[containers.items.len - 1].node;
@@ -532,7 +620,9 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // rule 1 exceptions); otherwise the line is paragraph text.
         while (true) {
             if (tryStripBlockQuoteMarker(view)) |stripped| {
-                try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+                try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+                def_list = null;
+                def_body = null;
                 const node = try doc.createNode(.block_quote, stripped.line.contentSpan(), .{ .block_quote = .{} });
                 try doc.appendChild(leafParent(doc, &containers), node);
                 try containers.append(doc.allocator(), .{ .node = node });
@@ -546,7 +636,9 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             }
             if (tryListMarker(view)) |m| {
                 if (paragraph != null and !m.can_interrupt) break;
-                try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+                try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+                def_list = null;
+                def_body = null;
                 // Reuse an open same-type list, or close a different-type
                 // list, or open a new list under the current parent.
                 var list_node: *document.Node = undefined;
@@ -582,12 +674,19 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // consumed, or a blank-start list item) is a blank line inside the
         // container, not an empty paragraph.
         if (isBlank(view.line.text)) {
-            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            // A definition body's paragraph closes into its `<dd>`, not the
+            // document root.
+            const close_parent = if (def_body != null) def_body.? else leafParent(doc, &containers);
+            try closeParagraph(doc, &paragraph, close_parent, &defs, &pending, options);
+            def_list = null;
+            def_body = null;
             extendContainerSpans(&containers, view.line);
             continue;
         }
         if (tryFenceOpen(view)) |opening| {
-            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+            def_list = null;
+            def_body = null;
             const info = if (opening.info.isEmpty())
                 null
             else
@@ -615,13 +714,18 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 leafParent(doc, &containers),
                 &defs,
                 &pending,
+                options,
             )) {
+                def_list = null;
+                def_body = null;
                 extendContainerSpans(&containers, view.line);
                 continue;
             }
         }
         if (isThematicBreak(view, &thematic_facts)) {
-            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+            def_list = null;
+            def_body = null;
             // A failed list item can leave its list as the deepest matched
             // container. A thematic break is not a sibling item: it belongs
             // beside that list, never directly under the `.list` node.
@@ -634,8 +738,10 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             continue;
         }
         if (tryAtxHeading(view)) |heading| {
-            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
-            try emitHeading(doc, view, heading, leafParent(doc, &containers), &pending);
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+            def_list = null;
+            def_body = null;
+            try emitHeading(doc, view, heading, leafParent(doc, &containers), &pending, options);
             extendContainerSpans(&containers, view.line);
             continue;
         }
@@ -647,7 +753,9 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // that line), types 6/7 at a blank line or the end of their
         // container.
         if (tryHtmlBlockStart(doc, view, paragraph == null)) |block_type| {
-            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+            try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+            def_list = null;
+            def_body = null;
             const node = try doc.createNode(.html_block, view.line.contentSpan(), .{
                 .html_block = &.{},
             });
@@ -671,6 +779,8 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // open so container order is fixed; content accumulates incrementally
         // and trailing blank lines are dropped at close.
         if (paragraph == null and viewIndent(view) >= 4) {
+            def_list = null;
+            def_body = null;
             const node = try doc.createNode(.code_block, view.line.contentSpan(), .{
                 .code_block = .{ .content = &.{}, .info = null },
             });
@@ -691,6 +801,8 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // current line is a matching delimiter row. Otherwise the line is
         // ordinary paragraph text.
         if (try tryEmitTable(doc, &paragraph, view, leafParent(doc, &containers), containers.items.len, &table, &pending)) {
+            def_list = null;
+            def_body = null;
             extendContainerSpans(&containers, view.line);
             continue;
         }
@@ -701,15 +813,17 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     try finishIndentedCode(doc, &indented);
     finishHtmlBlock(&html);
     finishTable(&table);
-    try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending);
+    // A trailing definition body's paragraph closes into its `<dd>`.
+    const close_parent = if (def_body != null) def_body.? else leafParent(doc, &containers);
+    try closeParagraph(doc, &paragraph, close_parent, &defs, &pending, options);
 
     // Phase 2: inline pass, with the full definitions map available.
     for (pending.items) |job| {
         switch (job) {
-            .paragraph => |pp| try parseParagraphInlines(doc, pp.node, pp.lines, &defs),
-            .heading => |hh| try parseHeadingInlines(doc, hh.node, hh.span, &defs),
-            .setext_heading => |hh| try parseSetextHeadingInlines(doc, hh.node, hh.lines, &defs),
-            .table_cell => |tc| try parseTableCellInlines(doc, tc.node, tc.span, &defs),
+            .paragraph => |pp| try parseParagraphInlines(doc, pp.node, pp.lines, &defs, options),
+            .heading => |hh| try parseHeadingInlines(doc, hh.node, hh.span, &defs, options),
+            .setext_heading => |hh| try parseSetextHeadingInlines(doc, hh.node, hh.lines, &defs, options),
+            .table_cell => |tc| try parseTableCellInlines(doc, tc.node, tc.span, &defs, options),
         }
     }
 }
@@ -780,6 +894,22 @@ fn tryStripBlockQuoteMarker(view: View) ?View {
         }
     }
     return view.after(i, col);
+}
+
+/// Recognizes a definition-list marker line (extension): `:` or `~`
+/// preceded by at most three columns of indentation and followed by a
+/// space/tab. Returns the view after the marker and its single separator
+/// (further whitespace stays as content; the inline pass trims it).
+fn tryDefListMarker(view: View) ?View {
+    const skipped = skipIndent(view, 3) orelse return null;
+    const t = view.line.text;
+    var i = skipped.i;
+    if (i >= t.len) return null;
+    if (t[i] != ':' and t[i] != '~') return null;
+    i += 1;
+    if (i >= t.len or (t[i] != ' ' and t[i] != '\t')) return null;
+    i += 1;
+    return view.after(i, skipped.cols + 2);
 }
 
 /// A list marker recognized on a line (§5.2): a bullet character (`-`,
@@ -1760,6 +1890,7 @@ fn emitSetextHeading(
     parent: *document.Node,
     defs: *Definitions,
     pending: *std.ArrayList(PendingInline),
+    options: Options,
 ) ParseError!bool {
     const k = setextContentIndex(doc, paragraph.*) orelse return false;
     const p = paragraph.*.?;
@@ -1772,10 +1903,21 @@ fn emitSetextHeading(
     }
 
     const content = p.lines.items[k..];
+    var heading_data = document.Heading{ .level = underline.level };
+    if (options.heading_attributes) {
+        // A trailing `{#id .class}` on the last content line is consumed as
+        // the heading's explicit id/class (mutating the LineRef before the
+        // phase-2 job reads it).
+        const last = &content[content.len - 1];
+        const stripped = stripHeadingAttributes(doc.src.bytes, last.content);
+        last.content = stripped.content;
+        heading_data.id = stripped.id;
+        heading_data.class = stripped.class;
+    }
     const node = try doc.createNode(.heading, .{
         .start = content[0].content.start,
         .end = @intCast(underline_line.line.content_end),
-    }, .{ .heading = .{ .level = underline.level } });
+    }, .{ .heading = heading_data });
     try doc.appendChild(parent, node);
     try pending.append(doc.allocator(), .{
         .setext_heading = .{ .node = node, .lines = content },
@@ -2136,21 +2278,47 @@ fn encodeCp(out: []u8, cp: u21) usize {
 /// partially or wholly a definition — so extraction stops at the first
 /// non-definition line. Inline parsing is deferred to phase 2, where the
 /// complete definitions map is available.
+/// Closes the open paragraph as a normal `.paragraph` block.
 fn closeParagraph(
     doc: *document.Document,
     paragraph: *?Paragraph,
     parent: *document.Node,
     defs: *Definitions,
     pending: *std.ArrayList(PendingInline),
+    options: Options,
+) ParseError!void {
+    return closeParagraphAs(doc, paragraph, parent, defs, pending, options, .paragraph);
+}
+
+/// Closes the open paragraph as a block with the given tag. `.paragraph`
+/// and `.definition_term` are the two supported tags; both take inline
+/// children in phase 2, so the pending job shape is identical.
+fn closeParagraphAs(
+    doc: *document.Document,
+    paragraph: *?Paragraph,
+    parent: *document.Node,
+    defs: *Definitions,
+    pending: *std.ArrayList(PendingInline),
+    options: Options,
+    node_tag: document.Tag,
 ) ParseError!void {
     const p = paragraph.* orelse return;
     paragraph.* = null;
 
     const lines = p.lines.items;
 
-    // Extract leading link reference definitions.
+    // Extract leading footnote definitions (Markdown extension) and link
+    // reference definitions (§4.7). Either kind may lead a paragraph; the
+    // first non-definition line ends the extraction loop.
     var k: usize = 0;
     while (k < lines.len) {
+        if (options.footnotes) {
+            if (tryParseFootnoteDefinition(doc, lines[k..])) |fd| {
+                try registerFootnoteDefinition(doc, fd, lines[k..], pending);
+                k += fd.consumed_lines;
+                continue;
+            }
+        }
         const def = tryParseDefinition(doc, lines[k..]) orelse break;
         try registerDefinition(doc, defs, def);
         k += def.consumed_lines;
@@ -2162,9 +2330,101 @@ fn closeParagraph(
         .start = remaining[0].content.start,
         .end = remaining[remaining.len - 1].content.end,
     };
-    const node = try doc.createNode(.paragraph, span, .{ .paragraph = .{} });
+    const data: document.Data = if (node_tag == .paragraph) .{ .paragraph = .{} } else .none;
+    const node = try doc.createNode(node_tag, span, data);
     try doc.appendChild(parent, node);
     try pending.append(doc.allocator(), .{ .paragraph = .{ .node = node, .lines = remaining } });
+}
+
+/// A parsed Markdown footnote definition (`[^label]:` extension): the label
+/// content span (between `[^` and `]`), the content span of the definition
+/// line (after `]: `), and the number of paragraph lines consumed (the
+/// definition line plus any following lines indented 1–3 columns).
+const ParsedFootnoteDefinition = struct {
+    label: source.Span,
+    content: source.Span,
+    consumed_lines: usize,
+};
+
+/// Recognizes a Markdown footnote definition line at the start of a
+/// paragraph: `[^label]:` with at most three columns of indentation,
+/// followed by optional whitespace and the definition content. Continuation
+/// lines indented 1–3 columns join the definition's paragraph. Any other
+/// shape returns null, so the line stays ordinary paragraph text.
+fn tryParseFootnoteDefinition(doc: *document.Document, lines: []const Paragraph.LineRef) ?ParsedFootnoteDefinition {
+    const bytes = doc.src.bytes;
+    const first = lines[0].content;
+    const t = bytes;
+    var i = first.start;
+    var indent: usize = 0;
+    while (i < first.end) : (i += 1) {
+        if (t[i] == ' ') {
+            indent += 1;
+            if (indent > 3) return null;
+        } else if (t[i] == '\t') {
+            return null; // a leading tab never opens a footnote definition
+        } else break;
+    }
+    if (i + 1 >= first.end or t[i] != '[' or t[i + 1] != '^') return null;
+    var j = i + 2;
+    while (j < first.end and t[j] != ']') : (j += 1) {}
+    if (j >= first.end or j == i + 2) return null; // unclosed or empty label
+    var k = j + 1;
+    if (k >= first.end or t[k] != ':') return null;
+    k += 1;
+    while (k < first.end and (t[k] == ' ' or t[k] == '\t')) : (k += 1) {}
+
+    var consumed: usize = 1;
+    while (consumed < lines.len) {
+        const l = lines[consumed].content;
+        var li = l.start;
+        var lin: usize = 0;
+        while (li < l.end) : (li += 1) {
+            if (t[li] == ' ') {
+                lin += 1;
+            } else if (t[li] == '\t') {
+                return null; // tabs in continuation indent are out of scope
+            } else break;
+        }
+        if (lin >= 1 and lin <= 3) {
+            consumed += 1;
+        } else break;
+    }
+    return .{
+        .label = .{ .start = @intCast(i + 2), .end = @intCast(j) },
+        .content = .{ .start = @intCast(k), .end = first.end },
+        .consumed_lines = consumed,
+    };
+}
+
+/// Registers a footnote definition: creates the `.footnote` container with
+/// one `.paragraph` child (whose lines are the definition content plus its
+/// indented continuations), appends it to `doc.footnotes`, and queues the
+/// paragraph for the phase-2 inline pass.
+fn registerFootnoteDefinition(
+    doc: *document.Document,
+    fd: ParsedFootnoteDefinition,
+    lines: []const Paragraph.LineRef,
+    pending: *std.ArrayList(PendingInline),
+) ParseError!void {
+    const alloc = doc.allocator();
+    const n = fd.consumed_lines;
+    const span = source.Span{ .start = lines[0].content.start, .end = lines[n - 1].content.end };
+    const fnode = try doc.createNode(.footnote, span, .none);
+    const pnode = try doc.createNode(.paragraph, span, .{ .paragraph = .{} });
+    try doc.appendChild(fnode, pnode);
+
+    // The definition paragraph's first line is the content after `]: `; the
+    // following lines are the indented continuations, verbatim (the inline
+    // pass trims leading whitespace).
+    const refs = try alloc.alloc(Paragraph.LineRef, n);
+    refs[0] = .{ .content = fd.content, .terminator = lines[0].terminator };
+    for (1..n) |t| refs[t] = lines[t];
+    try pending.append(alloc, .{ .paragraph = .{ .node = pnode, .lines = refs } });
+    try doc.footnotes.append(alloc, .{
+        .label = doc.src.bytes[fd.label.start..fd.label.end],
+        .node = fnode,
+    });
 }
 
 /// Phase 2 inline pass for a paragraph: discovery -> scan -> link discovery
@@ -2174,8 +2434,9 @@ fn parseParagraphInlines(
     node: *document.Node,
     lines: []const Paragraph.LineRef,
     defs: *Definitions,
+    options: Options,
 ) ParseError!void {
-    return parseMultilineBlockInlines(doc, node, lines, defs);
+    return parseMultilineBlockInlines(doc, node, lines, defs, options);
 }
 
 /// Phase 2 inline pass for Setext content. The underline itself is never part
@@ -2186,8 +2447,9 @@ fn parseSetextHeadingInlines(
     node: *document.Node,
     lines: []const Paragraph.LineRef,
     defs: *Definitions,
+    options: Options,
 ) ParseError!void {
-    return parseMultilineBlockInlines(doc, node, lines, defs);
+    return parseMultilineBlockInlines(doc, node, lines, defs, options);
 }
 
 fn parseMultilineBlockInlines(
@@ -2195,6 +2457,7 @@ fn parseMultilineBlockInlines(
     node: *document.Node,
     lines: []const Paragraph.LineRef,
     defs: *Definitions,
+    options: Options,
 ) ParseError!void {
     var items = std.ArrayList(InlineItem).empty;
     defer items.deinit(doc.allocator());
@@ -2238,7 +2501,7 @@ fn parseMultilineBlockInlines(
     // Second discovery pass: inline links, images, and reference links
     // (§6.3/§6.4), before emphasis matching.
     const para_end = lines[lines.len - 1].content.end;
-    try discoverLinksAndImages(doc, &items, para_end, defs);
+    try discoverLinksAndImages(doc, &items, para_end, defs, options);
     try matchInlines(doc, node, items.items);
 }
 
@@ -2315,19 +2578,88 @@ fn tryAtxHeading(view: View) ?AtxHeading {
     };
 }
 
+/// Strips a trailing heading attribute list (`{#id .class}`, extension)
+/// from an ATX or Setext heading's content span. The attribute list must be
+/// the last thing on the line, preceded by whitespace; `#id` becomes the
+/// heading's explicit id and `.class` its class (first token wins; values
+/// are raw source slices). Returns the reduced content span and the parsed
+/// attributes, or the input unchanged when no valid list is present.
+fn stripHeadingAttributes(bytes: []const u8, content: source.Span) struct {
+    content: source.Span,
+    id: ?[]const u8,
+    class: ?[]const u8,
+} {
+    if (content.len() < 3 or bytes[content.end - 1] != '}') return .{ .content = content, .id = null, .class = null };
+
+    // Find the `{` opening the trailing brace group (the last unescaped
+    // `{` before the final `}`, with no `}` between it and the end).
+    var open: ?usize = null;
+    var i = content.end - 1;
+    while (i > content.start) {
+        i -= 1;
+        if (bytes[i] == '}') break;
+        if (bytes[i] == '{' and !isEscaped(bytes, i)) {
+            open = i;
+            break;
+        }
+    }
+    const o = open orelse return .{ .content = content, .id = null, .class = null };
+    if (o > content.start and bytes[o - 1] != ' ' and bytes[o - 1] != '\t') return .{ .content = content, .id = null, .class = null };
+    // Parse `#id` and `.class` tokens separated by whitespace.
+    var id: ?[]const u8 = null;
+    var cls: ?[]const u8 = null;
+    var idx = o + 1;
+    while (idx < content.end - 1) {
+        if (bytes[idx] == ' ' or bytes[idx] == '\t') {
+            idx += 1;
+            continue;
+        }
+        if (bytes[idx] == '#' or bytes[idx] == '.') {
+            const is_id = bytes[idx] == '#';
+            var j = idx + 1;
+            while (j < content.end - 1 and bytes[j] != ' ' and bytes[j] != '\t') : (j += 1) {}
+            if (j == idx + 1) return .{ .content = content, .id = null, .class = null }; // empty token
+            if (is_id) {
+                if (id == null) id = bytes[idx + 1 .. j];
+            } else {
+                if (cls == null) cls = bytes[idx + 1 .. j];
+            }
+            idx = j;
+            continue;
+        }
+        return .{ .content = content, .id = null, .class = null }; // unknown token shape: not an IAL
+    }
+
+    // Strip the IAL (and the whitespace before it) from the content.
+    var new_end = o;
+    while (new_end > content.start and (bytes[new_end - 1] == ' ' or bytes[new_end - 1] == '\t')) new_end -= 1;
+    return .{
+        .content = .{ .start = content.start, .end = @intCast(new_end) },
+        .id = id,
+        .class = cls,
+    };
+}
+
 fn emitHeading(
     doc: *document.Document,
     view: View,
     heading: AtxHeading,
     parent: *document.Node,
     pending: *std.ArrayList(PendingInline),
+    options: Options,
 ) ParseError!void {
-    const node = try doc.createNode(.heading, view.line.contentSpan(), .{
-        .heading = .{ .level = heading.level },
-    });
+    var heading_data = document.Heading{ .level = heading.level };
+    var content = heading.content;
+    if (options.heading_attributes) {
+        const stripped = stripHeadingAttributes(doc.src.bytes, content);
+        content = stripped.content;
+        heading_data.id = stripped.id;
+        heading_data.class = stripped.class;
+    }
+    const node = try doc.createNode(.heading, view.line.contentSpan(), .{ .heading = heading_data });
     try doc.appendChild(parent, node);
-    if (!heading.content.isEmpty()) {
-        try pending.append(doc.allocator(), .{ .heading = .{ .node = node, .span = heading.content } });
+    if (!content.isEmpty()) {
+        try pending.append(doc.allocator(), .{ .heading = .{ .node = node, .span = content } });
     }
 }
 
@@ -2343,6 +2675,7 @@ fn parseTableCellInlines(
     node: *document.Node,
     content: source.Span,
     defs: *Definitions,
+    options: Options,
 ) ParseError!void {
     var items = std.ArrayList(InlineItem).empty;
     defer items.deinit(doc.allocator());
@@ -2357,11 +2690,12 @@ fn parseTableCellInlines(
     try mergeConstructs(doc, spans.items, tags.items, &constructs);
     var exclude: u32 = 0;
     try scanLine(doc, &items, content, content, constructs.items, &exclude);
-    try discoverLinksAndImages(doc, &items, content.end, defs);
+    try discoverLinksAndImages(doc, &items, content.end, defs, options);
     try matchInlines(doc, node, items.items);
     try fixCellCodeSpans(doc, node);
 }
 
+/// Returns a copy of `s` with the backslash dropped from every `\|` pair
 /// Reproduces the §4.10 pipe escape in the one place the inline pass
 /// cannot resolve it: code-span content is opaque, so a backslash directly
 /// before a pipe survives there and must be dropped (`` `\|` `` →
@@ -2414,6 +2748,7 @@ fn parseHeadingInlines(
     node: *document.Node,
     content: source.Span,
     defs: *Definitions,
+    options: Options,
 ) ParseError!void {
     var items = std.ArrayList(InlineItem).empty;
     defer items.deinit(doc.allocator());
@@ -2428,7 +2763,7 @@ fn parseHeadingInlines(
     try mergeConstructs(doc, spans.items, tags.items, &constructs);
     var exclude: u32 = 0;
     try scanLine(doc, &items, content, content, constructs.items, &exclude);
-    try discoverLinksAndImages(doc, &items, content.end, defs);
+    try discoverLinksAndImages(doc, &items, content.end, defs, options);
     try matchInlines(doc, node, items.items);
 }
 
@@ -2529,6 +2864,16 @@ const InlineItem = union(enum) {
     /// link discovery, and break processing (docs/RAW-HTML.md §2); the
     /// renderer writes the source bytes verbatim.
     raw_html: RawHtmlItem,
+    /// A Markdown footnote reference (`[^label]`, extension): `span` covers
+    /// the whole construct and `label` the bytes between `^` and `]`.
+    /// Leaf item: opaque to the delimiter stack.
+    footnote: FootnoteItem,
+};
+
+/// A Markdown footnote reference item (extension). See `InlineItem.footnote`.
+const FootnoteItem = struct {
+    span: source.Span,
+    label: source.Span,
 };
 
 /// A raw HTML tag item (§6.6): the whole construct span. The tag's bytes
@@ -2566,6 +2911,7 @@ fn itemSpan(item: InlineItem) source.Span {
         .image => |im| im.span,
         .autolink => |a| a.span,
         .raw_html => |h| h.span,
+        .footnote => |fn_| fn_.span,
     };
 }
 
@@ -2581,6 +2927,7 @@ fn setItemSpan(item: *InlineItem, span: source.Span) void {
         .image => |*im| im.span = span,
         .autolink => |*a| a.span = span,
         .raw_html => |*h| h.span = span,
+        .footnote => |*fn_| fn_.span = span,
     }
 }
 
@@ -3138,7 +3485,13 @@ const max_link_scan: usize = 2048;
 /// stack, and their children are matched separately (link text as a fresh
 /// inline scope; image descriptions flattened to the alt string at emit
 /// time).
-fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineItem), para_end: u32, defs: *Definitions) ParseError!void {
+fn discoverLinksAndImages(
+    doc: *document.Document,
+    items: *std.ArrayList(InlineItem),
+    para_end: u32,
+    defs: *Definitions,
+    options: Options,
+) ParseError!void {
     const bytes = doc.src.bytes;
     var out = std.ArrayList(InlineItem).empty;
     var stack = std.ArrayList(usize).empty;
@@ -3177,6 +3530,21 @@ fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineI
             // starts past the bang. Used for collapsed/shortcut labels and
             // as the link text for image alt-flattening inputs.
             const text = source.Span{ .start = open_start + (if (is_image) @as(u32, 2) else 1), .end = close_end - 1 };
+
+            // 0. Markdown footnote reference (extension): `[^label]` whose
+            // label names a registered definition. Consumes the bracket
+            // pair; like an image, a footnote ref inactivates nothing.
+            if (options.footnotes and !is_image and text.len() > 1 and bytes[text.start] == '^') {
+                const label = source.Span{ .start = text.start + 1, .end = text.end };
+                if (!label.isEmpty() and footnoteDefined(doc, label)) {
+                    out.shrinkRetainingCapacity(o);
+                    try out.append(doc.allocator(), .{
+                        .footnote = .{ .span = .{ .start = open_start, .end = close_end }, .label = label },
+                    });
+                    while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
+                    continue;
+                }
+            }
 
             // 1. Inline link/image: `(` immediately after the `]`.
             if (close_end < para_end and bytes[close_end] == '(') {
@@ -3379,6 +3747,17 @@ fn discoverLinksAndImages(doc: *document.Document, items: *std.ArrayList(InlineI
     }
 
     items.* = out; // moved; the old buffer stays in the arena
+}
+
+/// Whether a footnote definition with the exact (case-sensitive) label is
+/// registered. Linear scan: definitions are few and the check runs only
+/// when a `[^...]` candidate is found.
+fn footnoteDefined(doc: *document.Document, label: source.Span) bool {
+    const bytes = doc.src.bytes;
+    for (doc.footnotes.items) |fd| {
+        if (std.mem.eql(u8, fd.label, bytes[label.start..label.end])) return true;
+    }
+    return false;
 }
 
 /// The result of scanning a reference label following a `]`.
@@ -4028,6 +4407,15 @@ fn emitInlines(
                 const node = try doc.createNode(.raw_html, h.span, .none);
                 try doc.appendChild(current, node);
             },
+            .footnote => |fn_| {
+                // Leaf node (extension): `[^label]` with a registered
+                // definition. The label payload is a source slice; the
+                // renderer numbers it in first-reference order.
+                const node = try doc.createNode(.footnote_ref, fn_.span, .{
+                    .footnote_ref = .{ .label = doc.text(fn_.label) },
+                });
+                try doc.appendChild(current, node);
+            },
             .autolink => |al| {
                 // Leaf node: the content between `<` and `>` becomes both
                 // the label and the href (with `mailto:` prepended for
@@ -4354,6 +4742,7 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
             },
             .autolink => |al| try buf.appendSlice(doc.allocator(), doc.src.bytes[al.content.start..al.content.end]),
             .raw_html => |h| try buf.appendSlice(doc.allocator(), doc.src.bytes[h.span.start..h.span.end]),
+            .footnote => {}, // a footnote ref contributes no plain text to an alt
         }
     }
     return buf.toOwnedSlice(doc.allocator());
@@ -6467,4 +6856,176 @@ test "markdown: blank-start and empty items stay distinct" {
     try testing.expectEqual(@as(usize, 1), list.children.items[0].children.items.len);
     try testing.expectEqual(@as(usize, 0), list.children.items[1].children.items.len);
     try testing.expectEqual(@as(usize, 1), list.children.items[2].children.items.len);
+}
+
+// ---------------------------------------------------------------------------
+// Markdown extensions (docs/MARKDOWN-EXTENSIONS.md): footnotes, definition
+// lists, heading attribute lists, and GFM-style heading ids. All are opt-in
+// through `Options`; the default frontend stays byte-exact CommonMark.
+// ---------------------------------------------------------------------------
+
+const ext_parse = struct {
+    fn with(o: Options) oliver_options {
+        return .{ .markdown = o };
+    }
+}.with;
+
+const oliver_options = @import("oliver.zig").ParseOptions;
+
+test "markdown: heading attribute lists consume trailing {#id .class} (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "## Exit codes {#exit-codes}\n", .markdown, ext_parse(.{ .heading_attributes = true }));
+    defer result.deinit();
+
+    const h = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.heading, h.tag);
+    try testing.expectEqualStrings("exit-codes", h.data.heading.id.?);
+    try testing.expectEqual(@as(?[]const u8, null), h.data.heading.class);
+    // The IAL is consumed: the heading's inline text is just "Exit codes".
+    try testing.expectEqual(@as(usize, 1), h.children.items.len);
+    try testing.expectEqualStrings("Exit codes", h.children.items[0].data.text);
+}
+
+test "markdown: heading attribute lists combine id and class (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "## Custom heading id {#custom-showcase-id .showcase-heading}\n",
+        .markdown,
+        ext_parse(.{ .heading_attributes = true }),
+    );
+    defer result.deinit();
+
+    const h = result.document.root.children.items[0];
+    try testing.expectEqualStrings("custom-showcase-id", h.data.heading.id.?);
+    try testing.expectEqualStrings("showcase-heading", h.data.heading.class.?);
+}
+
+test "markdown: heading attribute lists stay literal when disabled" {
+    const oliver = @import("oliver.zig");
+    // Default options: `{#id}` is ordinary heading text.
+    var result = try oliver.parse(testing.allocator, "## Exit codes {#exit-codes}\n", .markdown, .{});
+    defer result.deinit();
+    const h = result.document.root.children.items[0];
+    try testing.expectEqual(@as(?[]const u8, null), h.data.heading.id);
+    try testing.expectEqual(@as(usize, 1), h.children.items.len);
+    try testing.expectEqualStrings("Exit codes {#exit-codes}", h.children.items[0].data.text);
+}
+
+test "markdown: Setext heading attribute list (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "Setext heading {#setext-id}\n=========================\n",
+        .markdown,
+        ext_parse(.{ .heading_attributes = true }),
+    );
+    defer result.deinit();
+    const h = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.heading, h.tag);
+    try testing.expectEqual(@as(u8, 1), h.data.heading.level);
+    try testing.expectEqualStrings("setext-id", h.data.heading.id.?);
+}
+
+test "markdown: footnotes collect definitions and references (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "Hi[^syntax] and more[^second].\n\n[^syntax]: First note body.\n[^second]: Second note body.\n",
+        .markdown,
+        ext_parse(.{ .footnotes = true }),
+    );
+    defer result.deinit();
+
+    // Two definitions registered, in definition order.
+    try testing.expectEqual(@as(usize, 2), result.document.footnotes.items.len);
+    try testing.expectEqualStrings("syntax", result.document.footnotes.items[0].label);
+    try testing.expectEqualStrings("second", result.document.footnotes.items[1].label);
+    // Each definition owns a `.footnote` container with one paragraph.
+    const f0 = result.document.footnotes.items[0].node;
+    try testing.expectEqual(document.Tag.footnote, f0.tag);
+    try testing.expectEqual(@as(usize, 1), f0.children.items.len);
+    try testing.expectEqual(document.Tag.paragraph, f0.children.items[0].tag);
+    try testing.expectEqualStrings("First note body.", f0.children.items[0].children.items[0].data.text);
+
+    // The body paragraph has two footnote refs (first-reference order).
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(@as(usize, 5), p.children.items.len);
+    try testing.expectEqual(document.Tag.footnote_ref, p.children.items[1].tag);
+    try testing.expectEqualStrings("syntax", p.children.items[1].data.footnote_ref.label);
+    try testing.expectEqual(document.Tag.footnote_ref, p.children.items[3].tag);
+    try testing.expectEqualStrings("second", p.children.items[3].data.footnote_ref.label);
+}
+
+test "markdown: footnotes are literal text when disabled" {
+    const oliver = @import("oliver.zig");
+    // `[^note]:` is not a link reference definition (its "destination"
+    // contains spaces), so with the extension disabled it is plain text.
+    var result = try oliver.parse(
+        testing.allocator,
+        "Text[^note] here.\n\n[^note]: some note text with spaces\n",
+        .markdown,
+        .{},
+    );
+    defer result.deinit();
+    try testing.expectEqual(@as(usize, 0), result.document.footnotes.items.len);
+    // The whole thing is ordinary paragraphs.
+    try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+    try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[1].tag);
+}
+
+test "markdown: definition lists build dl/dt/dd structure (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "Term\n: Definition body.\n\nSatellite\n: First line.\n  Second line.\n",
+        .markdown,
+        ext_parse(.{ .definition_lists = true }),
+    );
+    defer result.deinit();
+
+    const dl0 = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.definition_list, dl0.tag);
+    try testing.expectEqual(@as(usize, 2), dl0.children.items.len);
+    const dt0 = dl0.children.items[0];
+    try testing.expectEqual(document.Tag.definition_term, dt0.tag);
+    try testing.expectEqualStrings("Term", dt0.children.items[0].data.text);
+    const dd0 = dl0.children.items[1];
+    try testing.expectEqual(document.Tag.definition_body, dd0.tag);
+    try testing.expectEqualStrings("Definition body.", dd0.children.items[0].children.items[0].data.text);
+
+    const dl1 = result.document.root.children.items[1];
+    try testing.expectEqual(document.Tag.definition_list, dl1.tag);
+    const dd1 = dl1.children.items[1];
+    // Two lines in the definition paragraph: a soft break between them.
+    try testing.expectEqual(@as(usize, 3), dd1.children.items[0].children.items.len);
+    try testing.expectEqual(document.Tag.soft_break, dd1.children.items[0].children.items[1].tag);
+    try testing.expectEqualStrings("Second line.", dd1.children.items[0].children.items[2].data.text);
+}
+
+test "markdown: consecutive term/definition pairs merge into one dl (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "Term one\n: First.\nTerm two\n: Second.\n",
+        .markdown,
+        ext_parse(.{ .definition_lists = true }),
+    );
+    defer result.deinit();
+    try testing.expectEqual(@as(usize, 1), result.document.root.children.items.len);
+    const dl = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.definition_list, dl.tag);
+    try testing.expectEqual(@as(usize, 4), dl.children.items.len);
+    try testing.expectEqualStrings("Term one", dl.children.items[0].children.items[0].data.text);
+    try testing.expectEqualStrings("First.", dl.children.items[1].children.items[0].children.items[0].data.text);
+    try testing.expectEqualStrings("Term two", dl.children.items[2].children.items[0].data.text);
+    try testing.expectEqualStrings("Second.", dl.children.items[3].children.items[0].children.items[0].data.text);
+}
+
+test "markdown: definition lists are literal text when disabled" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "Term\n: Definition body.\n", .markdown, .{});
+    defer result.deinit();
+    // One ordinary paragraph containing both lines.
+    try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
 }

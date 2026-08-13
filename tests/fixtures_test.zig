@@ -1446,6 +1446,35 @@ const markdown_fixtures = [_]MarkdownFixture{
     },
 };
 
+/// Markdown-extension fixtures (footnotes, definition lists, heading
+/// attribute lists, heading ids): parsed with all extensions enabled and
+/// rendered with `heading_ids` + `footnotes` (docs/MARKDOWN-EXTENSIONS.md).
+/// These are opt-in extensions, so they live outside the byte-exact
+/// CommonMark fixture list above.
+const MarkdownExtFixture = struct {
+    name: []const u8,
+    input: []const u8,
+    expected: []const u8,
+};
+
+const markdown_ext_fixtures = [_]MarkdownExtFixture{
+    .{
+        .name = "ext-definition-list",
+        .input = @embedFile("fixtures/markdown/ext-definition-list.md"),
+        .expected = @embedFile("fixtures/markdown/ext-definition-list.html"),
+    },
+    .{
+        .name = "ext-footnotes",
+        .input = @embedFile("fixtures/markdown/ext-footnotes.md"),
+        .expected = @embedFile("fixtures/markdown/ext-footnotes.html"),
+    },
+    .{
+        .name = "ext-heading-ids",
+        .input = @embedFile("fixtures/markdown/ext-heading-ids.md"),
+        .expected = @embedFile("fixtures/markdown/ext-heading-ids.html"),
+    },
+};
+
 const TextileFixture = struct {
     name: []const u8,
     input: []const u8,
@@ -2356,6 +2385,38 @@ fn checkFixture(name: []const u8, dialect: oliver.Dialect, input: []const u8, ex
 test "markdown fixtures" {
     for (markdown_fixtures) |f| {
         try checkFixture(f.name, .markdown, f.input, f.expected);
+    }
+}
+
+fn renderExtHtml(input: []const u8) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
+        .markdown = .{
+            .footnotes = true,
+            .definition_lists = true,
+            .heading_attributes = true,
+        },
+    });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{
+        .heading_ids = true,
+        .footnotes = true,
+    });
+    return aw.toArrayList();
+}
+
+test "markdown extension fixtures" {
+    for (markdown_ext_fixtures) |f| {
+        var out = try renderExtHtml(f.input);
+        defer out.deinit(std.testing.allocator);
+        if (!std.mem.eql(u8, f.expected, out.items)) {
+            std.debug.print(
+                "extension fixture [{s}] mismatch\n--- expected ({d} bytes) ---\n{s}\n--- actual ({d} bytes) ---\n{s}\n",
+                .{ f.name, f.expected.len, f.expected, out.items.len, out.items },
+            );
+            return error.FixtureMismatch;
+        }
     }
 }
 
