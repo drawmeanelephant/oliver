@@ -3,9 +3,12 @@
 //! Blocks: paragraphs, `h1.`–`h6.` headings, single-period `bq.` block
 //! quotes, `*`/`#` lists with marker-depth nesting, `dl.` definition
 //! lists (`term:definition` lines with multi-line definitions, Textile
-//! 2), and `|a|b|` tables (single-line rows with cell modifiers, an
+//! 2), `|a|b|` tables (single-line rows with cell modifiers, an
 //! optional `table<mods>.` signature, colspan/rowspan, and Textile 2's
-//! header-alignment propagation). Inlines: plain text,
+//! header-alignment propagation), and the `clear.` marker (a lone
+//! `clear.`/`clear<.`/`clear>.` line parks a CSS clear fragment that
+//! the next block to open carries in its style attribute; Textile 2
+//! "clear"). Inlines: plain text,
 //! hard line breaks, same-line `@code@` phrases, the phrase-modifier family
 //! (`*strong*`, `_emphasis_`, `**bold**`, `__italic__`, `-deleted-`,
 //! `+inserted+`, `^superscript^`, `~subscript~`, `%span%`,
@@ -53,6 +56,13 @@
 //!   `"text":alias` link resolves to the defined URL even when the
 //!   definition comes later (both references document the lookup table).
 //!   Definition lines never render (docs/TEXTILE-PARITY.md §7).
+//! - The `clear.` marker (Textile 2 "clear") must be alone on its line
+//!   (only trailing whitespace after the `.`, or after the `<`/`>`
+//!   direction for `clear<.`/`clear>.`) to count; any content after the
+//!   marker makes the line ordinary text. The marker itself renders
+//!   nothing; the next block carries `style="clear:both;"` (or
+//!   `left`/`right`), merged ahead of any style the block already has
+//!   (docs/TEXTILE-PARITY.md §22).
 //! - Paragraph content is preserved verbatim (only the marker's separator
 //!   whitespace is consumed).
 //! - `h0.` and `h7.`+ are not headings; they remain paragraph text.
@@ -149,6 +159,10 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var escape: ?EscapeState = null;
     var dlist: ?DefListState = null;
     defer if (dlist) |*d| d.lines.deinit(doc.allocator());
+    // A pending `clear.` marker: the next block to open carries the CSS
+    // clear fragment in its style attribute (Textile 2 "clear"; see
+    // `mergeClearStyle`). Reset by `takeClear` at every block-open site.
+    var pending_clear: ?[]const u8 = null;
     while (lines.next()) |line| {
         // The block-level `==` escape (Textile 2 "Escaping") runs before
         // every other rule: while the region is open, every line — blank or
@@ -238,6 +252,20 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 continue;
             }
         }
+        // The `clear.` marker (Textile 2 "clear"): closes every open block
+        // and parks its CSS fragment for the next block to open. It is a
+        // block signature, so an open extended `bq..`/`bc..` or definition
+        // list has already closed it via `trySignature` above; here it also
+        // closes the list tree and table. The marker line itself renders
+        // nothing (docs/TEXTILE-PARITY.md §22).
+        if (tryClearMarker(line)) |dir| {
+            try closeBlock(doc, &block, &defs);
+            closeLists(&lists);
+            try closeTable(doc, &table, &defs);
+            try closeCode(doc, &code);
+            pending_clear = dir;
+            continue;
+        }
         // An open extended `bq..` owns every non-signature line; a
         // recognized block signature ends it and is processed below
         // (Textile 2: extended signatures stay active "until the next
@@ -247,7 +275,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 try closeBlock(doc, &block, &defs);
                 // Fall through: the signature line opens its own block.
             } else {
-                try appendBlockContent(doc, &block, .block_quote, &.{}, line.contentSpan(), line.terminatorSpan(), null);
+                try appendBlockContent(doc, &block, .block_quote, &.{}, line.contentSpan(), line.terminatorSpan(), null, null);
                 continue;
             }
         }
@@ -257,8 +285,8 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try closeTable(doc, &table, &defs);
             try closeCode(doc, &code);
             switch (esig) {
-                .quote => |sig| try openExtendedQuote(doc, &block, sig, line.terminatorSpan()),
-                .code => |sig| try openCode(doc, &code, sig),
+                .quote => |sig| try openExtendedQuote(doc, &block, sig, line.terminatorSpan(), takeClear(&pending_clear)),
+                .code => |sig| try openCode(doc, &code, sig, takeClear(&pending_clear)),
             }
             continue;
         }
@@ -266,13 +294,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
             try closeTable(doc, &table, &defs);
-            try openCode(doc, &code, sig);
+            try openCode(doc, &code, sig, takeClear(&pending_clear));
             continue;
         }
         if (try tryTableSignature(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try openTable(doc, &table, sig.attrs);
+            try openTable(doc, &table, sig.attrs, takeClear(&pending_clear));
             if (sig.row) |row| try appendTableRow(doc, &table.?, row);
             continue;
         }
@@ -281,13 +309,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             closeLists(&lists);
             try closeTable(doc, &table, &defs);
             try closeCode(doc, &code);
-            try openDefList(doc, &dlist, sig, line, &defs);
+            try openDefList(doc, &dlist, sig, line, &defs, takeClear(&pending_clear));
             continue;
         }
         if (try parseTableRow(doc, line, 0)) |row| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try openTable(doc, &table, &.{});
+            try openTable(doc, &table, &.{}, takeClear(&pending_clear));
             try appendTableRow(doc, &table.?, row);
             continue;
         }
@@ -297,44 +325,45 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         if (try tryLineAttr(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try appendBlockContent(doc, &block, .paragraph, sig.attrs, sig.content, line.terminatorSpan(), null);
+            try appendBlockContent(doc, &block, .paragraph, sig.attrs, sig.content, line.terminatorSpan(), null, takeClear(&pending_clear));
             continue;
         }
         if (try tryHeading(doc, line)) |heading| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try emitHeading(doc, line, heading, &defs);
+            try emitHeading(doc, line, heading, &defs, takeClear(&pending_clear));
             continue;
         }
         if (try tryParagraphMarker(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try appendBlockContent(doc, &block, .paragraph, sig.attrs, sig.content, line.terminatorSpan(), null);
+            try appendBlockContent(doc, &block, .paragraph, sig.attrs, sig.content, line.terminatorSpan(), null, takeClear(&pending_clear));
             continue;
         }
         if (try tryBlockQuoteMarker(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try appendBlockContent(doc, &block, .block_quote, sig.attrs, sig.content, line.terminatorSpan(), sig.cite);
+            try appendBlockContent(doc, &block, .block_quote, sig.attrs, sig.content, line.terminatorSpan(), sig.cite, takeClear(&pending_clear));
             continue;
         }
         if (try tryFootnoteMarker(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try appendFootnoteContent(doc, &block, sig, line.terminatorSpan());
+            try appendFootnoteContent(doc, &block, sig, line.terminatorSpan(), takeClear(&pending_clear));
             continue;
         }
         if (tryListMarker(line)) |lm| {
             try closeBlock(doc, &block, &defs);
-            try appendListItem(doc, &lists, lm, &defs);
+            try appendListItem(doc, &lists, lm, &defs, takeClear(&pending_clear));
             continue;
         }
         // A non-marker text line closes the list tree: list items are single
         // lines, so an unmarked line is a fresh paragraph (docs/TEXTILE-PARITY.md
-        // §5, chosen behavior).
+        // §5, chosen behavior). A pending `clear.` applies to that paragraph
+        // too — it is the next block.
         if (lists.items.len > 0) closeLists(&lists);
         const kind: BlockKind = if (block) |active| active.kind else .paragraph;
-        try appendBlockContent(doc, &block, kind, &.{}, line.contentSpan(), line.terminatorSpan(), null);
+        try appendBlockContent(doc, &block, kind, &.{}, line.contentSpan(), line.terminatorSpan(), null, takeClear(&pending_clear));
     }
     try closeBlock(doc, &block, &defs);
     closeLists(&lists);
@@ -398,9 +427,10 @@ fn appendBlockContent(
     content: source.Span,
     terminator: source.Span,
     cite: ?[]const u8,
+    clear: ?[]const u8,
 ) ParseError!void {
     if (block.* == null) {
-        block.* = .{ .kind = kind, .start = content.start, .end = content.end, .attrs = attrs, .cite = cite };
+        block.* = .{ .kind = kind, .start = content.start, .end = content.end, .attrs = try mergeClearStyle(doc, attrs, clear), .cite = cite };
     }
     std.debug.assert(block.*.?.kind == kind);
     block.*.?.end = content.end;
@@ -574,10 +604,10 @@ fn tryCodeMarker(doc: *document.Document, line: source.Line) ParseError!?CodeSig
 }
 
 /// Opens a code block with the signature line as its first content line.
-fn openCode(doc: *document.Document, code: *?CodeBlockState, sig: CodeSignature) ParseError!void {
+fn openCode(doc: *document.Document, code: *?CodeBlockState, sig: CodeSignature, clear: ?[]const u8) ParseError!void {
     code.* = .{
         .preformatted = sig.preformatted,
-        .attrs = sig.attrs,
+        .attrs = try mergeClearStyle(doc, sig.attrs, clear),
         .span = .{ .start = sig.content.start, .end = sig.content.end },
         .extended = sig.extended,
     };
@@ -736,14 +766,15 @@ fn tryExtendedMarker(doc: *document.Document, line: source.Line) ParseError!?Ext
 
 /// Opens an extended `bq..`: the blockquote node is created immediately so
 /// paragraphs can be flushed into it at every blank line.
-fn openExtendedQuote(doc: *document.Document, block: *?ActiveBlock, sig: BlockSignature, terminator: source.Span) ParseError!void {
-    const quote = try doc.createNode(.block_quote, sig.content, .{ .block_quote = .{ .attrs = sig.attrs } });
+fn openExtendedQuote(doc: *document.Document, block: *?ActiveBlock, sig: BlockSignature, terminator: source.Span, clear: ?[]const u8) ParseError!void {
+    const attrs = try mergeClearStyle(doc, sig.attrs, clear);
+    const quote = try doc.createNode(.block_quote, sig.content, .{ .block_quote = .{ .attrs = attrs } });
     try doc.appendChild(doc.root, quote);
     block.* = .{
         .kind = .block_quote,
         .start = sig.content.start,
         .end = sig.content.end,
-        .attrs = sig.attrs,
+        .attrs = attrs,
         .extended = true,
         .quote = quote,
     };
@@ -834,12 +865,12 @@ fn tryFootnoteMarker(doc: *document.Document, line: source.Line) ParseError!?Foo
 
 /// Opens a `fnN.` footnote block: a paragraph whose close-time payload
 /// carries `class="footnote" id="fnN"` plus a leading superscript number.
-fn appendFootnoteContent(doc: *document.Document, block: *?ActiveBlock, sig: FootnoteSig, terminator: source.Span) ParseError!void {
+fn appendFootnoteContent(doc: *document.Document, block: *?ActiveBlock, sig: FootnoteSig, terminator: source.Span, clear: ?[]const u8) ParseError!void {
     block.* = .{
         .kind = .paragraph,
         .start = sig.content.start,
         .end = sig.content.end,
-        .attrs = sig.attrs,
+        .attrs = try mergeClearStyle(doc, sig.attrs, clear),
         .footnote = sig.number,
         .footnote_span = sig.marker,
     };
@@ -849,14 +880,73 @@ fn appendFootnoteContent(doc: *document.Document, block: *?ActiveBlock, sig: Foo
     });
 }
 
+/// Recognizes the `clear.` block marker (Textile 2 "clear"): the marker
+/// alone on its line — `clear.` (clear both), `clear<.` (clear left), or
+/// `clear>.` (clear right) — each followed by a space/tab and no content.
+/// Returns the CSS fragment the next block's style carries. Any other
+/// shape — content after the marker, a different modifier, a missing
+/// separator — is not a clear marker, so the line stays ordinary text.
+fn tryClearMarker(line: source.Line) ?[]const u8 {
+    const t = line.text;
+    if (t.len < 6) return null;
+    if (!std.mem.eql(u8, t[0..5], "clear")) return null;
+    var dir: []const u8 = "clear:both";
+    var i: usize = 5;
+    if (i < t.len and t[i] == '<') {
+        dir = "clear:left";
+        i += 1;
+    } else if (i < t.len and t[i] == '>') {
+        dir = "clear:right";
+        i += 1;
+    }
+    if (i >= t.len or t[i] != '.') return null;
+    var j = i + 1;
+    while (j < t.len and (t[j] == ' ' or t[j] == '\t')) : (j += 1) {}
+    if (j != t.len) return null;
+    return dir;
+}
+
+/// Takes the pending `clear.` fragment, resetting the pending state so
+/// the next block doesn't also inherit it. Returns null when nothing is
+/// pending. Every block-open site in the parse loop calls this exactly
+/// once per block.
+fn takeClear(pending: *?[]const u8) ?[]const u8 {
+    const c = pending.*;
+    pending.* = null;
+    return c;
+}
+
+/// Folds a pending `clear.` fragment into a block's attribute list (the
+/// fixed render order style/class/id/lang): the clear becomes the first
+/// `style` rule — prepended to an existing style, or the whole style when
+/// the block has none (Textile 2 "clear": the next block should "emit a
+/// CSS style attribute that clears any floating elements"). A null clear
+/// returns the input list unchanged.
+fn mergeClearStyle(doc: *document.Document, attrs: []const document.Attribute, clear: ?[]const u8) ParseError![]const document.Attribute {
+    const c = clear orelse return attrs;
+    var out = std.ArrayList(document.Attribute).empty;
+    errdefer out.deinit(doc.allocator());
+    var merged_style = false;
+    for (attrs) |a| {
+        if (std.mem.eql(u8, a.name, "style")) {
+            merged_style = true;
+            try out.append(doc.allocator(), .{ .name = "style", .value = try std.fmt.allocPrint(doc.allocator(), "{s}; {s}", .{ c, a.value }) });
+        } else {
+            try out.append(doc.allocator(), a);
+        }
+    }
+    if (!merged_style) try out.append(doc.allocator(), .{ .name = "style", .value = try std.fmt.allocPrint(doc.allocator(), "{s};", .{c}) });
+    return out.toOwnedSlice(doc.allocator());
+}
+
 /// True when the line opens any recognized block-level construct that
 /// terminates an open extended block (Textile 2: extended signatures stay
 /// active "until the next signature is found"): a `table<mods>.`
 /// signature, an extended or single-period `bq.`/`bc.`/`pre.` signature,
 /// an `hN.` heading, a `p.` paragraph marker, a `fnN.` footnote
-/// signature, or the `|mods|.` line-attribute paragraph form. List
-/// markers and table rows are not block signatures and remain content
-/// inside an extended block.
+/// signature, the `|mods|.` line-attribute paragraph form, or the
+/// `clear.` marker. List markers and table rows are not block signatures
+/// and remain content inside an extended block.
 fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryTableSignature(doc, line) != null) return true;
     if (try tryExtendedMarker(doc, line) != null) return true;
@@ -867,6 +957,7 @@ fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryFootnoteMarker(doc, line) != null) return true;
     if (try tryLineAttr(doc, line) != null) return true;
     if (try tryDefListSignature(doc, line) != null) return true;
+    if (tryClearMarker(line) != null) return true;
     return false;
 }
 
@@ -914,7 +1005,7 @@ fn tryListMarker(line: source.Line) ?ListMarker {
 /// than `lm.depth` close; a same-depth list with a different marker closes
 /// and a sibling list opens; missing intermediate depths open empty items.
 /// The item's content lives in the deepest new item's paragraph.
-fn appendListItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), lm: ListMarker, defs: *const AliasTable) ParseError!void {
+fn appendListItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), lm: ListMarker, defs: *const AliasTable, clear: ?[]const u8) ParseError!void {
     while (lists.items.len > 0 and lists.items[lists.items.len - 1].depth > lm.depth) {
         _ = lists.pop();
     }
@@ -938,6 +1029,8 @@ fn appendListItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), lm:
                 .delimiter = if (lm.marker == '#') '.' else 0,
                 .start = 1,
                 .loose = false,
+                // A pending `clear.` applies to the list element too.
+                .attrs = try mergeClearStyle(doc, &.{}, if (depth == lm.depth) clear else null),
             },
         });
         try doc.appendChild(parent, list);
@@ -1057,12 +1150,12 @@ const DefListState = struct {
 
 /// Opens a definition list from a `dl.` signature line: the list node and
 /// the signature line's first term/definition pair.
-fn openDefList(doc: *document.Document, dlist: *?DefListState, sig: DefSig, line: source.Line, defs: *const AliasTable) ParseError!void {
+fn openDefList(doc: *document.Document, dlist: *?DefListState, sig: DefSig, line: source.Line, defs: *const AliasTable, clear: ?[]const u8) ParseError!void {
     const list = try doc.createNode(.list, sig.item.term, .{ .list = .{
         .kind = .definition,
         .start = 1,
         .loose = false,
-        .attrs = sig.attrs,
+        .attrs = try mergeClearStyle(doc, sig.attrs, clear),
     } });
     try doc.appendChild(doc.root, list);
     dlist.* = .{ .list = list, .lines = .empty };
@@ -1459,10 +1552,8 @@ fn tryTableSignature(doc: *document.Document, line: source.Line) ParseError!?Tab
     return .{ .attrs = attrs, .row = row };
 }
 
-fn openTable(doc: *document.Document, table: *?TableState, attrs: []const document.Attribute) ParseError!void {
-    _ = doc;
-    std.debug.assert(table.* == null);
-    table.* = .{ .attrs = attrs };
+fn openTable(doc: *document.Document, table: *?TableState, attrs: []const document.Attribute, clear: ?[]const u8) ParseError!void {
+    table.* = .{ .attrs = try mergeClearStyle(doc, attrs, clear) };
 }
 
 fn appendTableRow(doc: *document.Document, table: *TableState, row: TableRow) ParseError!void {
@@ -1856,9 +1947,9 @@ fn tryBlockQuoteMarker(doc: *document.Document, line: source.Line) ParseError!?B
     };
 }
 
-fn emitHeading(doc: *document.Document, line: source.Line, heading: Heading, defs: *const AliasTable) ParseError!void {
+fn emitHeading(doc: *document.Document, line: source.Line, heading: Heading, defs: *const AliasTable, clear: ?[]const u8) ParseError!void {
     const node = try doc.createNode(.heading, line.contentSpan(), .{
-        .heading = .{ .level = heading.level, .attrs = heading.attrs },
+        .heading = .{ .level = heading.level, .attrs = try mergeClearStyle(doc, heading.attrs, clear) },
     });
     try doc.appendChild(doc.root, node);
     try parseInlines(doc, node, heading.content, defs);
@@ -3956,6 +4047,95 @@ test "textile: dl. signature fallbacks stay literal" {
         var out = aw.toArrayList();
         defer out.deinit(std.testing.allocator);
         try std.testing.expectEqualStrings("<dl>\n<dt>a</dt>\n<dd>one<br />\nsee also: not</dd>\n<dt>b</dt>\n<dd>two</dd>\n</dl>\n<p>plain</p>\n", out.items);
+    }
+}
+
+test "textile: clear. parks a CSS fragment on the next block" {
+    const oliver = @import("oliver.zig");
+
+    // Textile 2 "clear": a lone `clear.` line renders nothing and the
+    // next block carries `style="clear:both;"` (or `left`/`right` for
+    // `clear<.`/`clear>.`), merged ahead of the block's own style.
+    {
+        var result = try oliver.parse(std.testing.allocator, "clear.\nNext paragraph.\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.paragraph, p.tag);
+        try std.testing.expectEqualStrings("clear:both;", p.data.paragraph.attrs[0].value);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "clear<.\np{color:red}. Left.\n\nclear>.\nRight.\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<p style=\"clear:left; color:red;\">Left.</p>\n<p style=\"clear:right;\">Right.</p>\n", out.items);
+    }
+    // The marker closes any open block and applies to every block family:
+    // an extended quote ends before it, and a list/heading carries the
+    // fragment; a `clear.` inside a single-period `bc.` block is code
+    // content (the code block owns every non-blank line).
+    {
+        var result = try oliver.parse(std.testing.allocator, "bq.. quote\n\nclear.\nh2. Title\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<blockquote>\n<p>quote</p>\n</blockquote>\n<h2 style=\"clear:both;\">Title</h2>\n", out.items);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "bc. first\nclear.\nstill code\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<pre><code>first\nclear.\nstill code\n</code></pre>\n", out.items);
+    }
+    // A def line between the marker and the block doesn't consume it.
+    {
+        var result = try oliver.parse(std.testing.allocator, "clear.\n[home]http://example.com\nh3. Title\n", .textile, .{});
+        defer result.deinit();
+        const h = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.heading, h.tag);
+        try std.testing.expectEqualStrings("clear:both;", h.data.heading.attrs[0].value);
+    }
+}
+
+test "textile: clear. lookalikes and dangling markers stay literal" {
+    const oliver = @import("oliver.zig");
+
+    // Content after the marker, a different shape, or a word merely
+    // starting with "clear" is ordinary text; a marker at end of input
+    // with no following block is dropped silently.
+    const cases = [_][]const u8{
+        "clear. with content",
+        "clear x. no",
+        "clearb. no",
+        "clears. no",
+        "clear.",
+    };
+    const expected = [_][]const u8{
+        "<p>clear. with content</p>\n",
+        "<p>clear x. no</p>\n",
+        "<p>clearb. no</p>\n",
+        "<p>clears. no</p>\n",
+        "",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(want, out.items);
     }
 }
 

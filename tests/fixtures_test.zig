@@ -2059,6 +2059,23 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/dl-literal.textile"),
         .expected = @embedFile("fixtures/textile/dl-literal.html"),
     },
+    // The `clear.` marker (Textile 2 "clear"): a lone `clear.`/
+    // `clear<.`/`clear>.` line parks a CSS fragment the next block carries
+    // in its style attribute — merged ahead of the block's own style —
+    // across paragraphs, headings, and lists; the marker line itself
+    // renders nothing, and the literal shapes (content after the marker,
+    // a word merely starting with "clear", a dangling marker at EOF)
+    // stay ordinary text (docs/TEXTILE-PARITY.md §22).
+    .{
+        .name = "clear-basic",
+        .input = @embedFile("fixtures/textile/clear-basic.textile"),
+        .expected = @embedFile("fixtures/textile/clear-basic.html"),
+    },
+    .{
+        .name = "clear-literal",
+        .input = @embedFile("fixtures/textile/clear-literal.textile"),
+        .expected = @embedFile("fixtures/textile/clear-literal.html"),
+    },
     // Inline `==...==` escaping (Textile 2 "Escaping"): phrase delimiters
     // and the character replacements inside the region stay literal, while
     // formatting outside still applies — the current docs' quote example

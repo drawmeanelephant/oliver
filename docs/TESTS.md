@@ -31,7 +31,7 @@ Tests are product contracts. `zig build test` runs three suites:
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 102 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 104 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -117,10 +117,14 @@ Tests are product contracts. `zig build test` runs three suites:
    docs/TEXTILE-PARITY.md §20), the acronym form   (`CSS(Cascading Style Sheets)` → `<acronym title="…">`, the
    conservative shape contract, and opacity inside `@code@`/link
    display; docs/TEXTILE-PARITY.md §20), definition lists
-   (`dl. term:definition` → `<dl>`/`<dt>`/`<dd>` with multi-line
+   (   `dl. term:definition` → `<dl>`/`<dt>`/`<dd>` with multi-line
    definitions and hard breaks, `dl<mods>.` attrs, term phrases, the
    term-run rule, and the literal signature fallbacks;
-   docs/TEXTILE-PARITY.md §21), and the
+   docs/TEXTILE-PARITY.md §21), the `clear.` marker (a lone
+   `clear.`/`clear<.`/`clear>.` line parking a CSS fragment the next
+   block folds ahead of its own style — across paragraphs, headings,
+   and lists — plus the literal shapes and the dangling-marker drop;
+   docs/TEXTILE-PARITY.md §22), and the
    `{...}` character macros (the documented table byte-for-byte with
    mirrored orders, inside link display text, the brace-edge rule
    that keeps `{*}`/`{-L}` whole, and the literal fallbacks;
@@ -139,7 +143,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **199/199 tests passing** with Zig 0.16.0.
+The current complete result is **201/201 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 

@@ -446,4 +446,20 @@ signatures literal) is Oliver's conservative reading of "no space
 between the term and definition"; no Textile parser implementation
 source was consulted.
 
+Session 19 (T24 `clear.` marker) finding: only Textile 2 documents
+the form — "**clear.** The next block should emit a CSS style
+attribute that clears any floating elements. Add 'clear:both' (or
+'clear:left' / 'clear:right' for `<` and `>`)" — and the current
+Textile Markup Language Documentation does not cover it (its CSS
+Notes mention only a "caps" span for uppercase runs). The default is
+therefore `clear:both` with the `<`/`>` variants, as Textile 2
+specifies. The marker contract (a lone `clear.`/`clear<.`/`clear>.`
+line with only trailing whitespace; anything else ordinary text), the
+fold (the fragment becomes the next block's first style rule,
+prepended ahead of an existing style), and the interaction rules (a
+marker closes open extended blocks; inside a single-period `bc.` it
+is code content; a dangling marker at end of input drops silently)
+are all Oliver's conservative readings of that one sentence; no
+Textile parser implementation source was consulted.
+
 No Markdown or Textile parser implementation source was consulted.

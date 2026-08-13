@@ -79,8 +79,10 @@ on `!url!` images), phrase attributes on every operator
 (`*{color:red}x*` → `<strong style="color:red;">`, `_(big)x_` →
 `<em class="big">`, `%{style}(class#id)[lang]x%` on `%x%` spans),
 `??citation??` (`<cite>`, Hobix), `ABC(def)` acronyms
-(`<acronym title="def">`), and `dl. term:definition` definition
-lists (`<dl>`/`<dt>`/`<dd>`),
+(`<acronym title="def">`), `dl. term:definition` definition
+lists (`<dl>`/`<dt>`/`<dd>`), and the `clear.` marker (a lone
+`clear.`/`clear<.`/`clear>.` line parks a CSS clear fragment that
+the next block folds ahead of its own style),
 structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is

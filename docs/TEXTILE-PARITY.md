@@ -115,7 +115,8 @@ implemented (T18) — see §16.
   §19 — and the citation and acronym forms are implemented (T22) — see
   §20.
 - **Definition lists** (`dl.`) are implemented (T23) — see §21. **`clear`**
-  and **`notextile.`** (Textile 2-only) remain deferred.
+  is implemented (T24) — see §22. **`notextile.`** (Textile 2-only) is
+  the audit's last remaining deferral.
 - **Textile raw HTML** — Textile keeps `<...>` as plain text (no `.raw_html`
   recognition); documented in the model convergence table.
 - **Bracket/brace forcing** (`c[*oo*]l`) — documented by Textile 2 as a way
@@ -1023,4 +1024,41 @@ definitions ending in `=:` (the php-textile form). The two
 references do not agree, so this slice implements the requested
 Textile 2 form and records the dash-marker form as the documented
 remainder (see CLEANROOM session 18).
+
+## 22. The `clear.` marker (Textile 2 "clear")
+
+Textile 2's `clear` block: a lone `clear.` line, optionally with a
+`<`/`>` direction, that renders nothing itself — "the next block
+should emit a CSS style attribute that clears any floating
+elements". Implemented (T24) as a pending fragment the next block to
+open folds into its attribute set, so it converges on the §8
+block-attribute machinery rather than adding a block kind.
+
+**The marker contract.** The marker must be alone on its line:
+`clear.` (clear both), `clear<.` (clear left), or `clear>.` (clear
+right), with only trailing whitespace after the period — a bare
+`clear.` at end of line counts. Any other shape is ordinary text:
+content after the marker (`clear. with content`), a space before
+the period (`clear x.`), a word merely starting with `clear`
+(`clearb.`), or a different modifier. The marker at end of input
+with no following block is dropped silently. Pinned by
+`clear-literal`.
+
+**The fold.** The pending fragment becomes the block's first
+`style` rule, prepended to any style the block already carries and
+followed by the fixed render order (style/class/id/lang): `clear.`
++ `p{color:red}. Both.` → `<p style="clear:both; color:red;">`. It
+applies to **every** block family — paragraphs, headings, block
+quotes (the `bq.:URL` cite first, then the clear style), lists,
+tables, definition lists, footnotes, and code blocks — and to the
+plain unmarked paragraph that follows the marker. A `[alias]url`
+def line between the marker and the block does not consume it.
+
+**Interaction with open blocks.** The marker is a block signature:
+it closes an open extended `bq..`/`bc..`/`pre..` (via §10's
+signature rule) and a definition list, and it interrupts the list
+tree and any open table — the fragment parks and the next block
+carries it. Inside a single-period `bc.`/`pre.` block the marker is
+code content like any other non-blank line (the leaf owns every
+line until a blank line). Pinned by `clear-basic`.
 
