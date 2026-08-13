@@ -411,4 +411,21 @@ is a style token, not a macro) is the deterministic consequence of
 "all block attributes ... just inside the opening modifier"; no
 Textile parser implementation source was consulted.
 
+Session 17 (T22 citation operator + acronyms) finding: Hobix
+"Footnote-like citation" — "Use double question marks to indicate
+citation. The title of a book, for instance. `??Cat's Cradle??` by
+Vonnegut" → `<cite>Cat’s Cradle</cite>` — and Hobix "Acronyms" —
+"Definitions for acronyms can be provided by following an acronym
+with its definition in parens. `We use CSS(Cascading Style Sheets).`"
+→ `<acronym title="Cascading Style Sheets">CSS</acronym>`. Textile
+2's syntax page documents neither form, so the FEATURE-MATRIX
+"Hobix only" reading holds and both are implemented from Hobix alone.
+The acronym shape contract (2+ uppercase letters at a boundary, a
+non-empty parenthesized definition closing at the first `)`, single
+letters and intraword runs literal) is Oliver's conservative choice;
+no Textile parser implementation source was consulted. The both-flag
+delimiter fix (a run qualifying as both opener and closer tries to
+close first, then opens) is the standard delimiter-stack rule, not a
+reference-behavior inference.
+
 No Markdown or Textile parser implementation source was consulted.

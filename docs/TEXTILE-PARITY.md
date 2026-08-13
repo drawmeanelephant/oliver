@@ -109,9 +109,13 @@ implemented (T18) — see §16.
 - **`++bigger++` / `--smaller--`** (`<big>`/`<small>`): documented only by
   Textile 2, not Hobix — the last phrase-family gap, now implemented per
   the user's explicit request (T19); see §17. Runs of 3+ for the
-  single-length operators stay literal.
-- **`??citation??`**, **acronyms**, and **definition lists** (Hobix-only or
-  Textile 2-only) — deferred.
+  single-length operators stay literal. The span's attribute forms and
+  the `{...}` character macros are implemented (T20) — see §18 — the
+  same phrase attributes on every operator are implemented (T21) — see
+  §19 — and the citation and acronym forms are implemented (T22) — see
+  §20.
+- **Definition lists** (`dl.`), **`clear`**, and **`notextile.`** (Textile
+  2-only) — deferred.
 - **Textile raw HTML** — Textile keeps `<...>` as plain text (no `.raw_html`
   recognition); documented in the model convergence table.
 - **Bracket/brace forcing** (`c[*oo*]l`) — documented by Textile 2 as a way
@@ -914,4 +918,53 @@ line 4 was updated to keep a genuine survival case: `x{*}y` and
 a delimiter, so `--{color:red}small--` → `<small
 style="color:red;">small</small>`; a `--` that cannot form a pair still
 em-dashes through the replacement pass (§17 unchanged).
+
+## 20. Citation and acronyms (T22): pinned behaviors
+
+Two Hobix-only inlines landed together — the audit's last two inline
+deferrals. Hobix "Footnote-like citation": "Use double question marks
+to indicate citation" (`??Cat's Cradle?? by Vonnegut` → `<cite>Cat’s
+Cradle</cite>`), and Hobix "Acronyms": "Definitions for acronyms can
+be provided by following an acronym with its definition in parens"
+(`We use CSS(Cascading Style Sheets).` → `<acronym
+title="Cascading Style Sheets">CSS</acronym>`). Neither appears in
+Textile 2 or the current docs — the FEATURE-MATRIX "Hobix only"
+reading holds, recorded in CLEANROOM session 17.
+
+**Citation.** A doubled `?` run is a phrase operator like `*`/`_`: it
+accepts the phrase-attribute run (`??{color:red}x??` → `<cite
+style="color:red;">x</cite>`), nests the other operators
+(`??*b*??` → `<cite><strong>b</strong></cite>`), and follows the
+family's boundary contract. A lone `?` (`Really??` — a question mark
+is never an operator) and runs of 3+ (`???x???`) stay literal, and the
+mods-run fallbacks from §18/§19 apply unchanged (malformed run
+literal, whitespace-after not an opener, `??{color:red}??` falls back
+to a plain cite whose content includes the run bytes).
+
+**The both-flag delimiter fix.** This milestone surfaced a latent
+matcher gap: a delimiter whose byte-before *and* byte-after both
+guard a boundary (e.g. `_` between `?` and `(` in `??_(big)x_??` —
+punctuation before, a mods-run `(` after) is both an opener and a
+closer. The matcher previously treated it as a closer only, dropping
+it when the stack top did not match — the phrase never opened. The fix
+is the standard delimiter-stack rule: try closing against the stack
+first, and only when the top does not match does the run act as a
+fresh opener. This also lets mod-bearing phrases open after
+punctuation generally (`(_(big)x_)` → `(<em class="big">x</em>)`).
+
+**Acronyms.** A run of 2+ uppercase ASCII letters at an inline boundary
+directly followed by a non-empty parenthesized definition;
+`US(United States)` → `<acronym title="United States">US</acronym>`,
+and punctuation like the surrounding parens still guards the
+boundary (`(CSS(Style Sheets))`). The definition closes at the first
+`)` (the same conservatism as the link paren-title rule) and is the
+`title` — opaque: no phrase formatting and no character replacements.
+The conservative shape contract stays literal, all pinned by
+`acronym-literal`: a single letter (`I(think)` never becomes an
+acronym), an intraword run (`xCSS(no)`), an empty (`CSS()`) or
+unclosed (`CSS(open`) definition, and a run containing non-letters
+(`HTML5(Standard)` stays literal text). `@code@`, code blocks, link
+display text, and `==` escapes stay opaque. The acronym's uppercase
+run is skipped whole when it cannot form an acronym, keeping the
+single-pass scan linear.
 

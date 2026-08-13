@@ -31,7 +31,7 @@ Tests are product contracts. `zig build test` runs three suites:
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 96 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 100 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -110,7 +110,14 @@ Tests are product contracts. `zig build test` runs three suites:
    `<strong style="color:red;">`, `_(big)x_` → `<em class="big">`,
    the doubled/long operators, Hobix's example line byte-for-byte,
    and the shared fallbacks plus the em-dash interplay;
-   docs/TEXTILE-PARITY.md §19), and the
+   docs/TEXTILE-PARITY.md §19), the citation operator
+   (`??Cat's Cradle??` → `<cite>Cat’s Cradle</cite>` with the
+   replacement, attrs + nesting, Hobix's example, the both-flag
+   delimiter fix, and the family fallbacks;
+   docs/TEXTILE-PARITY.md §20), the acronym form
+   (`CSS(Cascading Style Sheets)` → `<acronym title="…">`, the
+   conservative shape contract, and opacity inside `@code@`/link
+   display; docs/TEXTILE-PARITY.md §20), and the
    `{...}` character macros (the documented table byte-for-byte with
    mirrored orders, inside link display text, the brace-edge rule
    that keeps `{*}`/`{-L}` whole, and the literal fallbacks;
@@ -128,7 +135,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **195/195 tests passing** with Zig 0.16.0.
+The current complete result is **197/197 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
