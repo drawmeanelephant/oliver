@@ -31,7 +31,7 @@ Tests are product contracts. `zig build test` runs three suites:
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 90 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 94 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -101,7 +101,15 @@ Tests are product contracts. `zig build test` runs three suites:
    modifiers (the six alignment operators, the size forms
    `10x20`/`10w 20h`/`20%x40%`/`20%`, style/class/id/padding, the
    linked-image combination, and literal fallback shapes;
-   docs/TEXTILE-PARITY.md §16). It
+   docs/TEXTILE-PARITY.md §16), span phrase
+   attributes (`%[es]cabeza%` → `<span lang="es">` and the other
+   Hobix forms, the combined fixed-order run, nested phrases, and
+   literal fallbacks — malformed runs, whitespace/empty content, a
+   `%` inside a style value; docs/TEXTILE-PARITY.md §18), and the
+   `{...}` character macros (the documented table byte-for-byte with
+   mirrored orders, inside link display text, the brace-edge rule
+   that keeps `{*}`/`{-L}` whole, and the literal fallbacks;
+   docs/TEXTILE-PARITY.md §18). It
    also verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
    deterministic repeat rendering (list stress: 2k nested items, 10k
@@ -115,7 +123,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **190/190 tests passing** with Zig 0.16.0.
+The current complete result is **193/193 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 

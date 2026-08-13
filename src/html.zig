@@ -393,9 +393,13 @@ fn writeOpen(
             try writer.writeAll("</a></sup>");
         },
         .span => {
-            // Textile `%x%` renders `<span>` without attributes; the
-            // attribute-bearing forms are a later milestone.
-            try writer.writeAll("<span>");
+            // Textile `%x%` renders `<span>`; the phrase-attribute forms
+            // (`%{style}(class#id)[lang]x%`, Hobix "Phrase Attributes")
+            // write the composed attrs in the fixed render order
+            // (docs/TEXTILE-PARITY.md §18). Markdown never produces this tag.
+            try writer.writeAll("<span");
+            try writeAttrs(writer, node.data.span.attrs);
+            try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .code_span => {
