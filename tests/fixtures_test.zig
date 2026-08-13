@@ -1838,6 +1838,37 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/code-block-literal.textile"),
         .expected = @embedFile("fixtures/textile/code-block-literal.html"),
     },
+    // --- extended blocks (Textile 2 "Extended Blocks"; current Textile
+    // docs "Extended blocks") ---
+    // `bq..` stays active across blank lines: unmarked lines continue the
+    // quote, blank lines separate paragraphs inside one `<blockquote>`,
+    // and a block signature (`p.`) ends it.
+    .{
+        .name = "extended-bq",
+        .input = @embedFile("fixtures/textile/extended-bq.textile"),
+        .expected = @embedFile("fixtures/textile/extended-bq.html"),
+    },
+    // `bc..` keeps blank lines as verbatim code content (escaped
+    // `<pre><code>`), ending at the next signature.
+    .{
+        .name = "extended-bc",
+        .input = @embedFile("fixtures/textile/extended-bc.textile"),
+        .expected = @embedFile("fixtures/textile/extended-bc.html"),
+    },
+    // `pre..` is the same extended form, verbatim `<pre>` preserving HTML
+    // and blank lines.
+    .{
+        .name = "extended-pre",
+        .input = @embedFile("fixtures/textile/extended-pre.textile"),
+        .expected = @embedFile("fixtures/textile/extended-pre.html"),
+    },
+    // Empty extended signatures stay literal, `p..`/`h1..` are not
+    // extended signatures, and `bq.` still ends at the first blank line.
+    .{
+        .name = "extended-literal",
+        .input = @embedFile("fixtures/textile/extended-literal.textile"),
+        .expected = @embedFile("fixtures/textile/extended-literal.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {
@@ -1945,11 +1976,17 @@ test "shared model: equivalent inputs render identically through one renderer" {
             .expected = "<ol>\n<li>one</li>\n<li>two</li>\n</ol>\n",
         },
         // Textile `bc.` block code converges with the Markdown fenced code
-        // block (same `.code_block` payload, same escaping).
+        // block (same `.code_block` payload, same escaping), including the
+        // extended `bc..` form's blank lines.
         .{
             .markdown = "```\na < b\n```",
             .textile = "bc. a < b",
             .expected = "<pre><code>a &lt; b\n</code></pre>\n",
+        },
+        .{
+            .markdown = "```\na\n\nb\n```",
+            .textile = "bc.. a\n\nb",
+            .expected = "<pre><code>a\n\nb\n</code></pre>\n",
         },
     };
     for (pairs) |p| {
