@@ -46,6 +46,14 @@
 //! - Paragraph content is preserved verbatim (only the marker's separator
 //!   whitespace is consumed).
 //! - `h0.` and `h7.`+ are not headings; they remain paragraph text.
+//! - Plain text gets the documented character replacements: curly quotes
+//!   (direction by the surrounding source bytes), `--` → em dash, ` - ` →
+//!   en dash, `...` → ellipsis, digit-adjacent `x` → dimension sign, and
+//!   `(c)`/`(r)`/`(tm)` (case-insensitive) + `(1/4)`/`(1/2)`/`(3/4)`/
+//!   `(o)`/`(+/-)` → their Unicode equivalents. HTML-looking `<...>`
+//!   regions and verbatim payloads (`@code@`, code blocks, link/image
+//!   src/alt/title) are exempt; replaced text is an arena-owned payload
+//!   (docs/TEXTILE-PARITY.md §13).
 //! - A list item is a single line: `*` (bullet) or `#` (ordered) markers,
 //!   one per nesting level, followed by a space or tab. Consecutive marker
 //!   lines compose a tree of tight lists; a blank line, a block signature,
@@ -2059,7 +2067,11 @@ fn emitItems(doc: *document.Document, parent: *document.Node, content: source.Sp
                     });
                     try doc.appendChild(scope.parent, link);
                     const display = subSpan(content, l.display.start, l.display.end);
-                    const text_node = try doc.createNode(.text, display, .{ .text = doc.text(display) });
+                    // Display text is opaque plain text (no nested phrases)
+                    // but the character replacements still apply — Hobix's
+                    // alias example renders `it's` inside a link as a curly
+                    // apostrophe.
+                    const text_node = try doc.createNode(.text, display, .{ .text = try replaceChars(doc, display) });
                     try doc.appendChild(link, text_node);
                     i += 1;
                 },
@@ -2108,6 +2120,217 @@ fn parseInlines(doc: *document.Document, parent: *document.Node, content: source
     try emitItems(doc, parent, content, items.items);
 }
 
+/// True when a text run needs the character-replacement pass: it contains
+/// a straight quote, a hyphen, a period run, an opening paren, an
+/// HTML-looking `<`, or a digit-adjacent `x` (the dimension-sign rule).
+/// The `x` check is cheap (one digit next to it, possibly through a single
+/// space) so plain words like "example" do not force the slow path; the
+/// slow path's `changed` flag discards the copy when nothing actually
+/// replaces.
+fn hasCharMacroTrigger(bytes: []const u8) bool {
+    for (bytes, 0..) |b, i| {
+        switch (b) {
+            '"', '\'', '-', '.', '(', '<' => return true,
+            'x' => {
+                const left_ok = (i >= 2 and bytes[i - 1] == ' ' and bytes[i - 2] >= '0' and bytes[i - 2] <= '9') or
+                    (i >= 1 and bytes[i - 1] >= '0' and bytes[i - 1] <= '9');
+                const right_ok = (i + 2 < bytes.len and bytes[i + 1] == ' ' and bytes[i + 2] >= '0' and bytes[i + 2] <= '9') or
+                    (i + 1 < bytes.len and bytes[i + 1] >= '0' and bytes[i + 1] <= '9');
+                if (left_ok or right_ok) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// The byte at absolute source offset `p`, or null at the start of the
+/// source. Text runs can begin mid-line after phrase delimiters, so quote
+/// directionality and the en/dimension rules look at the surrounding source
+/// bytes, not just the run.
+fn srcByteAt(src: []const u8, p: usize) ?u8 {
+    if (p >= src.len) return null;
+    return src[p];
+}
+
+/// True when `b` is an ASCII letter, or false when `b` is null (a run's
+/// edge never counts as a letter for the apostrophe rule).
+fn isAsciiLetterOpt(b: ?u8) bool {
+    if (b) |c| return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z');
+    return false;
+}
+
+fn isAsciiLetterByte(b: u8) bool {
+    return (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z');
+}
+
+/// Case-insensitive prefix match of `pat` at `bytes[i]`.
+fn matchesCi(bytes: []const u8, i: usize, pat: []const u8) bool {
+    if (i + pat.len > bytes.len) return false;
+    for (pat, 0..) |p, k| {
+        const b = bytes[i + k];
+        if (b >= 'A' and b <= 'Z') {
+            if (b + 32 != p) return false;
+        } else if (b != p) return false;
+    }
+    return true;
+}
+
+/// Applies the Textile character replacements (docs/TEXTILE-PARITY.md §13)
+/// to a plain-text span: straight double/single quotes become curly
+/// (direction by the surrounding source bytes), `--` becomes an em dash,
+/// a space-surrounded `-` an en dash, `...` an ellipsis, a digit-adjacent
+/// `x` the dimension sign, and the documented parenthesized symbols
+/// (`(c)`/`(r)`/`(tm)` case-insensitive, `(1/4)`/`(1/2)`/`(3/4)`/`(o)`/
+/// `(+/-)`) their Unicode equivalents. HTML-looking `<...>` regions are
+/// copied verbatim (Hobix: HTML passes through unescaped), and verbatim
+/// payloads (`@code@`, code blocks, link/image src/alt/title) never pass
+/// through here. Returns the borrowed source slice when nothing replaces
+/// (the fast path); only a span containing a replacement allocates an
+/// arena copy — the same borrow-or-copy contract as the Markdown entity
+/// resolver (docs/DOCUMENT-MODEL.md).
+fn replaceChars(doc: *document.Document, span: source.Span) ParseError![]const u8 {
+    const text = doc.text(span);
+    if (!hasCharMacroTrigger(text)) return text;
+    const src = doc.src.bytes;
+    const abs = span.start;
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(doc.allocator());
+    var changed = false;
+    var i: usize = 0;
+    while (i < text.len) {
+        const p = abs + i;
+        switch (text[i]) {
+            '"' => {
+                // Opening when preceded by start-of-content, whitespace, or
+                // an opening bracket; otherwise closing (Hobix + current
+                // docs quote examples).
+                const before = if (p == 0) null else srcByteAt(src, p - 1);
+                const open = if (before) |b| switch (b) {
+                    ' ', '\t', '\n', '\r', '(', '[', '{' => true,
+                    else => false,
+                } else true; // start of content opens
+                try out.appendSlice(doc.allocator(), if (open) "\u{201C}" else "\u{201D}");
+                changed = true;
+                i += 1;
+            },
+            '\'' => {
+                const before = if (p == 0) null else srcByteAt(src, p - 1);
+                const after = srcByteAt(src, p + 1);
+                if (isAsciiLetterOpt(before) and isAsciiLetterOpt(after)) {
+                    try out.appendSlice(doc.allocator(), "\u{2019}"); // apostrophe
+                } else if ((before == null or isWhitespaceByte(before.?)) and isAsciiLetterOpt(after)) {
+                    try out.appendSlice(doc.allocator(), "\u{2018}"); // opening
+                } else {
+                    try out.appendSlice(doc.allocator(), "\u{2019}"); // closing/standalone
+                }
+                changed = true;
+                i += 1;
+            },
+            '-' => {
+                if (i + 1 < text.len and text[i + 1] == '-') {
+                    try out.appendSlice(doc.allocator(), "\u{2014}"); // em dash
+                    changed = true;
+                    i += 2;
+                } else {
+                    const left: ?u8 = if (i == 0) (if (p == 0) null else srcByteAt(src, p - 1)) else text[i - 1];
+                    const right: ?u8 = if (i + 1 < text.len) text[i + 1] else srcByteAt(src, p + 1);
+                    if ((left != null and isWhitespaceByte(left.?)) and (right != null and isWhitespaceByte(right.?))) {
+                        try out.appendSlice(doc.allocator(), "\u{2013}"); // en dash
+                        changed = true;
+                    } else {
+                        try out.append(doc.allocator(), '-');
+                    }
+                    i += 1;
+                }
+            },
+            '.' => {
+                if (i + 2 < text.len and text[i + 1] == '.' and text[i + 2] == '.') {
+                    try out.appendSlice(doc.allocator(), "\u{2026}"); // ellipsis
+                    changed = true;
+                    i += 3;
+                } else {
+                    try out.append(doc.allocator(), '.');
+                    i += 1;
+                }
+            },
+            'x' => {
+                // Dimension sign between digits, with at most one space on
+                // either side (current docs: "when placed between numbers").
+                const left: ?u8 = if (i >= 2 and text[i - 1] == ' ') text[i - 2] else if (i >= 1) text[i - 1] else if (p == 0) null else srcByteAt(src, p - 1);
+                const right: ?u8 = if (i + 2 < text.len and text[i + 1] == ' ') text[i + 2] else if (i + 1 < text.len) text[i + 1] else srcByteAt(src, p + 1);
+                if (left != null and right != null and left.? >= '0' and left.? <= '9' and right.? >= '0' and right.? <= '9') {
+                    try out.appendSlice(doc.allocator(), "\u{00D7}");
+                    changed = true;
+                } else {
+                    try out.append(doc.allocator(), 'x');
+                }
+                i += 1;
+            },
+            '(' => {
+                if (matchesCi(text, i, "(c)")) {
+                    try out.appendSlice(doc.allocator(), "\u{00A9}");
+                    changed = true;
+                    i += 3;
+                } else if (matchesCi(text, i, "(r)")) {
+                    try out.appendSlice(doc.allocator(), "\u{00AE}");
+                    changed = true;
+                    i += 3;
+                } else if (matchesCi(text, i, "(tm)")) {
+                    try out.appendSlice(doc.allocator(), "\u{2122}");
+                    changed = true;
+                    i += 4;
+                } else if (matchesCi(text, i, "(1/4)")) {
+                    try out.appendSlice(doc.allocator(), "\u{00BC}");
+                    changed = true;
+                    i += 5;
+                } else if (matchesCi(text, i, "(1/2)")) {
+                    try out.appendSlice(doc.allocator(), "\u{00BD}");
+                    changed = true;
+                    i += 5;
+                } else if (matchesCi(text, i, "(3/4)")) {
+                    try out.appendSlice(doc.allocator(), "\u{00BE}");
+                    changed = true;
+                    i += 5;
+                } else if (text[i + 1 ..].len >= 3 and text[i + 1] == 'o' and text[i + 2] == ')') {
+                    try out.appendSlice(doc.allocator(), "\u{00B0}");
+                    changed = true;
+                    i += 3;
+                } else if (text[i + 1 ..].len >= 4 and text[i + 1] == '+' and text[i + 2] == '/' and text[i + 3] == '-' and text[i + 4] == ')') {
+                    try out.appendSlice(doc.allocator(), "\u{00B1}");
+                    changed = true;
+                    i += 5;
+                } else {
+                    try out.append(doc.allocator(), '(');
+                    i += 1;
+                }
+            },
+            '<' => {
+                // HTML-looking region: `<` + a letter or `/`, copied verbatim
+                // through the closing `>` (no replacements inside tags). A
+                // bare `<` stays literal text and scanning continues.
+                if (i + 1 < text.len and (isAsciiLetterByte(text[i + 1]) or text[i + 1] == '/')) {
+                    var j = i + 1;
+                    while (j < text.len and text[j] != '>') : (j += 1) {}
+                    if (j < text.len) {
+                        try out.appendSlice(doc.allocator(), text[i .. j + 1]);
+                        i = j + 1;
+                        continue;
+                    }
+                }
+                try out.append(doc.allocator(), '<');
+                i += 1;
+            },
+            else => {
+                try out.append(doc.allocator(), text[i]);
+                i += 1;
+            },
+        }
+    }
+    if (!changed) return text;
+    return out.toOwnedSlice(doc.allocator());
+}
+
 fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) ParseError!void {
     if (span.isEmpty()) return;
     // Contiguous text in the same parent merges into one node (model
@@ -2121,11 +2344,11 @@ fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) 
             !(last.span.start > 0 and doc.src.bytes[last.span.start - 1] == '\\'))
         {
             last.span.end = span.end;
-            last.data.text = doc.text(last.span);
+            last.data.text = try replaceChars(doc, last.span);
             return;
         }
     }
-    const node = try doc.createNode(.text, span, .{ .text = doc.text(span) });
+    const node = try doc.createNode(.text, span, .{ .text = try replaceChars(doc, span) });
     try doc.appendChild(parent, node);
 }
 
@@ -2522,7 +2745,6 @@ test "textile: phrase modifier boundary fallbacks stay literal" {
         "Text * x*", // edge whitespace after opener
         "*x *", // edge whitespace before closer
         "***triple***", // run longer than any documented operator
-        "--smaller--", // Textile 2 big/small are deferred
         "a^2 + b", // intraword caret
         "50% of", // intraword percent
         "*open", // unmatched opener
@@ -2535,6 +2757,18 @@ test "textile: phrase modifier boundary fallbacks stay literal" {
         try std.testing.expectEqual(document.Tag.text, p.children.items[0].tag);
         try std.testing.expectEqualStrings(input, p.children.items[0].data.text);
     }
+    // Textile 2's `++bigger++`/`--smaller--` are deferred: the run is not a
+    // `<small>` phrase. The double hyphens still hit the character-replacement
+    // pass (all three references: `--` → em dash), so the text renders as
+    // plain em-dashed text, never a `<small>` element.
+    var small = try oliver.parse(std.testing.allocator, "--smaller--\n", .textile, .{});
+    defer small.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &small.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("<p>—smaller—</p>\n", out.items);
 }
 
 test "textile: links have exact spans, hrefs, titles, and literal fallbacks" {
@@ -3148,7 +3382,10 @@ test "textile: link aliases resolve through document definitions" {
     // The definition line never renders; the paragraph keeps its hard
     // breaks; the `!` after `hobix` is excluded trailing punctuation.
     try std.testing.expectEqualStrings(
-        "<p>I am crazy about <a href=\"https://hobix.com\">Hobix</a><br />\nand <a href=\"https://hobix.com\">it's</a> <a href=\"https://hobix.com\">all</a> I ever<br />\n<a href=\"https://hobix.com\">link to</a>!</p>\n",
+        // Hobix renders the same example with a curly apostrophe inside the
+        // link display text (`it&#8217; s`) — the character-replacement pass
+        // applies there too.
+        "<p>I am crazy about <a href=\"https://hobix.com\">Hobix</a><br />\nand <a href=\"https://hobix.com\">it’s</a> <a href=\"https://hobix.com\">all</a> I ever<br />\n<a href=\"https://hobix.com\">link to</a>!</p>\n",
         out.items,
     );
 }
@@ -3809,4 +4046,97 @@ test "textile: malformed citation shapes stay literal" {
         defer result.deinit();
         try std.testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
     }
+}
+
+test "textile: character replacements render the documented symbols" {
+    const oliver = @import("oliver.zig");
+    // The Hobix battery byte-for-byte: curly double quotes, em dash, en
+    // dash, ellipsis, dimension sign, and the (TM)/(R)/(C) macros.
+    const cases = [_][]const u8{
+        "\"Observe!\"",
+        "Observe -- very nice!",
+        "Observe - tiny and brief.",
+        "Observe...",
+        "Observe: 2 x 2.",
+        "one(TM), two(R), three(C).",
+    };
+    const expected = [_][]const u8{
+        "\u{201C}Observe!\u{201D}",
+        "Observe \u{2014} very nice!",
+        "Observe \u{2013} tiny and brief.",
+        "Observe\u{2026}",
+        "Observe: 2 \u{00D7} 2.",
+        "one\u{2122}, two\u{00AE}, three\u{00A9}.",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqualStrings(want, p.children.items[0].data.text);
+    }
+}
+
+test "textile: parenthesized macros, fractions, and apostrophes" {
+    const oliver = @import("oliver.zig");
+    // The current docs' paren macros are case-insensitive for (c)/(r)/(tm)
+    // (Hobix uses the uppercase forms), with the fractions/degree/plus-minus
+    // as documented; apostrophes become curly by position.
+    const cases = [_][]const u8{
+        "x(c) y(R) z(TM) (1/4) (1/2) (3/4) (o) (+/-)",
+        "'tis the season: it's I'm dogs'.",
+    };
+    const expected = [_][]const u8{
+        "x\u{00A9} y\u{00AE} z\u{2122} \u{00BC} \u{00BD} \u{00BE} \u{00B0} \u{00B1}",
+        "\u{2018}tis the season: it\u{2019}s I\u{2019}m dogs\u{2019}.",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqualStrings(want, p.children.items[0].data.text);
+    }
+}
+
+test "textile: replacements exempt code spans, tags, and stay literal otherwise" {
+    const oliver = @import("oliver.zig");
+    // `@code@` is verbatim; an HTML-looking `<...>` region keeps its
+    // straight quotes; a hyphen touching letters or a lone `x` in a word
+    // are not replacements; a `---` run is one em dash plus a hyphen.
+    const cases = [_][]const u8{
+        "a -- b",
+        "well-formed foo-bar",
+        "box exam 2x4",
+        "a --- b",
+        "<b title=\"x\"> -- ",
+    };
+    const expected = [_][]const u8{
+        "a \u{2014} b",
+        "well-formed foo-bar",
+        "box exam 2\u{00D7}4",
+        "a \u{2014}- b",
+        "<b title=\"x\"> \u{2014} ",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqualStrings(want, p.children.items[0].data.text);
+    }
+    // `@code@` content is a verbatim payload: no replacements apply.
+    var code = try oliver.parse(std.testing.allocator, "@a -- b\"c@\n", .textile, .{});
+    defer code.deinit();
+    const span = code.document.root.children.items[0].children.items[0];
+    try std.testing.expectEqual(document.Tag.code_span, span.tag);
+    try std.testing.expectEqualStrings("a -- b\"c", span.data.code_span);
+}
+
+test "textile: replacements apply inside link display text" {
+    const oliver = @import("oliver.zig");
+    // Hobix's own alias example renders `it's` inside the link display as a
+    // curly apostrophe (&#8217;), so the display text is not exempt.
+    var result = try oliver.parse(std.testing.allocator, "\"it's\":hobix\n[hobix]https://hobix.com\n", .textile, .{});
+    defer result.deinit();
+    const link = result.document.root.children.items[0].children.items[0];
+    try std.testing.expectEqual(document.Tag.link, link.tag);
+    try std.testing.expectEqualStrings("it\u{2019}s", link.children.items[0].data.text);
 }

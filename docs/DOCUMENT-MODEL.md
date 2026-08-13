@@ -35,7 +35,10 @@ the arena-owned `html_block` verbatim content,
 the arena-owned `link` href/title,
 the arena-owned `image` src/alt/title, the arena-owned `autolink` href/label,
 or the `footnote_ref` number (Textile `[N]` references; Markdown never
-produces it).
+produces it). A `text` payload is normally a source slice; it is
+arena-owned only when a transformation requires a copy — Markdown §2.5
+entity decoding and the Textile character replacements
+(docs/TEXTILE-PARITY.md §13) — on the same borrow-or-copy contract.
 `raw_html` has no data payload; its source bytes are read from `Node.span`.
 
 ## Design decisions

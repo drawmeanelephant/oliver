@@ -22,7 +22,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T11 `bc.`/`pre.` block code | single-period code/preformatted leaf blocks owning verbatim lines until a blank line; `.code_block` verbatim `escape` flag + attrs; Textile fixtures; Markdown untouched | after T10 | integrated on main (PR #23) |
 | Textile worker | T12 extended blocks (`bq..`/`bc..`/`pre..`) | double-period signatures stay active across blank lines: `bq..` flushes blank-line-separated paragraphs into one blockquote, `bc..`/`pre..` keep blank lines as code content; both end at the next block signature | after T11 | integrated on main (PR #24) |
 | Textile worker | T13 Textile footnotes | `[N]` references → `.footnote_ref` sup links + `fnN.` blocks (paragraph attrs + leading sup); Textile fixtures; Markdown untouched | after T12 | integrated on main (PR #25) |
-| Textile worker | T14 `bq.:URL` citations | citation URL after the block-quote period → the blockquote's `cite` attribute; block attrs combine; Textile fixtures; Markdown untouched | after T13 | implemented on main (uncommitted) |
+| Textile worker | T14 `bq.:URL` citations | citation URL after the block-quote period → the blockquote's `cite` attribute; block attrs combine; Textile fixtures; Markdown untouched | after T13 | integrated on main (PR #27) |
+| Textile worker | T15 character replacements | curly quotes, em/en dashes, ellipsis, dimension sign, `(c)`/`(r)`/`(tm)`, fractions/degree/plus-minus applied to plain text in the inline pass; arena-owned replaced payloads; Textile fixtures; Markdown untouched | after T14 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -516,7 +517,43 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   pins updated for the new contract.
 - **Parallelism:** yes; Textile + one model field, Markdown untouched.
 - **Integration:** after T13 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 179/179 tests green;
+- **State:** integrated on main (PR #27). 179/179 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T15 — Character replacements
+
+- **Objective:** implement the implicit typography the references
+  document — curly quotes, em/en dashes, ellipsis, dimension sign,
+  and the parenthesized symbols — applied to plain text only.
+- **Authoritative sources:** Hobix "Entities" (curly quotes, `--` →
+  em dash, ` - ` → en dash, `...` → ellipsis, `x` → dimension sign,
+  `(TM)`/`(R)`/`(C)`); Movable Type Textile 2 "Character
+  Replacements" (`(c)`/`(r)`/`(tm)`, `--` → em dash); current Textile
+  docs "Automatic conversions" (quotes, dashes, ellipsis, dimension
+  sign, `(tm)`/`(R)`/`(C)`, `(1/4)`/`(1/2)`/`(3/4)`, `(o)`, `(+/-)`).
+  All three clean-room allowed.
+- **Seams:** `src/textile.zig` (`replaceChars` + `hasCharMacroTrigger`
+  fast path + helpers on the borrow-or-copy contract of the Markdown
+  entity resolver, applied in `emitText` and the link display node),
+  Textile fixtures/index (incl. the `special-chars`, `phrase-
+  modifiers`, `phrase-boundaries`, `link-literal`, `link-alias-basic`,
+  and `extended-bq` pins updated for the new contract), feature
+  matrix, parity (new §13), model/tests/ledger docs, README. Model
+  and renderer untouched.
+- **Acceptance:** the Hobix battery byte-for-byte; the current docs'
+  paren macros; apostrophes by position; replacements inside phrase
+  content and link display text; `@code@`, code blocks, link/image
+  src/alt/title, and HTML-looking `<...>` regions exempt; literal
+  fallbacks (`---`, `....`, `(1/3)`, `(cd)`, letter-touching hyphens,
+  plain `x`); the 652/652 gate is untouched.
+- **Tests:** 4 unit tests (documented symbols, paren macros +
+  apostrophes, exemptions/literal shapes, link display text), 3
+  Textile fixture pairs, and 6 pre-existing pins updated for the new
+  contract (curly quotes now reach prose; `--smaller--` renders as
+  em-dashed text since `<small>` stays deferred).
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T14 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 183/183 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

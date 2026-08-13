@@ -250,4 +250,28 @@ user-facing prose above, with the rendering (the `cite` attribute on
 the blockquote, the standard HTML citation) per the user's
 specification.
 
+Session 10 (T15 character replacements) consulted:
+
+- Hobix Textile Reference "Entities" <https://hobix.com/textile/> —
+  curly single/double quotes, `--` → em dash, ` - ` → en dash,
+  `...` → ellipsis, `x` → dimension sign, and `one(TM), two(R),
+  three(C).` → ™/®/©, with the rendered examples.
+- Movable Type "Textile 2 Syntax" "Character Replacements"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html>
+  — "A few simple, common symbols are automatically replaced:
+  (c) (r) (tm)", plus the `--` → em-dash note and the `{...}`
+  character-macro table (which Oliver defers).
+- Textile Markup Language Documentation "Automatic conversions"
+  <https://textile-lang.com/> — curly quotes/apostrophes, ` - ` → en
+  dash, ` -- ` → em dash, `...` → ellipsis, digit-adjacent `x` →
+  dimension sign, and `(tm)`/`(R)`/`(C)`/`(1/4)`/`(1/2)`/`(3/4)`/
+  `(o)`/`(+/-)` → their Unicode equivalents.
+
+No Textile parser implementation source was consulted for the T15
+work; the pinned behaviors in docs/TEXTILE-PARITY.md §13 are derived
+from the user-facing prose above (the quote-direction rules are
+Oliver's deterministic local rules pinned by fixtures; Textile 2's
+`{...}` macro table is deferred because only the paren forms are
+documented by the other two references).
+
 No Markdown or Textile parser implementation source was consulted.

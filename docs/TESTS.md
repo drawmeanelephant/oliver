@@ -31,7 +31,7 @@ Tests are product contracts. `zig build test` runs three suites:
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 77 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 80 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -79,7 +79,13 @@ Tests are product contracts. `zig build test` runs three suites:
    block-quote citations (the current docs' `bq.:URL` example
    byte-for-byte, cite + modifiers, trailing-punctuation trim, extended-
    block termination, and literal fallback shapes;
-   docs/TEXTILE-PARITY.md §12). It
+   docs/TEXTILE-PARITY.md §12), and character
+   replacements (the Hobix battery byte-for-byte — curly quotes, em/en
+   dashes, ellipsis, dimension sign, `(TM)`/`(R)`/`(C)` — plus the
+   current docs' case-insensitive `(c)`/`(r)`/`(tm)`, fractions/degree/
+   plus-minus, replacements inside phrases and link display text,
+   verbatim exemptions for HTML-looking regions and `@code@`, and
+   literal fallback shapes; docs/TEXTILE-PARITY.md §13). It
    also verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
    deterministic repeat rendering (list stress: 2k nested items, 10k
@@ -93,7 +99,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **179/179 tests passing** with Zig 0.16.0.
+The current complete result is **183/183 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
