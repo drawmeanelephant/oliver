@@ -225,9 +225,13 @@ pub const Paragraph = struct {
     attrs: []const Attribute = &.{},
 };
 
-/// The payload of a `.block_quote` node: the Textile block attributes.
+/// The payload of a `.block_quote` node: the Textile block attributes and
+/// an optional citation URL (`bq.:URL`, the current Textile docs' citation
+/// form), emitted as the `cite` attribute. `cite` is arena-owned; Markdown
+/// never sets it.
 pub const BlockQuote = struct {
     attrs: []const Attribute = &.{},
+    cite: ?[]const u8 = null,
 };
 
 /// The payload of a `.heading` node: the level (1..6) and the Textile

@@ -203,6 +203,13 @@ fn writeOpen(
         },
         .block_quote => {
             try writer.writeAll("<blockquote");
+            if (node.data.block_quote.cite) |cite| {
+                // `bq.:URL` citation: the cite attribute follows the link
+                // href policy (percent-encode + HTML-escape).
+                try writer.writeAll(" cite=\"");
+                try writeEscapedHref(writer, cite);
+                try writer.writeByte('\"');
+            }
             try writeAttrs(writer, node.data.block_quote.attrs);
             try writer.writeAll(">\n");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
