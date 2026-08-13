@@ -43,6 +43,8 @@ consulted.
 | `\2` colspan / `/2` rowspan | cell `colspan`/`rowspan` | `colspan="2"`/`rowspan="2"` | implemented (T8) |
 | `table<mods>.` signature | table `attrs` | `<table style="…" class="…">` | implemented (T8) |
 | row modifiers (incl. `_` header row) | row `attrs` / header flags | `<tr style="…">`, all-`<th>` row | implemented (T8) |
+| `[alias]url` definition lines | (no node: collected into the alias table) | never renders | implemented (T9) |
+| `"text":alias` reference | `.link` (href from the alias table) | `<a href="defined-url">` | implemented (T9) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -63,9 +65,6 @@ the previous slice rendered them literally. All four are now implemented.
 Remaining gaps are deliberate and recorded in docs/FEATURE-MATRIX.md as
 planned/deferred. The notable ones, so the record is honest:
 
-- **Link aliases** — `[alias]url` lookup blocks and `"text":alias`
-  references (both references document them). Deferred: needs a
-  document-level definition table mirroring the Markdown §4.7 machinery.
 - **Image modifiers** — alignment (`!<x!`, `!>x!`, `!-x!`, `!^x!`, `!~x!`),
   CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
@@ -75,8 +74,9 @@ planned/deferred. The notable ones, so the record is honest:
   **character-replacement macros** (curly quotes, em/en dashes, ellipsis,
   `(c)`/`(r)`/`(tm)`). All planned/deferred in the feature matrix.
 
-Tables were the last large feature gap; they are now implemented (T8) —
-see §6 for the pinned behaviors.
+Tables were the last large *block* gap; they are now implemented (T8) —
+see §6. The largest remaining *inline* gap, link aliases, is now
+implemented too (T9) — see §7.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -203,7 +203,12 @@ The fixture wall added by this audit:
   row attributes), the Textile 2 complex example, the header-alignment
   propagation rule, inline content in cells, literal fallbacks, and block
   closing (`table-basic` … `table-close`);
-- shared-model convergence with the Markdown frontend (see §1).
+- link aliases: the Hobix example, the Textile 2 definition-block form,
+  precedence/case-sensitivity, and literal fallbacks
+  (`link-alias-basic`, `link-alias-def-block`, `link-alias-precedence`,
+  `link-alias-literal`);
+- shared-model convergence with the Markdown frontend (see §1) — including
+  `"x":alias` + `[alias]url` ↔ `[x][a]` + `[a]: http://u`, byte-identical.
 
 ## 6. Tables (T8): pinned behaviors
 
@@ -277,5 +282,44 @@ modifiers without the `. ` terminator; `table.` followed by non-row text
 parse as a row); a modifier run without a `. ` or `|` terminator; an
 unclosed `{`/`(`/`[` inside a cell (the line is still a row, the cell
 verbatim). `||` is a degenerate one-cell row and stays a table.
+
+## 7. Link aliases (T9): pinned behaviors
+
+Both references document the alias mechanism: Hobix "Link Aliases" (the
+`[hobix]https://hobix.com` example, with uses before the definition) and
+Textile 2 "Links" ("place one or more links in a block of it's own, it
+can be anywhere within your document", then `"Text to display":alias`).
+Every choice below is a *choice*, recorded here and in the feature matrix.
+
+**Definition lines.** A definition is a line of the form `[alias]url`:
+`[` + a non-empty alias with no `[` + `]` + a non-whitespace URL running
+to end of line. Textile 2's "block of its own" is read loosely on purpose:
+the Hobix example places the definition directly after the paragraph with
+no blank line, so a def line needs no separation. A recognized def line
+**vanishes from output without changing the surrounding block** — an open
+paragraph or list continues across it ("place the URL anywhere in your
+document"), and a bare block of def lines renders nothing. A def line that
+lands between table rows closes the table (the table's own rule: any
+non-row line ends it).
+
+**Resolution.** A `"text":alias` link whose URL token matches a defined
+alias uses the defined URL; the token is otherwise an ordinary URL — an
+undefined alias is simply a relative URL (no error), and a defined alias
+always wins over the token's literal bytes. Matching is **exact and
+case-sensitive** and the **first definition of an alias wins** — the
+references are silent on both, so the conservative, deterministic choices
+mirror the Markdown §4.7 machinery. The definition's URL is verbatim (no
+trailing-punctuation trimming, unlike reference URLs).
+
+**Scope.** Aliases resolve in every inline context — paragraphs, headings,
+list items, and table cells — because the alias table is document-global
+and collected before any inline parsing. Image link attachments
+(`!url!:href`) stay direct-URL only; neither reference documents aliases
+there. Titles work unchanged: `"text (title)":alias`.
+
+**Literal fallbacks (all pinned by `link-alias-literal`).** `[1] See
+footnote` (space after `]`), `[]http://x` (empty alias), `[x]` (no URL),
+`[x] url with space` (whitespace in the URL), and a def-shaped substring
+inside a line are all ordinary paragraph text.
 
 
