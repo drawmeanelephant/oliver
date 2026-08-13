@@ -346,4 +346,22 @@ alignment-fragment and literal-fallback pins in docs/TEXTILE-PARITY.md
 §16 are Oliver's conservative deterministic rules on the user-facing
 prose above.
 
+Session 14 (T19 big/small phrases) finding:
+
+- Movable Type "Textile 2 Syntax" "Inline Formatting"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html>
+  — "`++bigger++` Translates into `<big>bigger</big>`" and
+  "`--smaller--` Translates into: `<small>smaller</small>`".
+
+Finding: Textile 2 is the **only** clean-room reference documenting
+big/small — Hobix and the current Textile docs do not — which is why
+the earlier milestone deferred them per the "implement once from the
+majority" rule (recorded ambiguity #18). The user's explicit request
+lifts the deferral. The implementation adds no new grammar: a doubled
+run of `-`/`+` is a phrase operator like `**`/`__`, and the documented
+`--` → em dash replacement (all three references) still applies to any
+`--` that cannot form a phrase pair — the interaction is pinned in
+docs/TEXTILE-PARITY.md §17. No Textile parser implementation source
+was consulted.
+
 No Markdown or Textile parser implementation source was consulted.

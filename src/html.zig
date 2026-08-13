@@ -360,6 +360,18 @@ fn writeOpen(
             try writer.writeAll("<ins>");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
+        .big => {
+            // Textile `++x++` renders `<big>` (Textile 2 "Inline
+            // Formatting"); Markdown never produces this tag.
+            try writer.writeAll("<big>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
+        .small => {
+            // Textile `--x--` renders `<small>` (Textile 2 "Inline
+            // Formatting"); Markdown never produces this tag.
+            try writer.writeAll("<small>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+        },
         .superscript => {
             try writer.writeAll("<sup>");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
@@ -504,6 +516,8 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .italic => try writer.writeAll("</i>"),
         .deleted => try writer.writeAll("</del>"),
         .inserted => try writer.writeAll("</ins>"),
+        .big => try writer.writeAll("</big>"),
+        .small => try writer.writeAll("</small>"),
         .superscript => try writer.writeAll("</sup>"),
         .subscript => try writer.writeAll("</sub>"),
         .span => try writer.writeAll("</span>"),

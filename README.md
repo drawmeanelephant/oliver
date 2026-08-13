@@ -54,7 +54,8 @@ spans/blocks or as structural syntax), plain
 inline text, a shared document model, a deterministic HTML renderer,
 Markdown (ATX) and Textile
 frontends (`hN.` headings, `p.`/`bq.`, `*`/`#` lists, `@code@`, the
-phrase-modifier family `_x_`/`*x*`/`__x__`/`**x**`/`-x-`/`+x+`/`^x^`/`~x~`/`%x%`,
+phrase-modifier family `_x_`/`*x*`/`__x__`/`**x**`/`-x-`/`+x+`/`^x^`/`~x~`/`%x%`/
+`++x++`/`--x--`,
 `"text":url` links, `[alias]url` link aliases with `"text":alias`
 references, `!url!` images, `|a|b|` tables with `|_. header|`
 cells, `table<mods>.` signatures, colspan/rowspan, and header-alignment

@@ -96,6 +96,10 @@ pub const Tag = enum {
     deleted,
     /// Inserted inline content (Textile `+x+`). Children: inlines.
     inserted,
+    /// Bigger inline content (Textile `++x++`). Children: inlines.
+    big,
+    /// Smaller inline content (Textile `--x--`). Children: inlines.
+    small,
     /// Superscript inline content (Textile `^x^`). Children: inlines.
     superscript,
     /// Subscript inline content (Textile `~x~`). Children: inlines.
@@ -144,13 +148,13 @@ pub const Tag = enum {
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => true,
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => false,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => true,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => true,
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => false,
         };
     }
