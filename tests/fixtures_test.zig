@@ -1663,6 +1663,84 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/inline-composition.textile"),
         .expected = @embedFile("fixtures/textile/inline-composition.html"),
     },
+    // --- tables (Hobix "Tables"; Textile 2 "Tables") ---
+    .{
+        .name = "table-basic",
+        .input = @embedFile("fixtures/textile/table-basic.textile"),
+        .expected = @embedFile("fixtures/textile/table-basic.html"),
+    },
+    .{
+        .name = "table-header",
+        .input = @embedFile("fixtures/textile/table-header.textile"),
+        .expected = @embedFile("fixtures/textile/table-header.html"),
+    },
+    // Hobix "Cell Attributes": alignment, justification, and vertical
+    // alignment render as CSS styles on flat rows.
+    .{
+        .name = "table-cell-attributes",
+        .input = @embedFile("fixtures/textile/table-cell-attributes.textile"),
+        .expected = @embedFile("fixtures/textile/table-cell-attributes.html"),
+    },
+    .{
+        .name = "table-colspan",
+        .input = @embedFile("fixtures/textile/table-colspan.textile"),
+        .expected = @embedFile("fixtures/textile/table-colspan.html"),
+    },
+    .{
+        .name = "table-rowspan",
+        .input = @embedFile("fixtures/textile/table-rowspan.textile"),
+        .expected = @embedFile("fixtures/textile/table-rowspan.html"),
+    },
+    .{
+        .name = "table-cell-style",
+        .input = @embedFile("fixtures/textile/table-cell-style.textile"),
+        .expected = @embedFile("fixtures/textile/table-cell-style.html"),
+    },
+    // Hobix "Table and Row Attributes": the signature on its own line and
+    // a `. `-terminated row-attribute line.
+    .{
+        .name = "table-signature",
+        .input = @embedFile("fixtures/textile/table-signature.textile"),
+        .expected = @embedFile("fixtures/textile/table-signature.html"),
+    },
+    .{
+        .name = "table-row-attrs",
+        .input = @embedFile("fixtures/textile/table-row-attrs.textile"),
+        .expected = @embedFile("fixtures/textile/table-row-attrs.html"),
+    },
+    // The Textile 2 complex example: signature + first row on one line,
+    // pipe-terminated row modifiers, rowspan, and a styled header cell
+    // (Oliver's pinned output; both references give no literal HTML for it).
+    .{
+        .name = "table-textile2-complex",
+        .input = @embedFile("fixtures/textile/table-textile2-complex.textile"),
+        .expected = @embedFile("fixtures/textile/table-textile2-complex.html"),
+    },
+    // Textile 2's header-alignment propagation rule: a header cell's
+    // alignment becomes the default for the cells below it in the column.
+    .{
+        .name = "table-propagation",
+        .input = @embedFile("fixtures/textile/table-propagation.textile"),
+        .expected = @embedFile("fixtures/textile/table-propagation.html"),
+    },
+    // Malformed rows and signatures stay literal under the recorded
+    // contract: no closing pipe, modifiers without the `. ` terminator,
+    // `table.` with non-row text, unclosed braces.
+    .{
+        .name = "table-literal",
+        .input = @embedFile("fixtures/textile/table-literal.textile"),
+        .expected = @embedFile("fixtures/textile/table-literal.html"),
+    },
+    .{
+        .name = "table-inline",
+        .input = @embedFile("fixtures/textile/table-inline.textile"),
+        .expected = @embedFile("fixtures/textile/table-inline.html"),
+    },
+    .{
+        .name = "table-close",
+        .input = @embedFile("fixtures/textile/table-close.textile"),
+        .expected = @embedFile("fixtures/textile/table-close.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {

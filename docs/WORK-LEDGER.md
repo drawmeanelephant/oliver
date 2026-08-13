@@ -15,7 +15,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | lead | M4 §2.5 entities + HTML blocks types 6/7 | entity table + decode seams; `.html_block` leaf; info/dest/title normalization | after M3 | implemented on main (uncommitted) |
 | lead | M5 HTML blocks types 1–5 | per-type terminator end conditions; type 1–6 paragraph interruption | after M4 | implemented on main (uncommitted) |
 | lead | M6 full conformance | §4.7 angle-destination separator rule; manifest/pins to 652/652 | after M5 | implemented on main (uncommitted) |
-| lead | M7 GFM tables extension | Markdown table open-leaf + header/delimiter/body parsing; `.table` family in model and HTML renderer; docs/TABLES.md contract | after M6 | implemented on main (uncommitted) |
+| lead | M7 GFM tables extension | Markdown table open-leaf + header/delimiter/body parsing; `.table` family in model and HTML renderer; docs/TABLES.md contract | after M6 | integrated on main (PR #19) |
+| Textile worker | T8 Textile tables | Textile `|a|b|` block rows, cell/row/table modifiers, header-alignment propagation, flat-row rendering; Textile fixtures; no Markdown/core changes | after M7 (reuses the `.table` model family) | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -264,7 +265,40 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes; Markdown + model/renderer, Textile untouched.
 - **Integration:** after M6 (corpus untouched; the 652/652 gate is
   re-verified).
-- **State:** implemented on main (uncommitted). 151/151 tests green;
+- **State:** integrated on main (PR #19). 151/151 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T8 — Textile tables
+
+- **Objective:** implement Textile's own `|a|b|` table syntax — the last
+  large feature gap the parity audit recorded — converging with the
+  `.table`/`.table_row`/`.table_cell` model family M7 introduced.
+- **Authoritative sources:** Hobix Textile Reference "Tables" (rendered
+  HTML examples); Movable Type Textile 2 Syntax "Tables" (modifier list,
+  the `table(fig).` complex example, the header-alignment propagation
+  rule, table-level `<`/`>`/`=` float/margin semantics); Textile Markup
+  Language Documentation (modifier semantics). All clean-room allowed.
+- **Seams:** `src/textile.zig` (table block state, row/signature
+  recognition, the modifier scanner, close-time propagation), the model
+  (`Attribute` lists on table/row/cell, `colspan`/`rowspan`, `justify`
+  alignment, the `sections` flag), `src/html.zig` (attribute emission;
+  `sections` selects flat rows vs GFM thead/tbody), Textile
+  fixtures/index, feature matrix, parity/model/test/ledger docs. Markdown
+  and the CommonMark corpus untouched.
+- **Acceptance:** the Hobix table examples byte-for-byte (simple rows,
+  header cells, cell attributes incl. `<`/`>`/`=`/`<>`/`^`/`~`, colspan,
+  rowspan, cell style, `table{...}.` signature on its own line, row
+  attributes); the Textile 2 complex example; header-alignment propagation;
+  inline-parsed cells; literal fallbacks (no closing pipe, missing `. `
+  terminator, `table. of contents`, unclosed braces); block closing;
+  GFM-model structural convergence.
+- **Tests:** 8 unit tests (structure/spans/rendering, cell modifiers and
+  attrs, propagation + row headers, signature + row modifiers, literal
+  fallbacks, block closing, a 20,000-row storm, GFM-model convergence),
+  a renderer-only `sections` test, and 13 Textile fixture pairs.
+- **Parallelism:** yes; Textile + model/renderer, Markdown untouched.
+- **Integration:** after M7 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 159/159 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

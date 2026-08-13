@@ -194,12 +194,14 @@ pub const Data = union(enum) {
     /// directly contains two blocks separated by one).
     list: List,
     /// `.table`: the per-column alignment, in order, one entry per column
-    /// (GFM §4.10). Arena-owned copy (columns are extracted from the
-    /// delimiter row).
+    /// (GFM §4.10: from the delimiter row; Textile: from the header row),
+    /// plus optional Textile table attributes.
     table: Table,
-    /// `.table_cell`: the header flag (true for the table's first row) and
-    /// the column alignment, resolved at parse time from the table's
-    /// `data.table.align` so the renderer never indexes across nodes.
+    /// `.table_row`: the row's optional Textile attributes.
+    table_row: TableRow,
+    /// `.table_cell`: the header flag, the column alignment (GFM), the
+    /// Textile colspan/rowspan, and the cell's Textile attributes,
+    /// resolved at parse time so the renderer never indexes across nodes.
     table_cell: TableCell,
 };
 
@@ -244,28 +246,67 @@ pub const List = struct {
 
 /// Column alignment of a GFM table (§4.10), from the delimiter row:
 /// `---` unaligned, `:---` left, `---:` right, `:---:` center. `none`
-/// renders without an `align` attribute.
+/// renders without an `align` attribute. `justify` is the Textile `<>`
+/// modifier (full justification); GFM never produces it, and Textile
+/// renders its alignment through CSS styles rather than the `align`
+/// attribute, so it only appears in table-level metadata.
 pub const TableAlign = enum {
     none,
     left,
     center,
     right,
+    justify,
+};
+
+/// One cell/row/table attribute (Textile): a fixed-name/value pair in the
+/// documented render order `style`, `class`, `id`, `lang`. The `style`
+/// value is the complete composed style string (user rule + padding +
+/// text-align + vertical-align, joined with `; `); all values are
+/// arena-owned copies (Textile normalizes them, so they cannot borrow the
+/// source). GFM tables carry no attributes.
+pub const Attribute = struct {
+    name: []const u8,
+    value: []const u8,
 };
 
 /// The payload of a `.table` node: the per-column alignment, one entry
-/// per column, in column order (GFM §4.10). The column count is
-/// `alignment.len`; body rows pad or truncate their cells to it.
+/// per column, in column order (GFM §4.10: from the delimiter row; Textile
+/// tables: from the header row, the source of the column-default
+/// propagation rule). The column count is `alignment.len`; GFM body rows
+/// pad or truncate their cells to it. `attrs` holds Textile table
+/// attributes (`table{...}.`/`table(...).` signatures). `sections` selects
+/// the HTML structure: GFM tables render with `<thead>`/`<tbody>` sections
+/// (row 0 is the header row), while Textile tables render as flat `<tr>`
+/// rows — the Textile references show no thead/tbody even with header
+/// cells (docs/TEXTILE-PARITY.md §7).
 pub const Table = struct {
     alignment: []const TableAlign,
+    attrs: []const Attribute = &.{},
+    sections: bool = false,
+};
+
+/// The payload of a `.table_row` node: the Textile row attributes
+/// (`{style}`, `(class)`, `(#id)`, `[lang]`, padding, `^`/`~` valign — all
+/// composed into the row's `style` where applicable). GFM rows carry no
+/// attributes.
+pub const TableRow = struct {
+    attrs: []const Attribute = &.{},
 };
 
 /// The payload of a `.table_cell` node: `header` selects `<th>` vs
-/// `<td>`, and `alignment` selects the optional `align` attribute. Both
+/// `<td>`, `alignment` selects the optional `align` attribute (GFM),
+/// `colspan`/`rowspan` (Textile `\n`/`/n` modifiers, 1 when absent), and
+/// `attrs` holds the Textile cell attributes (`{style}`, `(class)`,
+/// `(#id)`, `[lang]`, padding, and the `<`/`>`/`=`/`<>`/`^`/`~` alignment
+/// modifiers — all resolved at parse time into the cell's `style`). All
 /// are resolved at parse time from the row's position and the table's
 /// column alignment, so rendering needs no cross-node lookup.
 pub const TableCell = struct {
     header: bool,
     alignment: TableAlign,
+    colspan: u8 = 1,
+    rowspan: u8 = 1,
+    attrs: []const Attribute = &.{},
 };
 
 /// The payload of a `.image` node: the resolved src, the flattened

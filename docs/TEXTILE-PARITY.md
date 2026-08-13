@@ -37,6 +37,12 @@ consulted.
 | `*` bullet lists | `.list` (bullet) → `.list_item` → `.paragraph` | `<ul><li>` | implemented (T4) |
 | `#` ordered lists | `.list` (ordered) → `.list_item` → `.paragraph` | `<ol><li>` | implemented (T4) |
 | marker-depth nesting (`**`, `##`) | nested `.list` inside `.list_item` | nested `<ul>`/`<ol>` | implemented (T4) |
+| `|a|b|` rows | `.table` → `.table_row` → `.table_cell` | flat `<table><tr><td>` | implemented (T8) |
+| `|_. header|` cells / `_`-marked rows | header cells (`<th>`) | `<th>` | implemented (T8) |
+| cell modifiers (`<`, `>`, `=`, `<>`, `^`, `~`, `{style}`, `(class#id)`, `[lang]`, padding) | cell `attrs` (style/class/id/lang) | `<td style="…">` | implemented (T8) |
+| `\2` colspan / `/2` rowspan | cell `colspan`/`rowspan` | `colspan="2"`/`rowspan="2"` | implemented (T8) |
+| `table<mods>.` signature | table `attrs` | `<table style="…" class="…">` | implemented (T8) |
+| row modifiers (incl. `_` header row) | row `attrs` / header flags | `<tr style="…">`, all-`<th>` row | implemented (T8) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -64,10 +70,13 @@ planned/deferred. The notable ones, so the record is honest:
   CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
   bodies literal (fixture `image-literal`).
-- **`bq..` extended blocks and citations**, **`pre.`/`bc.`**, **tables**,
+- **`bq..` extended blocks and citations**, **`pre.`/`bc.`**,
   **footnotes**, **block/line attributes**, **`==` escaping**, and the
   **character-replacement macros** (curly quotes, em/en dashes, ellipsis,
   `(c)`/`(r)`/`(tm)`). All planned/deferred in the feature matrix.
+
+Tables were the last large feature gap; they are now implemented (T8) —
+see §6 for the pinned behaviors.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -165,6 +174,10 @@ Failing link/image lookaheads only ever scan up to the next `"`/`!` (or a
 URL's whitespace), and those segments are disjoint, so the scan is linear
 even for hostile quote/bang runs.
 
+Table parsing is likewise linear: each row is scanned once into cells and
+a single close-time pass resolves the column defaults, so a 20,000-row
+storm test in `src/textile.zig` runs as an ordinary unit test.
+
 ## 5. Acceptance contract
 
 The fixture wall added by this audit:
@@ -185,4 +198,84 @@ The fixture wall added by this audit:
   termination by blank line, plain text, and signatures
   (`list-basic`, `list-nested`, `list-mixed`);
 - cross-family composition and `@code@` opacity (`inline-composition`);
+- tables: the Hobix examples byte-for-byte (basic, header cells, the cell-
+  attribute rows, colspan, rowspan, cell style, signature on its own line,
+  row attributes), the Textile 2 complex example, the header-alignment
+  propagation rule, inline content in cells, literal fallbacks, and block
+  closing (`table-basic` … `table-close`);
 - shared-model convergence with the Markdown frontend (see §1).
+
+## 6. Tables (T8): pinned behaviors
+
+Both references document the syntax; only Hobix shows rendered output, so
+Hobix's HTML is the byte-level target where it exists, and Textile 2's
+prose fills the gaps. Every choice below is a *choice*, recorded here and
+in the feature matrix.
+
+**Block shape.** A table is its own block: consecutive row lines compose
+one table until a blank line or any other block-level line (a signature, a
+heading, a list marker, or plain paragraph text closes it). Two tables
+need a blank line between them. An optional `table<mods>.` signature opens
+the table — alone on its own line (Hobix) or followed by a space and the
+first row (Textile 2's `table(fig). {color:red}_|Top|Row|`). A signature
+that never receives a row produces no table at all (tables must be in
+their own block). A row must start with `|` (after any row modifiers) and
+end with `|`; every `|` splits — Textile documents no pipe escape — so
+`|a|b` (no closing pipe) is a paragraph. Rows need not be aligned: each
+row emits exactly its cells (the rowspan example's `| b |` is a one-cell
+row). Row-shaped lines can open a table even without a signature
+(consecutive `|…|` lines are a table), and a modifier-prefixed row is
+accepted as the first line too — the references only ever show that shape
+inside a table, but it is unambiguous.
+
+**Modifiers and the `. ` contract.** Cell modifiers (`_`, `<`, `>`, `=`,
+`<>`, `^`, `~`, `\2`, `/2`, `{style}`, `(class#id)`, `[lang]`, `(`/`)`
+padding) must be terminated by a period followed by a space (Textile 2:
+"a period followed with a space must be placed after any modifiers"). A
+terminator without the space — `|_.|`, `|_.< a |` — is not a modifier run:
+the whole cell stays verbatim. Row modifiers end at the first `|` (Textile
+2's `{color:red}_|Top|Row|`) or after `. ` (Hobix's `{background:#ddd}.
+|This|…`). A malformed token anywhere in the run (an unclosed `{`, a
+non-modifier character) makes the whole line literal.
+
+**Rendering.** Cells render as flat `<tr>` rows with no `<thead>`/`<tbody>`
+— both references show flat rows even with header cells (the model's
+`sections` flag is false for Textile, true for GFM; docs/DOCUMENT-MODEL.md).
+`_` marks a header cell (row-level `_` marks the whole row), rendered
+`<th>` (Hobix). Cell content is verbatim, including leading/trailing
+spaces (`| name |` → `<td> name </td>`), and is inline-parsed (emphasis,
+links, images, `@code@` all work inside cells). Attributes emit in the
+fixed render order style/class/id/lang; the composed style joins its parts
+with `; ` and a trailing `;` in the pinned order user `{style}`,
+padding-left, padding-right, text-align, vertical-align (`h2()>.` →
+`style="padding-left:1em; padding-right:1em; text-align:right;"`).
+Alignment renders as CSS (Hobix's `style="text-align:left;"`), never the
+GFM `align` attribute.
+
+**Header-alignment propagation.** Textile 2: "When a cell is identified
+as a header cell and an alignment is specified, that becomes the default
+alignment for cells below it." Walking the table top-down, a header cell
+with an explicit alignment updates its column's default; every cell below
+inherits the current default unless it carries its own alignment (the
+"override" the references describe). Only horizontal alignment propagates
+(`^`/`~` vertical stays per-cell). The resolved defaults are recorded in
+`table.alignment`; each cell's resolved alignment is composed into its
+`style` at parse time. The first explicit-alignment header cell in a
+column wins over later ones (a later header row restarts its column's
+default for the cells below it).
+
+**Table-signature alignment.** Textile 2 describes table-level `<`/`>`/`=`
+as alignment of the table itself (`<`/`>` float, `=` sets left/right
+margins to auto) with no literal HTML in either reference; Oliver pins
+`float:left;`, `float:right;`, and `margin-left:auto;margin-right:auto;`
+respectively. `<>` is cells-only (Textile 2) and rejected on the
+signature.
+
+**Literal fallbacks (all pinned by `table-literal`).** No closing pipe;
+modifiers without the `. ` terminator; `table.` followed by non-row text
+(`table. of contents` stays a paragraph — the rest after the period must
+parse as a row); a modifier run without a `. ` or `|` terminator; an
+unclosed `{`/`(`/`[` inside a cell (the line is still a row, the cell
+verbatim). `||` is a degenerate one-cell row and stays a table.
+
+
