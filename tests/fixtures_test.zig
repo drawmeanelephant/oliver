@@ -2003,6 +2003,22 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/line-attr-literal.textile"),
         .expected = @embedFile("fixtures/textile/line-attr-literal.html"),
     },
+    // The image-modifier battery: all six alignment forms (`<` `>` `=` `-`
+    // `^` `~`) fold into the style, and the Textile 2 sizing forms render
+    // width/height (docs/TEXTILE-PARITY.md §16).
+    .{
+        .name = "image-mods-basic",
+        .input = @embedFile("fixtures/textile/image-mods-basic.textile"),
+        .expected = @embedFile("fixtures/textile/image-mods-basic.html"),
+    },
+    // Style/class/id modifiers and padding compose through the
+    // block-attribute machinery in the pinned order, and an aligned image
+    // still links (`!<x!:href`).
+    .{
+        .name = "image-mods-attrs",
+        .input = @embedFile("fixtures/textile/image-mods-attrs.textile"),
+        .expected = @embedFile("fixtures/textile/image-mods-attrs.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {

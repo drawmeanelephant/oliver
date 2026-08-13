@@ -1,4 +1,8 @@
-!>obake.gif!
 !a b.png!
+!x 10x20 30x40!
+!x 10w!
+!x 10x!
+!{bad x!
+!(x!
 !img.png
 !img.png!word
