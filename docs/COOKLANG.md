@@ -313,12 +313,13 @@ Vocabulary (as implemented; the richer generic policy):
 - **Regression wall**: the CommonMark gate stays 652/652 with 0
   mismatches; the Textile suite stays green; `zig fmt --check` clean.## 9. Explicitly deferred (documented, not built)
 
-`.menu` profile support beyond "it already parses"; and all of
-conventions.md's application features (shopping lists, pantry, aisles,
-image discovery, search, meal scheduling, publication). These are
-consumer/ecosystem responsibilities, per §1. (The canonical serializer
-— §10 — the pure scaling operation — §11 — and the richer generic HTML
-renderer — §7 — are the first three stretch goals, now implemented.)
+All of conventions.md's application features: shopping lists, pantry,
+aisles, image discovery, search, meal scheduling, publication, and
+filesystem recipe-reference resolution. These are consumer/ecosystem
+responsibilities, per §1. (The canonical serializer — §10 — the pure
+scaling operation — §11 — the richer generic HTML renderer — §7 — and
+the `.menu` convenience view — §12 — were the four stretch goals, now
+implemented.)
 
 ## 10. Canonical serializer (Oliver-owned, not byte-identical round-trip)
 
@@ -431,3 +432,46 @@ numeric-view recomputation, empty input), and `scale-basic` /
 `scale-servings` fixture pairs pin the canonical scaled output
 byte-for-byte. The scaled output is valid `.cook` by construction
 (the serializer is the emission path) and re-parses consistently.
+
+## 12. Menu profile (.menu view)
+
+A `.menu` file is, per the conventions' "Menu Files" section, a
+**valid Cooklang file** that uses sections for days (or meals) and
+recipe references to compose a plan. Oliver therefore has no second
+parser: `.menu` content runs through the ordinary Cooklang frontend,
+and `src/cooklang_menu.zig` is the explicit convenience layer exposing
+the menu *structure* semantically:
+
+    Menu { days: []Day }
+    Day  { name, date: ?Date, references: []Reference }
+    Reference { path, quantity, units }
+
+`oliver.cooklang_menu.menuView(allocator, &recipe) -> Menu` builds the
+view; `writeMenu` renders a deterministic plain-text dump (one line
+per day: `Day 1 (2026-03-07): ./breakfast/shakshuka{4%servings}`),
+shared by the `oliver menu --from cooklang` CLI and the fixtures.
+
+Rules (pinned by tests):
+
+- Every **top-level section is a day**, in order. An ISO date in the
+  title is recognized only as a trailing `(YYYY-MM-DD)` group with a
+  valid month (1–12) and day (1–31) — `Day 1 (2026-03-07)` splits into
+  name "Day 1" + date; any other shape leaves the whole title as the
+  name, conservatively.
+- A day's **recipe references** are collected in step order, each with
+  its path and its scaling directive preserved as source text (`{2}`,
+  `{}`, `{4%servings}`). References are never deduplicated (each
+  occurrence is a directive) and never resolved — filesystem
+  resolution remains a consumer concern.
+- Non-section top-level blocks are not part of the menu view (a
+  well-formed `.menu` file has none); they stay visible in the Recipe.
+- Ownership: the `Menu` owns its day/reference arrays (fresh arena);
+  the string payloads borrow the Recipe, which must outlive the view.
+- This is a **view**, not a meal-planning application: no shopping
+  logic, no date scheduling, no filesystem access. Boris owns those.
+
+Verification: 6 unit tests (day/date extraction, directives,
+conservative date parsing, top-level ignores, empty/reference-less
+inputs, the conventions example byte-for-byte) and the `menu-basic`
+fixture pair (the conventions' own Monday–Wednesday + dated-days
+example) pin the view and its text dump.

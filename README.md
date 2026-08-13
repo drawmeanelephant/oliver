@@ -177,7 +177,7 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (244 tests)
+zig build test    # run all tests (251 tests)
 zig build         # build the static library and CLI into zig-out/
 zig build cooklang-conformance   # Cooklang canonical corpus (vendored)
 ```
@@ -218,6 +218,12 @@ var scaled = try oliver.cooklang_scale.scaleRecipe(
     .{ .servings = 4 },
 );
 defer scaled.deinit();
+
+// `.menu` files are valid Cooklang; this is the semantic day/meal view
+// over the same parse (docs/COOKLANG.md §12).
+var menu = try oliver.cooklang_menu.menuView(allocator, &cooked.recipe);
+defer menu.deinit();
+// menu.days[i].name / .date / .references — paths stay unresolved.
 ```
 
 The caller supplies the allocator; the document (or recipe) owns an arena and
@@ -234,6 +240,7 @@ oliver render --from cooklang  < recipe.cook
 oliver serialize --from cooklang < recipe.cook   # canonical .cook
 oliver scale --from cooklang --factor 2 < recipe.cook   # scaled .cook
 oliver scale --from cooklang --servings 4 < recipe.cook  # via servings
+oliver menu --from cooklang < plan.menu                 # day/meal text dump
 ```
 
 A thin stdin/stdout adapter — all semantics live in the library.

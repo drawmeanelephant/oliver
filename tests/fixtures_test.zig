@@ -2257,6 +2257,39 @@ fn checkCooklangScale(name: []const u8, input: []const u8, by: oliver.cooklang_s
     }
 }
 
+// Menu-view fixture pair (docs/COOKLANG.md §12): a `.menu` file whose
+// day/meal text dump must equal the expected `.out.txt` bytes exactly.
+const cooklang_menu_fixtures = [_]CooklangFixture{
+    .{
+        .name = "menu-basic",
+        .input = @embedFile("fixtures/cooklang/menu-basic.cook"),
+        .expected = @embedFile("fixtures/cooklang/menu-basic.out.txt"),
+    },
+};
+
+fn menuCooklang(input: []const u8) !std.ArrayList(u8) {
+    var result = try oliver.cooklang.parse(std.testing.allocator, input, .{});
+    defer result.deinit();
+    var menu = try oliver.cooklang_menu.menuView(std.testing.allocator, &result.recipe);
+    defer menu.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.cooklang_menu.writeMenu(&aw.writer, &menu);
+    return aw.toArrayList();
+}
+
+fn checkCooklangMenu(name: []const u8, input: []const u8, expected: []const u8) !void {
+    var out = try menuCooklang(input);
+    defer out.deinit(std.testing.allocator);
+    if (!std.mem.eql(u8, expected, out.items)) {
+        std.debug.print(
+            "cooklang menu fixture [{s}] mismatch\n--- expected ({d} bytes) ---\n{s}\n--- actual ({d} bytes) ---\n{s}\n",
+            .{ name, expected.len, expected, out.items.len, out.items },
+        );
+        return error.FixtureMismatch;
+    }
+}
+
 fn serializeCooklang(input: []const u8) !std.ArrayList(u8) {
     var result = try oliver.cooklang.parse(std.testing.allocator, input, .{});
     defer result.deinit();
@@ -2361,6 +2394,20 @@ test "cooklang scale fixtures" {
         var once = try scaleCooklang(f.input, f.by);
         defer once.deinit(std.testing.allocator);
         var twice = try serializeCooklang(once.items);
+        defer twice.deinit(std.testing.allocator);
+        try std.testing.expectEqualSlices(u8, once.items, twice.items);
+    }
+}
+
+test "cooklang menu fixtures" {
+    for (cooklang_menu_fixtures) |f| {
+        try checkCooklangMenu(f.name, f.input, f.expected);
+    }
+    // Menu text is stable: dumping the view twice is identical.
+    for (cooklang_menu_fixtures) |f| {
+        var once = try menuCooklang(f.input);
+        defer once.deinit(std.testing.allocator);
+        var twice = try menuCooklang(f.input);
         defer twice.deinit(std.testing.allocator);
         try std.testing.expectEqualSlices(u8, once.items, twice.items);
     }

@@ -38,6 +38,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Cooklang worker | CK2 canonical serializer | `src/cooklang_serialize.zig`: semantic Recipe → valid `.cook`, deterministic and idempotent (canonical, not byte-identical round-tripping — docs/COOKLANG.md §10); front-matter passthrough; empty-front-matter parser fix (`---\n---` no longer panics); `oliver serialize --from cooklang` CLI; the conformance harness asserts the fixed point over every corpus source; serialize fixture pairs; Cooklang unit tests wired into `zig build test` (they had been skipped by lazy analysis); Cooklang gate added to CI; Markdown/Textile untouched | after CK1 (first stretch goal) | merged (PR #45) |
 | Cooklang worker | CK3 pure scaling | `src/cooklang_scale.zig`: `scaleRecipe` derives a scaled Recipe — exact-rational linear scaling (no f64), `.servings` mode reading frontmatter `servings`/`serves`/`yield` (leading number, default 1), `=`-fixed quantities locked, timers/cookware/references never scaled, non-numeric unchanged, frontmatter untouched; `oliver scale --from cooklang (--factor | --servings)` CLI; 10 unit tests + 2 fixture pairs; per the conventions' "Scaling and Servings" (clean-room session 22); Markdown/Textile untouched | after CK2 (second stretch goal) | merged (PR #46) |
 | Cooklang worker | CK4 richer HTML policy | `src/cooklang_html.zig` grows from the bare article/steps vocabulary into the richer generic policy: an **ingredients index** (one `<li>` per distinct ingredient — exact case-sensitive name, first occurrence's quantity/units/preparation, first-appearance order, recipe-ref items, cookware/timers excluded, omitted when empty), timers as `<time class="timer" datetime="PT25M">` (ISO-8601 duration for whole-number quantities with recognized day/hour/minute/second units, case-insensitive; named timers render `name (3 minutes)`), unnamed sections omit the empty `<h2>`, preparations surfaced in the index; 2 unit tests (ISO durations, richer-policy structure); the 4 HTML fixture pairs regenerated under the new vocabulary; Markdown/Textile untouched | after CK3 (third stretch goal) | merged (PR #47) |
+| Cooklang worker | CK5 `.menu` view | `src/cooklang_menu.zig` — the explicit convenience layer: `.menu` files are valid Cooklang (no second parser), and `menuView` exposes the day/meal structure semantically (`Menu{ days }`, `Day{ name, date, references }`, `Reference{ path, quantity, units }`); trailing `(YYYY-MM-DD)` title dates (valid month/day), reference directives preserved as source text and never deduplicated/resolved, non-section top-level blocks ignored; `writeMenu` text dump shared by `oliver menu --from cooklang` and the `menu-basic` fixture (the conventions' own example); 6 unit tests; no meal-planning logic (shopping/scheduling/filesystem stay consumer-owned) | after CK4 (fourth stretch goal) | merged (PR #48) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1083,6 +1084,42 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **State:** merged on main (PR #47). 244/244 tests green (224 lib + 13
   fixtures + 7 harness); Cooklang conformance 60/60; CommonMark gate
   still 652/652 with 0 mismatches; Textile suite untouched.
+
+## CK5 — `.menu` convenience view
+
+- **Objective:** fourth stretch goal — an explicit `.menu` profile
+  convenience API that parses menu files through the Cooklang frontend
+  and exposes the day/meal structure semantically.
+- **Normative sources:** the official conventions' "Menu Files" section
+  and its example menu (https://cooklang.org/docs/conventions/,
+  fetched 2026-08-13) plus the already-pinned section and
+  recipe-reference semantics from the spec and corpus. Provenance in
+  docs/CLEANROOM.md session 23.
+- **Dependencies:** `src/cooklang.zig` model only — `.menu` files are
+  valid Cooklang, so there is no second parser; the view is pure
+  interpretation (no filesystem/network/global state; paths stay
+  unresolved).
+- **Seams:** `src/cooklang_menu.zig` (new: `menuView`, `writeMenu`,
+  conservative `(YYYY-MM-DD)` title-date parsing, per-day reference
+  collection), `src/main.zig` (`menu --from cooklang`),
+  `src/oliver.zig` (export + test wiring), the `menu-basic` fixture
+  pair, `tests/fixtures_test.zig`.
+- **Acceptance:** every top-level section becomes a day in order with
+  an optional ISO date and its recipe references (path + quantity +
+  units as source text); invalid/trailing dates stay names; refs never
+  deduplicated or resolved; non-section top-level blocks ignored; the
+  text dump matches the conventions example byte-for-byte.
+- **Tests:** 6 unit tests (days/dates, directives, conservative date
+  parsing, top-level ignores, empty/reference-less inputs, the
+  conventions example) + the `menu-basic` fixture pair with
+  deterministic-repeat checks.
+- **Parallelism:** yes; Markdown/Textile untouched.
+- **Integration:** after CK4; the 652/652 gate is re-verified.
+- **State:** merged on main (PR #48). 251/251 tests green (230 lib +
+  14 fixtures + 7 harness); Cooklang conformance 60/60; CommonMark
+  gate still 652/652 with 0 mismatches; Textile suite untouched. All
+  four stretch goals are now banked; docs/COOKLANG.md §9's deferral
+  list holds only conventions application features.
 
 ## C1 — Classified conformance expectations
 
