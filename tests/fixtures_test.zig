@@ -1955,6 +1955,37 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/char-replace-literal.textile"),
         .expected = @embedFile("fixtures/textile/char-replace-literal.html"),
     },
+    // Inline `==...==` escaping (Textile 2 "Escaping"): phrase delimiters
+    // and the character replacements inside the region stay literal, while
+    // formatting outside still applies — the current docs' quote example
+    // renders its straight quotes byte-for-byte (docs/TEXTILE-PARITY.md §14).
+    .{
+        .name = "escape-inline",
+        .input = @embedFile("fixtures/textile/escape-inline.textile"),
+        .expected = @embedFile("fixtures/textile/escape-inline.html"),
+    },
+    // Textile 2's block-escape example byte-for-byte: the region between
+    // the lone `==` lines is not formatted at all — no paragraph wrapper,
+    // no em-dash replacement.
+    .{
+        .name = "escape-block",
+        .input = @embedFile("fixtures/textile/escape-block.textile"),
+        .expected = @embedFile("fixtures/textile/escape-block.html"),
+    },
+    // The block escape passes raw HTML through untouched, blank lines
+    // inside included, then normal processing resumes.
+    .{
+        .name = "escape-block-html",
+        .input = @embedFile("fixtures/textile/escape-block-html.textile"),
+        .expected = @embedFile("fixtures/textile/escape-block-html.html"),
+    },
+    // Malformed shapes stay literal: an opener not at a boundary, a closer
+    // not at a boundary, a `===`+ run, and an unmatched `==`.
+    .{
+        .name = "escape-literal",
+        .input = @embedFile("fixtures/textile/escape-literal.textile"),
+        .expected = @embedFile("fixtures/textile/escape-literal.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {
