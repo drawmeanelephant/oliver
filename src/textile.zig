@@ -63,6 +63,16 @@
 //!   nothing; the next block carries `style="clear:both;"` (or
 //!   `left`/`right`), merged ahead of any style the block already has
 //!   (docs/TEXTILE-PARITY.md §22).
+//! - `notextile.`/`notextile..` (current Textile docs "No formatting
+//!   (override Textile)"; Textile 2 uses the `==` escape instead) opens a
+//!   raw block whose content passes through as one `.html_block` leaf,
+//!   unformatted and unescaped — the signature form of the `==` region.
+//!   The single period owns every following non-blank line (ending at a
+//!   blank line, like `bc.`); the double period keeps blank lines as
+//!   content and runs until the next block signature (like `bc..`). A
+//!   bare marker (no same-line content) opens a block whose content is the
+//!   following lines; an empty block renders nothing
+//!   (docs/TEXTILE-PARITY.md §23).
 //! - Paragraph content is preserved verbatim (only the marker's separator
 //!   whitespace is consumed).
 //! - `h0.` and `h7.`+ are not headings; they remain paragraph text.
@@ -159,6 +169,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var escape: ?EscapeState = null;
     var dlist: ?DefListState = null;
     defer if (dlist) |*d| d.lines.deinit(doc.allocator());
+    var raw: ?RawBlockState = null;
     // A pending `clear.` marker: the next block to open carries the CSS
     // clear fragment in its style attribute (Textile 2 "clear"; see
     // `mergeClearStyle`). Reset by `takeClear` at every block-open site.
@@ -183,6 +194,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try closeTable(doc, &table, &defs);
             try closeCode(doc, &code);
             try closeDefList(doc, &dlist, &defs);
+            try closeRawBlock(doc, &raw);
             escape = .{ .start = @intCast(line.end), .end = @intCast(line.end) };
             continue;
         }
@@ -203,6 +215,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 try code.?.lines.append(doc.allocator(), line.contentSpan());
                 continue;
             }
+            // A single-period `notextile.` ends at the first blank line;
+            // an extended `notextile..` keeps the blank line as content.
+            if (raw != null and !raw.?.extended) try closeRawBlock(doc, &raw);
+            if (raw != null and raw.?.extended) {
+                appendRawLine(&raw, line);
+                continue;
+            }
             continue;
         }
         // An open single-period `bc.`/`pre.` block owns every following
@@ -216,6 +235,21 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 // Fall through: the signature line opens its own block.
             } else {
                 try code.?.lines.append(doc.allocator(), line.contentSpan());
+                continue;
+            }
+        }
+        // An open `notextile.` raw block owns every non-blank line: the
+        // single-period form verbatim (signature-shaped lines stay raw
+        // content, like `bc.`), the extended form until a recognized block
+        // signature — which closes it and is processed below. `code` and
+        // `raw` never coexist (each open closes the other), so this branch
+        // sees every line while a raw block is open.
+        if (raw != null) {
+            if (raw.?.extended and try trySignature(doc, line)) {
+                try closeRawBlock(doc, &raw);
+                // Fall through: the signature line opens its own block.
+            } else {
+                appendRawLine(&raw, line);
                 continue;
             }
         }
@@ -263,6 +297,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             closeLists(&lists);
             try closeTable(doc, &table, &defs);
             try closeCode(doc, &code);
+            try closeRawBlock(doc, &raw);
             pending_clear = dir;
             continue;
         }
@@ -297,6 +332,20 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try openCode(doc, &code, sig, takeClear(&pending_clear));
             continue;
         }
+        // `notextile.`/`notextile..` (current Textile docs "No formatting
+        // (override Textile)"): a raw block that passes its content
+        // through as one `.html_block` leaf. The signature closes whatever
+        // block was open (it is in `trySignature`); a pending `clear.`
+        // has no attribute list to land on, so it is dropped here.
+        if (tryNoTextileMarker(line)) |sig| {
+            try closeBlock(doc, &block, &defs);
+            closeLists(&lists);
+            try closeTable(doc, &table, &defs);
+            try closeDefList(doc, &dlist, &defs);
+            _ = takeClear(&pending_clear);
+            openRawBlock(&raw, line, sig);
+            continue;
+        }
         if (try tryTableSignature(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
@@ -309,6 +358,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             closeLists(&lists);
             try closeTable(doc, &table, &defs);
             try closeCode(doc, &code);
+            try closeRawBlock(doc, &raw);
             try openDefList(doc, &dlist, sig, line, &defs, takeClear(&pending_clear));
             continue;
         }
@@ -370,6 +420,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     try closeTable(doc, &table, &defs);
     try closeDefList(doc, &dlist, &defs);
     try closeCode(doc, &code);
+    try closeRawBlock(doc, &raw);
     // An unterminated escape region still renders its content (the region
     // implicitly closes at end of input; docs/TEXTILE-PARITY.md §14).
     try closeEscape(doc, &escape);
@@ -697,6 +748,108 @@ fn closeEscape(doc: *document.Document, escape: *?EscapeState) ParseError!void {
 }
 
 // ---------------------------------------------------------------------------
+// Block-level `notextile.` raw passthrough.
+//
+// `notextile.` (and the extended `notextile..`) at the start of a block
+// skips Textile processing entirely: the content passes through as a raw
+// `.html_block` leaf — no inline formatting, no character replacements,
+// `<em>` stays a real tag — the signature form of the `==` escape. The
+// current Textile Markup Language Documentation documents it ("No
+// formatting (override Textile)": "For blocks of elements add a notextile.
+// or notextile.. at the start of the block"); Textile 2 does not (it uses
+// the `==` mechanism, recorded in CLEANROOM session 20). The single period
+// owns every following non-blank line, ending at the first blank line (the
+// same rule `bc.` uses); the double period keeps blank lines as content
+// and runs until the next block signature (like `bc..`). A bare marker
+// with no same-line content opens a block whose content is the following
+// lines; an empty block renders nothing.
+// ---------------------------------------------------------------------------
+
+/// The parsed result of a `notextile.`/`notextile..` signature line.
+const NoTextileSig = struct {
+    /// Content span after the marker and its separator whitespace (empty
+    /// for a bare marker — the block's content is the following lines).
+    content: source.Span,
+    /// Extended (`notextile..`): blank lines stay content and the block
+    /// runs until the next block signature.
+    extended: bool = false,
+};
+
+/// Recognizes a `notextile.` or `notextile..` block marker (current
+/// Textile docs "No formatting (override Textile)"). The marker must be
+/// the whole word at the line start, followed by one period (or two for
+/// the extended form) and then separator whitespace or end of line — a
+/// bare marker is allowed, since "for blocks of elements" the content
+/// follows on later lines. Any other shape — a word merely starting with
+/// "notextile", a non-space directly after the period, a third period —
+/// is ordinary text. Block modifiers are not documented for the form, so
+/// `notextile{...}.` stays literal (same conservatism as `==`).
+fn tryNoTextileMarker(line: source.Line) ?NoTextileSig {
+    const t = line.text;
+    if (t.len < 10 or !std.mem.eql(u8, t[0..9], "notextile")) return null;
+    if (t[9] != '.') return null;
+    var extended = false;
+    var i: usize = 10;
+    if (i < t.len and t[i] == '.') {
+        extended = true;
+        i += 1;
+    }
+    if (i < t.len and t[i] != ' ' and t[i] != '\t') return null;
+    while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+    return .{
+        .content = .{ .start = @intCast(line.start + i), .end = @intCast(line.content_end) },
+        .extended = extended,
+    };
+}
+
+/// An open `notextile.` raw block: the contiguous source slice from the
+/// first content byte (after the marker's separator, or the first
+/// following line's start for a bare marker) through the last content
+/// line's terminator, published as a raw `.html_block` leaf.
+const RawBlockState = struct {
+    start: u32,
+    end: u32,
+    /// Extended (`notextile..`): blank lines stay content and the block
+    /// runs until the next block signature.
+    extended: bool = false,
+};
+
+/// Opens a raw block with the signature line's content. Same-line content
+/// extends through the line's terminator (the `==` payload convention); a
+/// bare marker keeps `start == end` as the "no content yet" sentinel.
+fn openRawBlock(raw: *?RawBlockState, line: source.Line, sig: NoTextileSig) void {
+    raw.* = .{
+        .start = @intCast(sig.content.start),
+        .end = @intCast(sig.content.end),
+        .extended = sig.extended,
+    };
+    if (sig.content.start < sig.content.end) raw.*.?.end = @intCast(line.end);
+}
+
+/// Extends the open raw block with one content line: a bare marker fixes
+/// the start on this line; the end always runs to the line's end,
+/// terminator included.
+fn appendRawLine(raw: *?RawBlockState, line: source.Line) void {
+    const active = raw.* orelse return;
+    if (active.start == active.end) raw.*.?.start = @intCast(line.start);
+    raw.*.?.end = @intCast(line.end);
+}
+
+/// Publishes the collected raw block as a `.html_block` leaf, byte-for-
+/// byte from the source (the `==` escape payload convention). An empty
+/// block (a bare marker with nothing after it) renders nothing.
+fn closeRawBlock(doc: *document.Document, raw: *?RawBlockState) ParseError!void {
+    const active = raw.* orelse return;
+    raw.* = null;
+    if (active.start >= active.end) return; // empty block renders nothing
+    const span = source.Span{ .start = active.start, .end = active.end };
+    const node = try doc.createNode(.html_block, span, .{
+        .html_block = try doc.allocator().dupe(u8, doc.src.bytes[span.start..span.end]),
+    });
+    try doc.appendChild(doc.root, node);
+}
+
+// ---------------------------------------------------------------------------
 // Extended blocks (`sig..`).
 //
 // Two periods in a signature keep it active across blank lines (Textile 2
@@ -944,9 +1097,10 @@ fn mergeClearStyle(doc: *document.Document, attrs: []const document.Attribute, c
 /// active "until the next signature is found"): a `table<mods>.`
 /// signature, an extended or single-period `bq.`/`bc.`/`pre.` signature,
 /// an `hN.` heading, a `p.` paragraph marker, a `fnN.` footnote
-/// signature, the `|mods|.` line-attribute paragraph form, or the
-/// `clear.` marker. List markers and table rows are not block signatures
-/// and remain content inside an extended block.
+/// signature, the `|mods|.` line-attribute paragraph form, the
+/// `clear.` marker, or a `notextile.`/`notextile..` raw block. List
+/// markers and table rows are not block signatures and remain content
+/// inside an extended block.
 fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryTableSignature(doc, line) != null) return true;
     if (try tryExtendedMarker(doc, line) != null) return true;
@@ -958,6 +1112,7 @@ fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryLineAttr(doc, line) != null) return true;
     if (try tryDefListSignature(doc, line) != null) return true;
     if (tryClearMarker(line) != null) return true;
+    if (tryNoTextileMarker(line) != null) return true;
     return false;
 }
 
@@ -4126,6 +4281,132 @@ test "textile: clear. lookalikes and dangling markers stay literal" {
         "<p>clearb. no</p>\n",
         "<p>clears. no</p>\n",
         "",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(want, out.items);
+    }
+}
+
+test "textile: notextile. passes a raw block through unformatted" {
+    const oliver = @import("oliver.zig");
+
+    // The current docs' example: no inline formatting, no character
+    // replacements, `<em>` stays a real tag, `*Textilised*` stays
+    // literal — emitted as one raw `.html_block` leaf (the `==` escape
+    // payload convention, docs/DOCUMENT-MODEL.md).
+    {
+        var result = try oliver.parse(std.testing.allocator, "notextile. This line <em>will not</em> be *Textilised*.\n", .textile, .{});
+        defer result.deinit();
+        const raw = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.html_block, raw.tag);
+        try std.testing.expectEqualStrings("This line <em>will not</em> be *Textilised*.\n", raw.data.html_block);
+    }
+    // A bare marker opens a block whose content is the following lines;
+    // the contiguous source slice preserves the exact bytes (CRLF kept).
+    {
+        var result = try oliver.parse(std.testing.allocator, "notextile.\r\n<div>\r\n<b>x</b>\r\n</div>\r\n", .textile, .{});
+        defer result.deinit();
+        const raw = result.document.root.children.items[0];
+        try std.testing.expectEqualStrings("<div>\r\n<b>x</b>\r\n</div>\r\n", raw.data.html_block);
+    }
+    // Single-period ends at the first blank line; the extended form keeps
+    // blank lines as content and runs until the next block signature.
+    {
+        var result = try oliver.parse(std.testing.allocator, "notextile. first\nsecond\n\np. after\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("first\nsecond\n<p>after</p>\n", out.items);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "notextile..\n<b>one</b>\n\n<b>two</b>\n\nh2. Title\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<b>one</b>\n\n<b>two</b>\n\n<h2>Title</h2>\n", out.items);
+    }
+    // Interactions: a `==` delimiter interrupts an open raw block (the
+    // escape check runs before every other block rule); a `notextile.`
+    // inside a single-period `bc.` block is code content (the leaf owns
+    // every non-blank line); `notextile.` closes an open extended `bq..`;
+    // and a pending `clear.` has no attribute list to land on, so it is
+    // dropped.
+    {
+        var result = try oliver.parse(std.testing.allocator, "notextile. <b>a</b>\n==\n<b>escaped</b>\n==\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<b>a</b>\n<b>escaped</b>\n", out.items);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "bc. first\nnotextile. <b>x</b>\nstill code\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<pre><code>first\nnotextile. &lt;b&gt;x&lt;/b&gt;\nstill code\n</code></pre>\n", out.items);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "bq.. quote\n\nnotextile. <b>raw</b>\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<blockquote>\n<p>quote</p>\n</blockquote>\n<b>raw</b>\n", out.items);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "clear.\nnotextile. <b>x</b>\n", .textile, .{});
+        defer result.deinit();
+        const raw = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.html_block, raw.tag);
+        try std.testing.expectEqualStrings("<b>x</b>\n", raw.data.html_block);
+    }
+}
+
+test "textile: notextile. lookalikes and empty blocks stay literal" {
+    const oliver = @import("oliver.zig");
+
+    // A word merely starting with "notextile", a missing period, a
+    // non-space directly after the period, or a mid-paragraph occurrence
+    // is ordinary text; a bare marker with nothing after it (blank line
+    // or EOF) renders nothing.
+    const cases = [_][]const u8{
+        "notextiles. not a marker",
+        "notextilex. no period",
+        "notextile with no dot",
+        "notextile.extra",
+        "This is notextile. mid-paragraph.",
+        "notextile.",
+        "notextile.\n\np. after",
+    };
+    const expected = [_][]const u8{
+        "<p>notextiles. not a marker</p>\n",
+        "<p>notextilex. no period</p>\n",
+        "<p>notextile with no dot</p>\n",
+        "<p>notextile.extra</p>\n",
+        "<p>This is notextile. mid-paragraph.</p>\n",
+        "",
+        "<p>after</p>\n",
     };
     for (cases, expected) |input, want| {
         var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
