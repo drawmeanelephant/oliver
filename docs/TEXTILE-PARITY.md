@@ -59,6 +59,9 @@ consulted.
 | inline `==...==` escaping | `.text` (borrowed literal payload, no replacements) | literal text, HTML-escaped | implemented (T16) |
 | block-level `==` escaping (lone `==` lines) | `.html_block` (verbatim payload) | raw passthrough, no `<p>` wrapper | implemented (T16) |
 | `|mods|.` line attributes | `.paragraph.attrs` (the §8 set) | `<p style="…" class="…" id="…" lang="…">` | implemented (T17) |
+| image alignment (`!<x!`/`!>x!`/`!=x!`/`!-x!`/`!^x!`/`!~x!`) | `.image.attrs` (style fragment) | `<img style="float:left;" …>` | implemented (T18) |
+| image `{style}`/`(class#id)`/padding | `.image.attrs` (style/class/id) | `<img style="…" class="…" id="…">` | implemented (T18) |
+| image sizing (`10x20`, `10w 20h`, `20%x40%`, `20%`) | `.image` width/height | `width="10" height="20"` | implemented (T18) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -77,13 +80,9 @@ every paragraph in the documented examples uses at least one of them, and
 the previous slice rendered them literally. All four are now implemented.
 
 Remaining gaps are deliberate and recorded in docs/FEATURE-MATRIX.md as
-planned/deferred. The notable ones, so the record is honest:
-
-- **Image modifiers** — alignment (`!<x!`, `!>x!`, `!-x!`, `!^x!`, `!~x!`),
-  CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
-  Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
-  bodies literal (fixture `image-literal`).
-
+planned/deferred. The image-modifier family — alignment, CSS
+class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) — was
+the last large documented gap and is now implemented (T18); see §16.
 The character-replacement macros — curly quotes, em/en dashes, ellipsis,
 `x` dimension sign, `(c)`/`(r)`/`(tm)`, and the fraction/degree/plus-minus
 paren forms — are now implemented (T15); see §13. Textile 2's `{...}`
@@ -99,8 +98,10 @@ see §8 — `bc.`/`pre.` block code is implemented (T11) — see §9 —
 footnotes (`fnN.`/`[N]`) are implemented (T13) — see §11 —
 block-quote citations (`bq.:URL`) are implemented (T14) — see §12 —
 the character-replacement macros are implemented (T15) — see §13 —
-`==` escaping (inline and block) is implemented (T16) — see §14 — and
-line attributes (`|mods|.`) are implemented (T17) — see §15.
+`==` escaping (inline and block) is implemented (T16) — see §14 —
+line attributes (`|mods|.`) are implemented (T17) — see §15 — and the
+image modifiers (alignment, sizing, style/class/padding) are
+implemented (T18) — see §16.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -707,5 +708,61 @@ period not followed by space (`|x|.y`), an empty modifier run (`||. x`),
 an empty content (`|x|. `), a malformed modifier (`|{bad`), and any
 row/cell-only token (`|^|. x`) all keep the whole line ordinary text.
 
+## 16. Image modifiers (T18): pinned behaviors
 
+The image modifier family is the last large documented Textile gap.
+Textile 2 "Images" documents the alignment operators (`!<x!`, `!>x!`,
+`!=x!`, `!-x!`, `!^x!`, `!~x!`), the size forms (`10x20` "10 pixels wide
+and 20 pixels high", `10w 20h` "the words form", `20%x40%` percentages,
+and a single `20%` for proportional sizing), and the block-attribute
+`{style}`/`(class)` set; the current Textile docs' "Images" page adds
+`=` centering and the `(class)` form. Oliver implements the full family
+— Textile 2 plus the current docs — reusing the §8 modifier machinery;
+every choice below is pinned by the `image-mods-*` fixtures and the
+unit tests in `src/textile.zig`.
+
+**Placement.** The modifier run sits between the opening `!` and the
+src (`!>obake.gif!` is the Hobix-shaped form; `!{color:red}>(pic).png!`
+and `!()>x.png!` are the current-docs shape). The src must be non-empty
+and whitespace-free; after the src comes either the parenthesized alt
+(the pre-existing `!url(alt)!` / `!url (alt)!` form, which doubles as
+the title) or a size token — **size and alt never combine**, and any
+other post-src token makes the whole construct literal.
+
+**Alignment** composes a CSS fragment into the image's style, in the
+pinned mapping: `<` → `float:left`, `>` → `float:right`, `=` →
+`display:block;margin-left:auto;margin-right:auto` (the current docs'
+centered form), `-` → `vertical-align:middle`, `^` →
+`vertical-align:top`, `~` → `vertical-align:bottom`. Repeated alignment
+modifiers: the **last wins**, the same rule the block-modifier scanner
+uses (`!< >x!` is right-aligned).
+
+**Style/class/id/padding** reuse the §8 token grammar: `{style}`, `(class)`,
+`(#id)`, `(class#id)`, and `(`/`)` padding (a `(` directly before
+`(`/`)` is one em of left padding, `)` one em of right). The composed
+style follows the pinned order — user `{style}`, padding-left,
+padding-right, alignment fragment — and the style/class/id land on the
+image's `attrs` in the fixed render order. The modifiers combine with
+the link attachment: `!>pic.png!:href` is a floated linked image.
+
+**Sizing.** The size token parses four documented forms: `10x20` (digits
+both sides), `20%x40%` (each side digits or digits-percent), `10w 20h`
+(digits only, whitespace-separated, `w`/`h` suffixes consumed), and a
+single proportional `20%` (sets both width and height). The digits are
+emitted as the `width`/`height` attributes in the shared renderer's
+fixed order (`src`, `alt`, `title`, `width`, `height`, attrs).
+
+**Model and renderer.** The shared `.image` payload gained optional
+`width`/`height` strings and an `attrs` list, all defaulted — Markdown
+images never set them, so the Markdown frontend and the shared renderer
+are byte-identical (gate 652/652 untouched), and the Textile attribute
+list renders through the same `writeAttrs` path as blocks and cells.
+
+**Literal fallbacks (pinned by `image-literal`).** A malformed modifier
+(an unclosed `{` or `(`, a `(`-spec with no `)`), a junk post-src token,
+an empty src, an unclosed `!`, and every malformed size shape — a bare
+`N`, `x20`, `10x`, a `10w20h` run without the separating space, extra
+tokens — keep the whole construct ordinary text. The pre-existing pin
+that all modifier shapes stay literal was updated: `!>obake.gif!` now
+renders Hobix's own aligned form.
 

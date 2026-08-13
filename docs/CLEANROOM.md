@@ -321,4 +321,29 @@ Textile parser implementation source was consulted; the pins in
 docs/TEXTILE-PARITY.md §15 are Oliver's conservative deterministic
 rules on the user-defined grammar.
 
+Session 13 (T18 image modifiers) finding:
+
+- Movable Type "Textile 2 Syntax" "Images"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html>
+  — "You can also align images in your text, much like HTML: `!<x!`,
+  `!>x!`, `!=x!`, `!-x!`, `!^x!`, `!~x!`"; sizing — "`10x20` (10
+  pixels wide and 20 pixels high), `10w 20h` (the words form), `20%x40%`
+  (the percentage form)" and "a single `20%` ... proportional sizing"
+  — and "you can also add the standard block-attribute syntax"
+  (`{style}`/`(class)`).
+- Textile Markup Language Documentation "Images"
+  <https://textile-lang.com/doc/images> — the `=` centered form
+  ("horizontal alignment") and the `(class)` / `{style}` forms.
+
+Finding: the two references agree on the image-modifier family (both
+carry alignment plus the block-attribute set; Textile 2 adds the size
+forms). Oliver implements Textile 2 plus the current docs — the
+`vertical-align` mapping for `-`/`^`/`~` follows Textile 2's prose
+("like HTML"), the `=` mapping (block + auto side margins) follows
+both references, and the size grammar is Textile 2's four documented
+forms. No Textile parser implementation source was consulted; the
+alignment-fragment and literal-fallback pins in docs/TEXTILE-PARITY.md
+§16 are Oliver's conservative deterministic rules on the user-facing
+prose above.
+
 No Markdown or Textile parser implementation source was consulted.
