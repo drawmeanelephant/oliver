@@ -66,6 +66,11 @@
 //!   `p<>.` alignment — the modifiers sit between the marker and its
 //!   period, for `p`, `bq`, and `hN` alike (Hobix §4;
 //!   docs/TEXTILE-PARITY.md §8).
+//! - `bc.` block code and `pre.` preformatted text open a leaf that owns
+//!   every following non-blank line verbatim until a blank line (Textile 2:
+//!   "a block ends with the first blank line"). `bc` escapes `<`/`>` and
+//!   renders `<pre><code>`; `pre` is verbatim `<pre>` (the extended
+//!   `bc..`/`pre..` forms are deferred).
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -94,11 +99,20 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var lists = std.ArrayList(ListEntry).empty;
     defer lists.deinit(doc.allocator());
     var table: ?TableState = null;
+    var code: ?CodeBlockState = null;
     while (lines.next()) |line| {
         if (isBlank(line.text)) {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
             try closeTable(doc, &table, &defs);
+            try closeCode(doc, &code);
+            continue;
+        }
+        // An open single-period `bc.`/`pre.` block owns every following
+        // non-blank line, signature-shaped or not (Textile 2: "a block ends
+        // with the first blank line encountered"; docs/TEXTILE-PARITY.md §8).
+        if (code != null) {
+            try code.?.lines.append(doc.allocator(), line.contentSpan());
             continue;
         }
         // An open table owns every row-shaped line (`|...|` or a
@@ -112,6 +126,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try closeTable(doc, &table, &defs);
         }
         if (tryParseDef(line) != null) continue; // def lines disappear
+        if (try tryCodeMarker(doc, line)) |sig| {
+            try closeBlock(doc, &block, &defs);
+            closeLists(&lists);
+            try closeTable(doc, &table, &defs);
+            try openCode(doc, &code, sig);
+            continue;
+        }
         if (try tryTableSignature(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
@@ -159,6 +180,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     try closeBlock(doc, &block, &defs);
     closeLists(&lists);
     try closeTable(doc, &table, &defs);
+    try closeCode(doc, &code);
 }
 
 const BlockKind = enum { paragraph, block_quote };
@@ -236,6 +258,118 @@ fn closeBlock(doc: *document.Document, block: *?ActiveBlock, defs: *const AliasT
         }
         try parseInlines(doc, paragraph, ref.content, defs);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Block code (`bc.`) and preformatted text (`pre.`).
+//
+// A single-period `bc.`/`pre.` signature opens a leaf that owns every
+// following non-blank line, verbatim — signature-shaped lines stay code
+// content (Textile 2: "a block ends with the first blank line
+// encountered"). `bc` is "block code": a preformatted section like `pre`
+// that also gets a `<code>` tag, with `<` and `>` translated to HTML
+// entities automatically (Textile 2). `pre` is "pre-formatted text"
+// (current Textile docs), rendered verbatim inside `<pre>`. Hobix
+// documents neither signature (raw HTML only), so both follow the Textile
+// 2 + current-docs majority. The extended `bc..`/`pre..` double-period
+// forms (blank lines inside the block, terminated by the next signature)
+// remain deferred.
+// ---------------------------------------------------------------------------
+
+/// The parsed result of a `bc.`/`pre.` signature line.
+const CodeSignature = struct {
+    /// `pre.` (verbatim `<pre>`) when true; `bc.` (escaped `<pre><code>`)
+    /// when false.
+    preformatted: bool,
+    /// Block-attribute modifiers (`bc{color:red}.`), on the `<pre>`.
+    attrs: []const document.Attribute,
+    /// Content span after the marker and its separator whitespace.
+    content: source.Span,
+};
+
+/// An open single-period code block: content lines are collected verbatim
+/// until a blank line (or EOF), then published as a `.code_block` leaf.
+const CodeBlockState = struct {
+    preformatted: bool,
+    attrs: []const document.Attribute,
+    /// The node span: first content line's start through the last line's
+    /// content end.
+    span: source.Span,
+    lines: std.ArrayList(source.Span) = .empty,
+};
+
+/// Recognizes a `bc.` or `pre.` code-block signature with optional block
+/// modifiers between the marker and the period. The marker must be followed
+/// by a space/tab, and the content must be non-empty (the same conservative
+/// rule `bq.` uses: an empty signature's behavior is unspecified, so the
+/// line stays literal).
+fn tryCodeMarker(doc: *document.Document, line: source.Line) ParseError!?CodeSignature {
+    const t = line.text;
+    const preformatted = blk: {
+        if (t.len >= 3 and t[0] == 'p' and t[1] == 'r' and t[2] == 'e') break :blk true;
+        if (t.len >= 2 and t[0] == 'b' and t[1] == 'c') break :blk false;
+        return null;
+    };
+    const mod_start: usize = if (preformatted) 3 else 2;
+    if (t.len <= mod_start) return null;
+    if (t[mod_start] == '.') {
+        if (t.len == mod_start + 1) return null; // marker must be followed by a space/tab
+        if (t[mod_start + 1] != ' ' and t[mod_start + 1] != '\t') return null;
+        var i = mod_start + 2;
+        while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+        if (i == t.len) return null; // empty content stays literal
+        return .{
+            .preformatted = preformatted,
+            .attrs = &.{},
+            .content = .{
+                .start = @intCast(line.start + i),
+                .end = @intCast(line.content_end),
+            },
+        };
+    }
+    const sig = (try parseBlockSignature(doc, line, mod_start)) orelse return null;
+    if (sig.content.start >= sig.content.end) return null;
+    return .{
+        .preformatted = preformatted,
+        .attrs = sig.attrs,
+        .content = sig.content,
+    };
+}
+
+/// Opens a code block with the signature line as its first content line.
+fn openCode(doc: *document.Document, code: *?CodeBlockState, sig: CodeSignature) ParseError!void {
+    code.* = .{
+        .preformatted = sig.preformatted,
+        .attrs = sig.attrs,
+        .span = .{ .start = sig.content.start, .end = sig.content.end },
+    };
+    try code.*.?.lines.append(doc.allocator(), sig.content);
+}
+
+/// Publishes the collected lines as a `.code_block` leaf. Content is the
+/// verbatim lines joined with `\n`, plus one final newline — the shared
+/// code-block convention ("one newline for every source content line",
+/// docs/DOCUMENT-MODEL.md) — so the same renderer emits Markdown fences
+/// and Textile `bc.` identically.
+fn closeCode(doc: *document.Document, code: *?CodeBlockState) ParseError!void {
+    var active = code.* orelse return;
+    code.* = null;
+    active.span.end = active.lines.items[active.lines.items.len - 1].end;
+    var content = std.ArrayList(u8).empty;
+    errdefer content.deinit(doc.allocator());
+    for (active.lines.items) |span| {
+        try content.appendSlice(doc.allocator(), doc.src.bytes[span.start..span.end]);
+        try content.append(doc.allocator(), '\n');
+    }
+    const node = try doc.createNode(.code_block, active.span, .{
+        .code_block = .{
+            .content = try content.toOwnedSlice(doc.allocator()),
+            .info = null,
+            .escape = !active.preformatted,
+            .attrs = active.attrs,
+        },
+    });
+    try doc.appendChild(doc.root, node);
 }
 
 /// One open list level of a Textile list tree. The stack is ordered by
@@ -2820,5 +2954,89 @@ test "textile: malformed block signatures stay literal" {
     for (result.document.root.children.items) |node| {
         try std.testing.expectEqual(document.Tag.paragraph, node.tag);
         try std.testing.expectEqual(@as(usize, 0), node.data.paragraph.attrs.len);
+    }
+}
+
+test "textile: bc. and pre. code-block structure and content" {
+    const oliver = @import("oliver.zig");
+
+    // `bc.` is an escaped `<pre><code>` block (Textile 2: "< and > are
+    // translated into HTML entities automatically").
+    {
+        var result = try oliver.parse(std.testing.allocator, "bc. a < b\n", .textile, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(@as(usize, 1), root.children.items.len);
+        const code = root.children.items[0];
+        try std.testing.expectEqual(document.Tag.code_block, code.tag);
+        try std.testing.expect(code.data.code_block.escape);
+        try std.testing.expectEqualStrings("a < b\n", code.data.code_block.content);
+    }
+    // `pre.` is a verbatim `<pre>` block: no escaping, no `<code>` wrapper.
+    {
+        var result = try oliver.parse(std.testing.allocator, "pre. <b>x</b>\n", .textile, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.code_block, code.tag);
+        try std.testing.expect(!code.data.code_block.escape);
+        try std.testing.expectEqualStrings("<b>x</b>\n", code.data.code_block.content);
+    }
+    // Multi-line blocks collect every non-blank line verbatim, including
+    // signature-shaped lines, until a blank line or EOF.
+    {
+        var result = try oliver.parse(std.testing.allocator, "bc. one\np. still code\n  three\n\np. after\n", .textile, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+        const code = root.children.items[0];
+        try std.testing.expectEqualStrings("one\np. still code\n  three\n", code.data.code_block.content);
+        // The node span covers the whole block (first content start through
+        // the last content line's end).
+        try std.testing.expectEqual(@as(u32, 4), code.span.start);
+        const after = root.children.items[1];
+        try std.testing.expectEqual(document.Tag.paragraph, after.tag);
+    }
+    // EOF closes an unterminated block.
+    {
+        var result = try oliver.parse(std.testing.allocator, "pre. alpha\nbeta", .textile, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try std.testing.expectEqualStrings("alpha\nbeta\n", code.data.code_block.content);
+    }
+    // Modifiers land on the code block's attrs (rendered on `<pre>`).
+    {
+        var result = try oliver.parse(std.testing.allocator, "bc{color:red}. x\n", .textile, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), code.data.code_block.attrs.len);
+        try std.testing.expectEqualStrings("style", code.data.code_block.attrs[0].name);
+        try std.testing.expectEqualStrings("color:red;", code.data.code_block.attrs[0].value);
+    }
+}
+
+test "textile: bc./pre. marker edge cases and block interaction" {
+    const oliver = @import("oliver.zig");
+
+    // Empty signatures, near misses, and plain words stay literal
+    // paragraphs.
+    var result = try oliver.parse(
+        std.testing.allocator,
+        "bc. \n\npre.\n\nbcd. not code\n\nbc\n\nprelude. not pre\n",
+        .textile,
+        .{},
+    );
+    defer result.deinit();
+    for (result.document.root.children.items) |node| {
+        try std.testing.expectEqual(document.Tag.paragraph, node.tag);
+    }
+
+    // A code block interrupts an open paragraph and closes lists/tables.
+    {
+        var result2 = try oliver.parse(std.testing.allocator, "para one\nbc. x\n", .textile, .{});
+        defer result2.deinit();
+        const root = result2.document.root;
+        try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+        try std.testing.expectEqual(document.Tag.paragraph, root.children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.code_block, root.children.items[1].tag);
     }
 }
