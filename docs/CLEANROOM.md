@@ -364,4 +364,38 @@ run of `-`/`+` is a phrase operator like `**`/`__`, and the documented
 docs/TEXTILE-PARITY.md §17. No Textile parser implementation source
 was consulted.
 
+Session 15 (T20 span attributes + `{...}` character macros) finding:
+
+- Hobix Textile Reference "Attributes: Phrase Attributes"
+  <https://hobix.com/textile/> — "All block attributes can be applied
+  to phrases as well by placing them just inside the opening
+  modifier", with the examples `*{color:red}blushed*` →
+  `<strong style="color:red;">blushed</strong>`, `_(big)sprouted_` →
+  `<em class="big">sprouted</em>`, and `%[es]cabeza%` →
+  `<span lang="es">cabeza</span>`.
+- Movable Type "Textile 2 Syntax" "Inline Formatting"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html>
+  — "Inline formatting operators accept the following modifiers:
+  `{style rule}`, `[ll]`, `(class) or (#id) or (class#id)`" — and
+  "Character Replacements": "there are a whole set of character
+  macros that are defined by default. All macros are enclosed in
+  curly braces. These include: `{c|}` or `{|c}` cent sign, `{L-}` or
+  `{-L}` pound sign, `{Y=}` or `{=Y}` yen sign. Many of these macros
+  can be guessed. For example: `{A'}` or `{'A}`, `{a"}` or `{"a}`,
+  `{1/4}`, `{*}`, `{:)}`, `{:(}`."
+
+Finding: the span's attribute forms follow Hobix's documented example
+plus Textile 2's inline modifier list (style/lang/class-id — padding
+and alignment are blocks-only); the other phrase operators' attribute
+forms (`*{color:red}x*`, `_(big)x_`) are documented by Hobix but stay
+deferred. The `{...}` macro table is implemented for exactly the
+documented forms and mirrored orders — the "many of these macros can
+be guessed" sentence documents a general letter+accent pattern whose
+full table is the reference implementations' data, so the pattern is
+recorded as deferred under the clean-room rule (docs/TEXTILE-PARITY.md
+§18). The brace-edge phrase rule (operators adjacent to `{`/`}` are
+not recognized) is Oliver's conservative deterministic choice so the
+`{*}`/`{-L}` macros stay whole; no Textile parser implementation
+source was consulted.
+
 No Markdown or Textile parser implementation source was consulted.

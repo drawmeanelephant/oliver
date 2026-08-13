@@ -28,6 +28,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T17 line attributes | the `|mods|.` pipe form applies the §8 block-modifier set to the paragraph, byte-identical to `p<mods>.`; a `.line` modifier kind; Textile fixtures; Markdown untouched | after T16 | merged on main (PR #32) |
 | Textile worker | T18 image modifiers | the documented image family — alignment (`!<x!`…`!~x!`), sizing (`10x20`, `10w 20h`, `20%x40%`, `20%`), `{style}`/`(class#id)`/padding — composes onto `.image.attrs`/width/height through the §8 machinery; shared model + renderer gain defaulted width/height/attrs; Markdown untouched | after T17 | merged on main (PR #33) |
 | Textile worker | T19 big/small phrases | Textile 2's `++bigger++`/`--smaller--` → `<big>`/`<small>` slot into the phrase machinery as doubled `+`/`-` runs; a matched `--` pair is consumed (never em-dashed) while space-adjacent/intraword/numeric/unmatched `--` still em-dash; Tag gains big/small; Markdown untouched | after T18 | merged on main (PR #34) |
+| Textile worker | T20 span attrs + `{...}` macros | `%{style}(class#id)[lang]x%` phrase attributes compose onto `.span` attrs (Hobix "Phrase Attributes"; malformed runs literal, empty-content runs fall back to a plain span, a `%` inside a style cannot close the span); Textile 2's documented `{...}` macro table with mirrored orders; the brace-edge phrase rule keeps `{*}`/`{-L}` whole for the macro pass; Markdown untouched | after T19 | merged on main (PR #35) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -695,6 +696,43 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes; Textile-only, Markdown untouched.
 - **Integration:** after T18 (the 652/652 gate is re-verified).
 - **State:** integrated on main (PR #34). 190/190 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T20 — Span phrase attributes + `{...}` character macros
+
+- **Objective:** implement the attribute-bearing span forms
+  (`%{style}(class#id)[lang]x%`, the span row's planned deferral) and
+  the deferred `{...}` character-macro table.
+- **Normative source:** Hobix "Phrase Attributes" — "all block
+  attributes can be applied to phrases as well by placing them just
+  inside the opening modifier" (`%[es]cabeza%` → `<span lang="es">`)
+  — and Textile 2 "Inline Formatting" (the inline modifier list:
+  style, lang, class/id) for the span; Textile 2 "Character
+  Replacements" for the macro table ("all macros are enclosed in
+  curly braces"; the nine documented forms with their mirrored
+  orders). The general letter+accent pattern beyond the documented
+  examples stays deferred (clean-room).
+- **Dependencies:** the block-attribute machinery (T10), the phrase
+  machinery (T4), the character-replacement pass (T15).
+- **Seams:** `src/document.zig` + `src/html.zig` (`.span` gains an
+  `attrs` payload, rendered in the fixed order) and `src/textile.zig`
+  (SpanMods + scanSpanMods, the `%`-opener modifier run in the scan
+  with an opaque skip, the emit composition with the plain-span
+  fallback, the brace-edge phrase rule, and the macro table in
+  replaceChars). Markdown never produces span tags — byte-identical.
+- **Acceptance:** the Hobix span examples byte-for-byte; the fixed
+  render order for a combined run; malformed runs literal; a `%`
+  inside a style value cannot close the span; empty-content runs fall
+  back to a plain span; the nine macro forms + mirrors; brace-adjacent
+  phrase operators not recognized (`{*}`/`{-L}` stay whole); macros
+  inside phrases and link display text, never in `@code@`/`==`; the
+  652/652 gate is untouched.
+- **Tests:** 3 unit tests (span attrs + spans, the fallbacks, the
+  macro table), 4 new Textile fixture pairs (`span-attr-basic`,
+  `span-attr-literal`, `char-macro-basic`, `char-macro-literal`).
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T19 (the 652/652 gate is re-verified).
+- **State:** integrated on main (PR #35). 193/193 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

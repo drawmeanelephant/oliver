@@ -63,6 +63,8 @@ consulted.
 | image `{style}`/`(class#id)`/padding | `.image.attrs` (style/class/id) | `<img style="…" class="…" id="…">` | implemented (T18) |
 | image sizing (`10x20`, `10w 20h`, `20%x40%`, `20%`) | `.image` width/height | `width="10" height="20"` | implemented (T18) |
 | `++x++` big / `--x--` small | `.big` / `.small` | `<big>` / `<small>` | implemented (T19) |
+| span attributes `%{style}(class#id)[lang]x%` | `.span` (attrs payload) | `<span style="…" class="…" id="…" lang="…">` | implemented (T20) |
+| `{...}` character macros (`{c|}`…`{:(}`) | `.text` (replaced payload) | `¢ £ ¥ Á ä ¼ • ☺ ☹` | implemented (T20) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -87,9 +89,10 @@ the last large documented gap and is now implemented (T18); see §16.
 The character-replacement macros — curly quotes, em/en dashes, ellipsis,
 `x` dimension sign, `(c)`/`(r)`/`(tm)`, and the fraction/degree/plus-minus
 paren forms — are now implemented (T15); see §13. Textile 2's `{...}`
-macro table (cent, pound, yen, ...) stays deferred (not documented by
-Hobix or the current docs, and the paren forms are the documented
-majority).
+macro table is now implemented too (T20) — the documented cent/pound/yen
+and accented-letter forms with their mirrored orders; see §18. The span
+phrase-attribute forms (`%{style}(class#id)[lang]x%`) are implemented as
+well (T20) — see §18.
 
 Tables were the last large *block* gap; they are now implemented (T8) —
 see §6. The largest remaining *inline* gap, link aliases, is now
@@ -577,6 +580,9 @@ apostrophe) while verbatim payloads do not.
   2's `--smaller--` → `<small>`, §17), so only `--` that cannot form a
   pair — space-adjacent, intraword, numeric, or unmatched — reaches
   this rule.
+- **Brace macros.** Textile 2's `{...}` character-macro table (§18):
+  the documented forms and their mirrored orders map to a single
+  character, and every other `{...}` shape stays literal.
 - **En dash.** A hyphen with a space/tab on **both** sides (` - `)
   becomes `–`. A hyphen touching letters (`well-formed`, `foo-bar`)
   or at the content edge is untouched.
@@ -818,4 +824,57 @@ intraword runs (`foo--bar`), edge whitespace (`a -- b`), and opacity
 inside `@code@` (where the dashes stay literal) all follow the family
 rules. The `phrase-boundaries` fixture's deferred-`--` line became an
 over-long-run case (`---smaller---` stays literal).
+
+## 18. Span attributes and the `{...}` character macros (T20): pinned behaviors
+
+Two milestones landed together: the span's phrase-attribute forms and
+Textile 2's default `{...}` character-macro table. Hobix "Phrase
+Attributes" documents the former — "all block attributes can be applied
+to phrases as well by placing them just inside the opening modifier",
+with the examples `*{color:red}blushed*`, `_(big)sprouted_`, and
+`%[es]cabeza%` — and Textile 2 "Inline Formatting" adds "inline
+formatting operators accept the following modifiers: `{style rule}`, `[ll]`,
+`(class) or (#id) or (class#id)`". Textile 2 "Character Replacements"
+documents the macro table — "there are a whole set of character macros
+that are defined by default. All macros are enclosed in curly braces".
+
+**Span attributes.** `%{style}(class#id)[lang]x%` composes the run
+through the block-attribute machinery into the `.span` attrs in the
+fixed render order (`<span style="…" class="…" id="…" lang="…">`); a
+plain `%x%` span carries an empty attr list and is unchanged. The
+modifier set is Textile 2's documented inline set — style, class/id,
+lang — **not** the block padding/alignment tokens (a `(`/`[`/`{` that
+isn't a valid spec ends the run and starts the content). The run must
+be followed by non-whitespace content; a malformed run (an unclosed or
+empty spec) makes the `%` a non-opener, so the whole construct stays
+literal — the same conservatism as a malformed block modifier. The
+scan treats the run as opaque (a `%` inside a style value like
+`%{width:50%}x%` cannot close the span), and a run with no content
+after it (`%(x)%`, `%{color:red}%`) falls back to a **plain span**
+whose content includes the run bytes. The other operators' attribute
+forms (`*{color:red}x*`, `_(big)x_`) are documented by Hobix but stay
+**deferred** — the span is this milestone's scope.
+
+**The macro table.** The documented forms — each with its mirrored
+order where Textile 2 shows one — map to a single character:
+`{c|}`/`{|c}` → ¢, `{L-}`/`{-L}` → £, `{Y=}`/`{=Y}` → ¥, `{A'}`/`{'A}`
+→ Á, `{a"}`/`{"a}` → ä, `{1/4}` → ¼, `{*}` → •, `{:)}` → ☺, `{:(}` →
+☹. The replacements apply to plain text like the rest of the pass:
+inside phrase content and link display text, never inside `@code@`,
+code blocks, link/image src/alt/title, or `==` escapes.
+
+**The brace-edge rule.** Phrase operators directly adjacent to a brace
+(the byte before is `{` or the byte after is `}`) are **not recognized**
+— `{*}` and `{-L}` are macros, and brace content is never phrase
+content — so the whole `{...}` region stays one text run and reaches
+the macro pass intact. Undocumented brace-adjacent shapes (`{*x*}`, a
+closer before `}`) therefore render literally.
+
+**Deferred.** The general letter+accent pattern Textile 2 hints at
+("many of these macros can be guessed") is **not** generalized: only the
+documented forms above are implemented — `{a'}` (lowercase acute),
+`{E'}`, and `{C|}` stay literal text (with the standard replacements,
+so `{a'}` renders `{a'}` → `{a’}`). The full table is the reference
+implementations' data, outside the clean-room rule. Non-span phrase
+attributes and image `[lang]` remain recorded deferrals.
 

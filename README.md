@@ -67,13 +67,16 @@ blank lines, footnotes (`[N]` references + `fnN.` blocks with
 `class="footnote"` links), `bq.:URL` block-quote citations
 (rendered as the blockquote's `cite` attribute), the character
 replacements (curly quotes, em/en dashes, ellipsis, `(c)`/`(r)`/`(tm)`,
-fractions, degree, plus/minus, dimension sign), `==` escaping
+fractions, degree, plus/minus, dimension sign, and the `{...}`
+character-macro table — cent, pound, yen, accented letters, bullet,
+smileys), `==` escaping
 (a lone `==` line passes raw HTML through unformatted; inline
 `==...==` suspends all formatting and replacements), `|mods|.`
 line attributes (the pipe-delimited form of the block-attribute set,
-converging byte-identically with `p<mods>.`), and image modifiers
+converging byte-identically with `p<mods>.`), image modifiers
 (alignment, sizing `10x20`/`10w 20h`/`20%`, and style/class/padding
-on `!url!` images),
+on `!url!` images), and span phrase attributes
+(`%{style}(class#id)[lang]x%` on `%x%` spans),
 structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
