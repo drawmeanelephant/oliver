@@ -13,8 +13,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ziglang/setup-zig was deleted in the Zig org's GitHub->Codeberg
+      # migration (Nov 2025); mlugg/setup-zig is its maintained successor
+      # and a drop-in replacement supporting the same `version` input.
       - name: Install Zig 0.16.0
-        uses: ziglang/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
