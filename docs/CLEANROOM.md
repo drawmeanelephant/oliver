@@ -214,4 +214,22 @@ follows the references' own "signature" list, and Oliver implements
 only the three forms — `bq..`, `bc..`, `pre..` — that the references
 discuss; `p..`/`h1..` are not extended signatures).
 
+Session 8 (T13 footnotes) consulted:
+
+- Hobix Textile Reference "Footnotes" <https://hobix.com/textile/> —
+  "footnote references are like this[1]... you begin a new paragraph
+  with fn and the footnote's number, followed by a dot and a space",
+  with the rendered example `[1]` → `<sup><a href="#fn1">1</a></sup>`
+  and `fn1.` → `<p id="fn1"><sup>1</sup> Down here, in fact.</p>`.
+- Movable Type "Textile 2 Syntax" "Footnotes"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html> —
+  the same structure with `class="footnote"` added on both the
+  reference's `<sup>`/`<a>` and the block's `<p>`.
+
+No Textile parser implementation source was consulted for the T13
+work; the pinned behaviors in docs/TEXTILE-PARITY.md §11 are derived
+from the user-facing prose above (Oliver renders the Textile 2 classed
+form, and the §8 block-modifier set applies to `fnN.` signatures like
+any other block signature, with the structural class/id winning).
+
 No Markdown or Textile parser implementation source was consulted.
