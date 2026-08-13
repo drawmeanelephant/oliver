@@ -65,6 +65,12 @@ consulted.
 | `++x++` big / `--x--` small | `.big` / `.small` | `<big>` / `<small>` | implemented (T19) |
 | span attributes `%{style}(class#id)[lang]x%` | `.span` (attrs payload) | `<span style="…" class="…" id="…" lang="…">` | implemented (T20) |
 | `{...}` character macros (`{c|}`…`{:(}`) | `.text` (replaced payload) | `¢ £ ¥ Á ä ¼ • ☺ ☹` | implemented (T20) |
+| phrase attributes on every operator (`*{...}x*`, `_(...)x_`, doubled/long) | `.phrase` (attrs payload) | `<strong style="…">` etc. | implemented (T21) |
+| `??x??` citation | `.cite` | `<cite>` | implemented (T22) |
+| `ABC(def)` acronym | `.acronym` (title payload) | `<acronym title="…">ABC</acronym>` | implemented (T22) |
+| `dl. term:definition` | `.list` (`.definition` kind) → `.list_item` (term/definition role) | `<dl>`/`<dt>`/`<dd>` | implemented (T23) |
+| `clear.` marker | (no node: a pending fragment folded into the next block's attrs) | `style="clear:both;"` (or `left`/`right`) | implemented (T24) |
+| `notextile.`/`notextile..` | `.html_block` (verbatim payload) | raw passthrough, no `<p>` wrapper | implemented (T25) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -399,9 +405,10 @@ same structure `closeBlock` already used for plain quotes).
 
 **Literal fallbacks (pinned by `block-attr-literal`).** An unterminated
 `(class` — `p(foo not closed` — a period not followed by whitespace —
-`p>.no-space` — a doubled period — `p.. double` — the deferred `bq..`
-extended and `bq:...` citation forms — and a non-`hN` marker like `h1x.`
-are all ordinary paragraph text with no attributes.
+`p>.no-space` — a doubled period — `p.. double` (the extended `bq..`
+form exists only for `bq`/`bc`/`pre`, so `p..` is not a marker) — the
+`bq:...` citation form — and a non-`hN` marker like `h1x.` are all
+ordinary paragraph text with no attributes.
 
 ## 9. Block code and preformatted text (T11): pinned behaviors
 
@@ -1117,4 +1124,84 @@ block (the escape check runs before all other rules). A pending
 carries none), so the fragment is dropped rather than leaking onto
 the next block. An unterminated block at end of input still
 renders, like an unterminated `==` region.
+
+## 24. Audit coverage scorecard (final)
+
+The audit's closing scorecard: **every block signature and inline
+operator the two references document is implemented**. The deferral
+pile that T1 opened is empty; what remains is a short, named list of
+reference-documented forms Oliver deliberately does not implement (see
+below) plus the recorded reference disagreements in §2/§3.
+
+**Verification method.** Every row below is pinned by at least one
+fixture pair in `tests/fixtures_test.zig` (byte-exact input/output) and
+most also by exact-span unit tests in `src/textile.zig`; the shared
+renderer's Markdown side is gated byte-for-byte against CommonMark
+0.31.2 (652/652). The matrix's example strings were re-verified live
+against `oliver render --from textile` during this wrap-up.
+
+| family | fixture pairs | status | pinned in |
+| --- | --- | --- | --- |
+| paragraphs (`p.`, bare lines) | 4 | implemented (T1) | §3 |
+| headings `h1.`–`h6.` | 2 | implemented (T1) | §3 |
+| block precedence (marker interruption) | 2 | implemented (T1) | §3 |
+| line breaks | 1 | implemented (T1) | §3 |
+| block quotes `bq.` | 7 | implemented (T1) | §3 |
+| block-quote citations `bq.:URL` | 4 | implemented (T14) | §12 |
+| inline code `@code@` | 6 | implemented (T2) | TEXTILE-INLINE-CODE |
+| special chars / unicode | 2 | implemented (T1/T2) | §3 |
+| phrase family (`*`, `_`, `**`, `__`, `-`, `+`, `^`, `~`, `%`) | 4 | implemented (T4) | §3 |
+| big/small `++`/`--` | 1 | implemented (T19) | §17 |
+| links `"t":u` (+ title, bracket trick) | 4 | implemented (T4) | §3 |
+| link aliases `[alias]url` | 4 | implemented (T9) | §7 |
+| images `!u!` (+ alt, linked) | 3 | implemented (T4) | §3 |
+| image modifiers (align/size/style) | 2 | implemented (T18) | §16 |
+| lists `*`/`#` (+ nesting) | 3 | implemented (T4) | §3 |
+| definition lists `dl.` | 2 | implemented (T23) | §21 |
+| tables `|a|b|` (+ modifiers) | 13 | implemented (T8) | §6 |
+| block attributes (§8 set) | 5 | implemented (T10) | §8 |
+| line attributes `|mods|.` | 2 | implemented (T17) | §15 |
+| block code `bc.` / preformatted `pre.` | 4 | implemented (T11) | §9 |
+| extended blocks `bq..`/`bc..`/`pre..` | 4 | implemented (T12) | §10 |
+| footnotes `fnN.`/`[N]` | 4 | implemented (T13) | §11 |
+| character replacements | 3 | implemented (T15) | §13 |
+| `{...}` character macros | 2 | implemented (T20) | §18 |
+| span attributes `%{...}x%` | 2 | implemented (T20) | §18 |
+| phrase attributes on every operator | 2 | implemented (T21) | §19 |
+| citation `??x??` / acronyms `ABC(def)` | 4 | implemented (T22) | §20 |
+| `==` escaping (inline + block) | 4 | implemented (T16) | §14 |
+| `clear.` marker | 2 | implemented (T24) | §22 |
+| `notextile.` raw block | 2 | implemented (T25) | §23 |
+| inline composition (mixed families) | 1 | implemented (T4) | §3 |
+
+**105 fixture pairs, 203/203 tests, 652/652 CommonMark.** The
+convergence pairs in `tests/fixtures_test.zig` additionally prove the
+shared renderer is byte-identical across dialects (Textile `*x*` ↔
+Markdown `**x**`, `_x_` ↔ `*x*`, `"x":u` ↔ `[x](u)`, `!img.png!` ↔
+`![](img.png)`, `# x` ↔ `1. x`).
+
+**Remaining reference-documented forms, deliberately not implemented.**
+Each is named with its provenance so the record is complete:
+
+- `|filter|` block parameters (Textile 2 block signatures) — a
+  processing pipeline, out of scope for a static renderer.
+- The dash-marker definition-list form (`- term := definition`, current
+  Textile docs; the `dl.` form is implemented) — the two references
+  disagree (CLEANROOM session 18).
+- List styling markers (`(class#id)* one` list-level vs `*(class#id)
+  one` item-level) and multi-line list items — documented by Textile 2
+  with one example each; items stay single-line (recorded ambiguity
+  #20).
+- Bracket/brace forcing (`c[*oo*]l`) — Textile 2's way to force
+  intraword formatting; not inferred (the same position as `@code@`
+  intraword, docs/TEXTILE-INLINE-CODE.md §2).
+- The general letter+accent `{...}` macro pattern — only the documented
+  forms are implemented (T20); the reference implementations' fuller
+  table is outside the clean-room rule (CLEANROOM session 15).
+- Inline `<notextile>...</notextile>` tags (current Textile docs; the
+  block form is implemented) — a tag pair, not a block signature.
+- `head_offset` and the CSS "caps" span — rendering options of the
+  reference implementations, not syntax.
+- Lists inside block quotes — in neither reference; deferred (chosen
+  behavior #11).
 
