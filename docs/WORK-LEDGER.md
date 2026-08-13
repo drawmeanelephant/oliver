@@ -202,6 +202,38 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   **652/652 — full conformance**, 0 not-yet, 0 divergences, 0 regressions.
   140/140 tests green.
 
+## T4 — Textile parity audit: phrase modifiers, links, images, lists
+
+- **Objective:** build the Textile fixture audit (docs/TEXTILE-PARITY.md):
+  inventory every implemented Textile feature against the shared document
+  model, then close the biggest gaps vs. Textile 2 semantics — the inline
+  phrase-modifier family, `"text":url` links, `!url!` images, and `*`/`#`
+  lists.
+- **Authoritative sources:** Hobix Textile Reference; Movable Type Textile 2
+  Syntax (both clean-room allowed); the existing Textile contracts
+  (docs/TEXTILE-INLINE-CODE.md).
+- **Dependencies:** shared model/renderer; the T2 `@code@` boundary contract
+  is reused uniformly for every inline family.
+- **Seams:** `src/textile.zig` (inline item scan → LIFO phrase match → emit,
+  plus the block-pass list tree), new shared tags `bold`/`italic`/`deleted`/
+  `inserted`/`superscript`/`subscript`/`span` in `src/document.zig` and
+  `src/html.zig`, Textile fixtures/index, feature matrix, model and parity
+  docs. Markdown parser files untouched.
+- **Acceptance:** the documented operator set renders to the documented HTML
+  (`_x_`→`<em>`, `*x*`→`<strong>`, `**x**`→`<b>`, `__x__`→`<i>`, `-x-`→`<del>`,
+  `+x+`→`<ins>`, `^x^`→`<sup>`, `~x~`→`<sub>`, `%x%`→`<span>`); nesting
+  `*_way_*`; links with titles and the bracket trick; images with alt/title
+  and the `!url!:href` attachment; tight single-line lists with marker-depth
+  nesting; every ambiguous shape stays literal and is pinned by a fixture.
+- **Tests:** 9 new unit tests (tags/spans, nesting, boundaries, links,
+  images, lists, a 10,000-pair phrase storm, a 2,000-deep nesting workload)
+  and 15 new Textile fixture pairs, plus shared-model convergence pairs.
+- **Parallelism:** yes; Textile-local ownership, Markdown untouched.
+- **Integration:** after M6 (the Markdown corpus is untouched, so the
+  652/652 gate is unaffected).
+- **State:** implemented on main (uncommitted). 148/148 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
 ## C1 — Classified conformance expectations
 
 - **Objective:** bind the conformance harness to the exact 0.31.2 corpus and

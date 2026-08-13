@@ -23,9 +23,11 @@ Node {
 ```
 
 `Tag` in the slice: `document`, `paragraph`, `heading`, `thematic_break`,
-`code_block`, `html_block`, `block_quote`, `list`, `list_item`, `text`, `emphasis`, `strong`, `code_span`, `link`, `image`,
+`code_block`, `html_block`, `block_quote`, `list`, `list_item`, `text`, `emphasis`, `strong`, `bold`, `italic`, `deleted`, `inserted`, `superscript`, `subscript`, `span`, `code_span`, `link`, `image`,
 `autolink`, `raw_html`, `soft_break`, `hard_break`. Blocks and inlines are
-distinguished by `Tag.isBlock` / `Tag.isInline`. `Data` carries `heading`
+distinguished by `Tag.isBlock` / `Tag.isInline`. The `bold`/`italic`/
+`deleted`/`inserted`/`superscript`/`subscript`/`span` tags are Textile-only
+phrase modifiers (docs/TEXTILE-PARITY.md §1); Markdown never produces them. `Data` carries `heading`
 level (1..6), list kind/marker metadata/start/looseness, the borrowed `text`
 slice, arena-owned `code_span` content, arena-owned `code_block` content/info,
 the arena-owned `html_block` verbatim content,
@@ -83,9 +85,10 @@ the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
 7. `.list` children are `.list_item` blocks; `.list_item` children are
    blocks, and list payloads record bullet/ordered type, marker metadata,
    ordered start, and tight/loose state.
-8. `emphasis`/`strong`/`link` contain inline children. The leaf inline
-   tags (`text`, `code_span`, `image`, `autolink`, `raw_html`, `soft_break`,
-   `hard_break`) never have children.
+8. `emphasis`/`strong`/`bold`/`italic`/`deleted`/`inserted`/
+   `superscript`/`subscript`/`span`/`link` contain inline children. The
+   leaf inline tags (`text`, `code_span`, `image`, `autolink`, `raw_html`,
+   `soft_break`, `hard_break`) never have children.
 9. `Data.text` always slices the document's source bytes; `raw_html` also
    borrows its bytes through `Node.span` and carries `Data.none`; the other
    text payloads (`code_span`, `code_block.content`, `code_block.info`,
@@ -120,10 +123,12 @@ with header flag).
 `.code_block` is implemented for fenced and indented Markdown blocks.
 `.html_block` is implemented for Markdown §4.6 HTML blocks (all seven
 types) with its arena-owned verbatim content.
-`emphasis`/`strong`/`link`/`image`/`autolink` are implemented;
+`emphasis`/`strong`/`bold`/`italic`/`deleted`/`inserted`/`superscript`/
+`subscript`/`span`/`link`/`image`/`autolink` are implemented;
 `raw_html` is implemented for Markdown inline tags; Textile keeps `<...>` as
 plain text until a dialect-specific raw-HTML decision is made.
-`emphasis`/`strong`
+`emphasis`/`strong`/`bold`/`italic`/`deleted`/`inserted`/`superscript`/
+`subscript`/`span`
 carry no special data — nesting already expresses it. `code_span`,
 `link`, `image`, and `autolink` are the implemented inlines whose
 payloads are **arena-owned**: `data.code_span` is the dialect-normalized
@@ -163,10 +168,14 @@ emit them in a fixed documented order.
 | thematic break | (planned) | `.thematic_break` |
 | fenced code block | `bc.` / `pre.` (planned) | `.code_block` (owned content/info) |
 | HTML block (Markdown §4.6 types 6/7) | (Textile has no HTML blocks; literal) | `.html_block` (owned verbatim content) |
-| `emphasis` / `strong` | (Textile inline markers: later) | `.emphasis` / `.strong` |
+| `emphasis` / `strong` | Textile `_x_` / `*x*` | `.emphasis` / `.strong` |
+| `bold` / `italic` | Textile `**x**` / `__x__` | `.bold` / `.italic` |
+| `deleted` / `inserted` | Textile `-x-` / `+x+` | `.deleted` / `.inserted` |
+| `superscript` / `subscript` | Textile `^x^` / `~x~` | `.superscript` / `.subscript` |
+| `span` | Textile `%x%` | `.span` (no attributes yet) |
 | `` `code span` `` | `@code@` | `.code_span` (arena-owned payload: Markdown §6.1-normalized vs Textile-verbatim) |
-| `[x](url "title")` | (Textile `"text":url`: later) | `.link` (arena-owned href/title) |
-| `![alt](url "title")` | (Textile `!url(alt)!`: later) | `.image` (arena-owned src/alt/title) |
+| `[x](url "title")` | Textile `"text":url`, `"text (title)":url` | `.link` (arena-owned href/title) |
+| `![alt](url "title")` | Textile `!url!`, `!url(alt)!`, `!url!:href` | `.image` (arena-owned src/alt/title) |
 | `<scheme:...>` / `<a@b.c>` | (Textile has no autolink; literal) | `.autolink` (arena-owned href/label) |
 | raw HTML tag (`<tag>`, comment, PI, declaration, CDATA) | literal text | `.raw_html` in Markdown; `.text` in Textile |
 | plain text | plain text | `.text` |

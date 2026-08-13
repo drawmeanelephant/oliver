@@ -2,28 +2,38 @@
 
 Tests are product contracts. `zig build test` runs three suites:
 
-1. **Library module tests** — 114 `test` blocks inside `src/*.zig` covering
+1. **Library module tests** — 132 `test` blocks inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
    frontends, Unicode case folding, the HTML renderer, and the public API.
    Markdown tests pin the container stack, thematic-break/list precedence,
    multiline Setext transformation, reference-definition interaction,
    terminal-backslash behavior, fenced-code payload/spans, every implemented
    inline family, exact AST shapes, and exact spans. Textile tests pin
-   `p.`/`hN.`/`bq.` structure, hard-break terminators, and `@code@` payloads.
+   `p.`/`hN.`/`bq.` structure, hard-break terminators, `@code@` payloads,
+   the phrase-modifier family (tags, spans, nesting, boundary fallbacks),
+   links (titles, bracket trick, literal fallbacks), images (alt/title,
+   link attachment, literal fallbacks), list structure/nesting/termination,
+   a 10,000-pair phrase storm, and a 2,000-deep phrase-nesting workload.
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 246 Markdown and 24 Textile fixture pairs.
+   The explicit index contains 246 Markdown and 39 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
    ordered starts and near misses, empty items, interruption, nesting,
    marker/delimiter separation, tight/loose propagation, and quote/list
-   composition), reference links, autolinks, raw HTML, thematic breaks,
+   composition),   reference links, autolinks, raw HTML, thematic breaks,
    Setext headings, fenced and indented code blocks (§4.4 chunks,
    interruption, tab-stop indentation in markers/containers), and tab-stop
    handling (§2.1); the Textile wall covers `bq.`
-   quotes and `@code@` spans. It also verifies shared-model convergence,
+   quotes, `@code@` spans, the full phrase-modifier family
+   (strong/emphasis/bold/italic/del/ins/sup/sub/span, nesting, and literal
+   boundary fallbacks), links (`"text":url`, titles, the bracket trick,
+   literal fallbacks), images (`!url!`, alt/title forms, the `!url!:href`
+   attachment, literal fallbacks), and `*`/`#` lists with nesting,
+   sibling-marker switches, and termination (docs/TEXTILE-PARITY.md). It
+   also verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
    deterministic repeat rendering (list stress: 2k nested items, 10k
    same-marker items, 15k alternating markers, 12k variably indented
@@ -36,7 +46,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **140/140 tests passing** with Zig 0.16.0.
+The current complete result is **148/148 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
@@ -79,7 +89,9 @@ A completed syntax feature should include, where meaningful:
 The current Markdown wall covers emphasis/strong, code spans, inline and
 reference links/images, definitions, autolinks, inline raw HTML, block quotes,
 fenced code blocks, thematic breaks, Setext headings, escapes, breaks, paragraphs, and ATX
-headings. The leaf-block slice adds four thematic-break fixture groups, eight
+headings. The Textile wall covers the same families through the Textile
+syntax plus the Textile-only phrase modifiers, links, images, and lists
+(docs/TEXTILE-PARITY.md §5). The leaf-block slice adds four thematic-break fixture groups, eight
 Setext groups, a terminal-backslash fixture, exact AST/span tests, renderer
 profile tests, and a deterministic 10,000-cycle heading/break workload. The
 fenced-code slice adds 13 fixture groups spanning the normative rule families,
@@ -159,29 +171,45 @@ combined with `--gate`. The harness converts the spec's tab-arrow marker to
 a real tab and ignores exactly one renderer-owned final newline.
 
 Current canonical baseline: **652/652 examples pass — full conformance**
-(652 supported, 0 not-yet, 0 named divergences).
+(652 supported, 0 not-yet, 0 named divergences). The per-section table is
+derived from the harness output and kept in sync with README.md:
 
-- Tabs: 11/11 (four-column tab stops for block structure, literal bytes in
-  content).
-- Entity and numeric character references: 17/17 (named via the WHATWG
-  entities table, numeric per §2.5, decoded in text, link destinations and
-  titles, and fenced info strings; literal in code spans/code blocks).
-- HTML blocks: 44/44 — all seven §4.6 types complete (types 1–5 end at
-  their matching terminator, types 6/7 at a blank line).
-- Thematic breaks, Setext headings, ATX headings, indented code blocks,
-  fenced code blocks, block quotes, list items, backslash escapes, and
-  paragraphs: 100%.
-- Lists: 26/26.
-- Link reference definitions: 27/27 (the last not-yet example — §4.7 edge
-  case #201, an angle destination directly followed by a would-be title —
-  was closed by the full-conformance milestone).
-- Code spans, emphasis/strong, links, images, autolinks, inline raw HTML,
-  hard/soft breaks, and textual content: 100%.
+| CommonMark 0.31.2 section | score |
+| --- | --- |
+| Tabs | 11/11 |
+| Backslash escapes | 13/13 |
+| Entity and numeric character references | 17/17 |
+| Precedence | 1/1 |
+| Thematic breaks | 19/19 |
+| ATX headings | 18/18 |
+| Setext headings | 27/27 |
+| Indented code blocks | 12/12 |
+| Fenced code blocks | 29/29 |
+| HTML blocks | 44/44 |
+| Link reference definitions | 27/27 |
+| Paragraphs | 8/8 |
+| Blank lines | 1/1 |
+| Block quotes | 25/25 |
+| List items | 48/48 |
+| Lists | 26/26 |
+| Inlines | 1/1 |
+| Code spans | 22/22 |
+| Emphasis and strong emphasis | 132/132 |
+| Links | 90/90 |
+| Images | 22/22 |
+| Autolinks | 19/19 |
+| Raw HTML | 20/20 |
+| Hard line breaks | 15/15 |
+| Soft line breaks | 2/2 |
+| Textual content | 3/3 |
+| **Total** | **652/652** |
 
 The former ATX trailing-backslash divergence (example 646) was resolved to
-the normative output by the thematic-break/Setext milestone; no named
-divergences remain. Failures are not silently skipped: the classified gate
-makes the whole 0.31.2 corpus a regression wall.
+the normative output by the thematic-break/Setext milestone; the last
+not-yet example — §4.7 edge case #201, an angle destination directly
+followed by a would-be title — was closed by the full-conformance
+milestone. No named divergences remain. Failures are not silently skipped:
+the classified gate makes the whole 0.31.2 corpus a regression wall.
 
 ## Commands
 

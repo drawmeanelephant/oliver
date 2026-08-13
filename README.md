@@ -49,8 +49,11 @@ named via the WHATWG entities table, decoded in text, link
 destinations/titles, info strings, and autolinks but never in code
 spans/blocks or as structural syntax), plain
 inline text, a shared document model, a deterministic HTML renderer,
-Markdown (ATX) and Textile (`hN.`)
-frontends, structured diagnostics, and a provisional CLI.
+Markdown (ATX) and Textile
+frontends (`hN.` headings, `p.`/`bq.`, `*`/`#` lists, `@code@`, the
+phrase-modifier family `_x_`/`*x*`/`__x__`/`**x**`/`-x-`/`+x+`/`^x^`/`~x~`/`%x%`,
+`"text":url` links, and `!url!` images — see docs/TEXTILE-PARITY.md),
+structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
 implemented, planned, and deferred. The emphasis/strong algorithm contract
@@ -64,6 +67,9 @@ The thematic-break/Setext precedence contract is
 [docs/LEAF-BLOCKS.md](docs/LEAF-BLOCKS.md).
 The fenced-code open-leaf/model/rendering contract is
 [docs/FENCED-CODE.md](docs/FENCED-CODE.md).
+The Textile fixture audit — inventory, gaps vs. Textile 2 semantics, and
+chosen behaviors for phrase modifiers, links, images, and lists — is
+[docs/TEXTILE-PARITY.md](docs/TEXTILE-PARITY.md).
 Code spans, links, images, autolinks, and raw HTML ride the same
 scan → match → emit seam.
 
@@ -77,11 +83,49 @@ and prints a per-section scorecard. Every example is classified in a
 reviewed manifest (docs/COMMONMARK-EXPECTATIONS.md) as supported,
 not-yet, or a named divergence; `--gate` fails on any supported regression,
 unexpected pass, or changed divergence, so the full corpus is a regression
-wall (see docs/TESTS.md for the current 652/652 scorecard and how to fetch
-the spec).
+wall (see docs/TESTS.md for how to fetch the spec).
+
+### Current scorecard: 652/652 — full CommonMark 0.31.2 conformance
+
+Every one of the 652 normative examples passes byte-for-byte (0 not-yet,
+0 named divergences). Per-section counts are derived from the harness:
 
 ```bash
-zig build test    # run all tests (140 tests)
+zig build spec-conformance -- spec.txt
+```
+
+| CommonMark 0.31.2 section | score |
+| --- | --- |
+| Tabs | 11/11 |
+| Backslash escapes | 13/13 |
+| Entity and numeric character references | 17/17 |
+| Precedence | 1/1 |
+| Thematic breaks | 19/19 |
+| ATX headings | 18/18 |
+| Setext headings | 27/27 |
+| Indented code blocks | 12/12 |
+| Fenced code blocks | 29/29 |
+| HTML blocks | 44/44 |
+| Link reference definitions | 27/27 |
+| Paragraphs | 8/8 |
+| Blank lines | 1/1 |
+| Block quotes | 25/25 |
+| List items | 48/48 |
+| Lists | 26/26 |
+| Inlines | 1/1 |
+| Code spans | 22/22 |
+| Emphasis and strong emphasis | 132/132 |
+| Links | 90/90 |
+| Images | 22/22 |
+| Autolinks | 19/19 |
+| Raw HTML | 20/20 |
+| Hard line breaks | 15/15 |
+| Soft line breaks | 2/2 |
+| Textual content | 3/3 |
+| **Total** | **652/652** |
+
+```bash
+zig build test    # run all tests (148 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 
