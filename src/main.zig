@@ -7,6 +7,7 @@
 //!     oliver scale --from cooklang --factor 2 < recipe.cook > doubled.cook
 //!     oliver scale --from cooklang --factor 3/2 < recipe.cook
 //!     oliver scale --from cooklang --servings 4 < recipe.cook
+//!     oliver menu --from cooklang < plan.menu   # day/meal text dump
 //!
 //! All parser and renderer semantics live in the library; this file only
 //! handles arguments and stdio. It uses the Zig 0.16 `std.process.Init`
@@ -26,6 +27,7 @@ pub fn main(init: std.process.Init) !u8 {
     var cooklang = false;
     var serialize = false;
     var scale = false;
+    var menu = false;
     var factor_num: ?u32 = null;
     var factor_den: ?u32 = null;
     var servings_target: ?u32 = null;
@@ -45,6 +47,8 @@ pub fn main(init: std.process.Init) !u8 {
             serialize = true;
         } else if (std.mem.eql(u8, arg, "scale")) {
             scale = true;
+        } else if (std.mem.eql(u8, arg, "menu")) {
+            menu = true;
         } else if (std.mem.eql(u8, arg, "--factor")) {
             const value = it.next() orelse return usage();
             var parts = std.mem.splitScalar(u8, value, '/');
@@ -64,10 +68,11 @@ pub fn main(init: std.process.Init) !u8 {
         } else return usage();
     }
     if (!cooklang and dialect == null) return usage();
-    // Serialization and scaling are Cooklang capabilities only
-    // (Markdown/Textile have no canonical form; the shared renderer is
-    // the output for those). Scaling needs exactly one mode.
-    if ((serialize or scale) and !cooklang) return usage();
+    // Serialization, scaling, and the menu view are Cooklang
+    // capabilities only (Markdown/Textile have no canonical form; the
+    // shared renderer is the output for those). Scaling needs exactly
+    // one mode.
+    if ((serialize or scale or menu) and !cooklang) return usage();
     if (scale and (factor_num == null) == (servings_target == null)) return usage();
 
     // Read all of stdin into memory.
@@ -113,6 +118,16 @@ pub fn main(init: std.process.Init) !u8 {
                 std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
                 return 1;
             };
+        } else if (menu) {
+            var m = oliver.cooklang_menu.menuView(gpa, &result.recipe) catch |err| {
+                std.debug.print("oliver: menu view failed: {s}\n", .{@errorName(err)});
+                return 1;
+            };
+            defer m.deinit();
+            oliver.cooklang_menu.writeMenu(&out_writer.interface, &m) catch |err| {
+                std.debug.print("oliver: menu dump failed: {s}\n", .{@errorName(err)});
+                return 1;
+            };
         } else {
             oliver.cooklang_html.render(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
                 std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
@@ -140,9 +155,11 @@ fn usage() u8 {
         \\usage: oliver render --from <markdown|textile|cooklang>
         \\       oliver serialize --from cooklang
         \\       oliver scale --from cooklang (--factor <num[/den]> | --servings <n>)
+        \\       oliver menu --from cooklang
         \\
         \\Reads a document from stdin and writes rendered HTML (or, for
-        \\serialize/scale, canonical Cooklang text) to stdout.
+        \\serialize/scale, canonical Cooklang text; for menu, the
+        \\day/meal text dump) to stdout.
         \\
     , .{});
     return 1;

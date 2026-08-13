@@ -37,6 +37,9 @@ pub const cooklang_serialize = @import("cooklang_serialize.zig");
 /// The pure Cooklang scaling operation (semantic Recipe -> scaled
 /// Recipe; docs/COOKLANG.md §11).
 pub const cooklang_scale = @import("cooklang_scale.zig");
+/// The Cooklang `.menu` convenience view (semantic day/meal structure
+/// over a parsed Recipe; docs/COOKLANG.md §12).
+pub const cooklang_menu = @import("cooklang_menu.zig");
 
 comptime {
     // The Cooklang modules have their own entry points and are never
@@ -48,6 +51,7 @@ comptime {
     _ = cooklang_html;
     _ = cooklang_serialize;
     _ = cooklang_scale;
+    _ = cooklang_menu;
 }
 
 pub const version = "0.0.0";
