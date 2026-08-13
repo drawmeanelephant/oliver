@@ -1807,6 +1807,37 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/block-attr-literal.textile"),
         .expected = @embedFile("fixtures/textile/block-attr-literal.html"),
     },
+    // --- block code / preformatted text (Textile 2 "bc"; current Textile
+    // docs "pre.") ---
+    // `bc.` collects every non-blank line verbatim until a blank line
+    // (signature-shaped lines stay code), and renders escaped
+    // `<pre><code>`.
+    .{
+        .name = "code-block-bc",
+        .input = @embedFile("fixtures/textile/code-block-bc.textile"),
+        .expected = @embedFile("fixtures/textile/code-block-bc.html"),
+    },
+    // `pre.` is verbatim preformatted text: HTML is preserved, no
+    // escaping, no `<code>` wrapper.
+    .{
+        .name = "code-block-pre",
+        .input = @embedFile("fixtures/textile/code-block-pre.textile"),
+        .expected = @embedFile("fixtures/textile/code-block-pre.html"),
+    },
+    // Block-attribute modifiers work on code signatures, landing on the
+    // `<pre>` element (`bc{...}.`, `pre(...)[lang].`).
+    .{
+        .name = "code-block-attrs",
+        .input = @embedFile("fixtures/textile/code-block-attrs.textile"),
+        .expected = @embedFile("fixtures/textile/code-block-attrs.html"),
+    },
+    // Empty signatures, near misses, and plain words stay literal
+    // paragraphs: `bc. `, `pre.`, `bcd.`, `bc`, `prelude.`.
+    .{
+        .name = "code-block-literal",
+        .input = @embedFile("fixtures/textile/code-block-literal.textile"),
+        .expected = @embedFile("fixtures/textile/code-block-literal.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {
@@ -1912,6 +1943,13 @@ test "shared model: equivalent inputs render identically through one renderer" {
             .markdown = "1. one\n2. two",
             .textile = "# one\n# two",
             .expected = "<ol>\n<li>one</li>\n<li>two</li>\n</ol>\n",
+        },
+        // Textile `bc.` block code converges with the Markdown fenced code
+        // block (same `.code_block` payload, same escaping).
+        .{
+            .markdown = "```\na < b\n```",
+            .textile = "bc. a < b",
+            .expected = "<pre><code>a &lt; b\n</code></pre>\n",
         },
     };
     for (pairs) |p| {
