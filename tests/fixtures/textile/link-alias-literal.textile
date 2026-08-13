@@ -1,4 +1,4 @@
-[1] See footnote
+[x] See note
 []http://x
 [x]
 [x] url with space

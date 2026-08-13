@@ -20,7 +20,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T9 Textile link aliases | `[alias]url` definition lines + `"text":alias` references via a document-global alias table; Textile fixtures; no Markdown/core changes | after T8 | integrated on main (PR #21) |
 | Textile worker | T10 Textile block attributes | `{style}`/`(class#id)`/`[lang]`/alignment/padding on `p.`/`hN.`/`bq.` signatures; block attrs in model + renderer; Textile fixtures; Markdown untouched | after T9 | integrated on main (PR #22) |
 | Textile worker | T11 `bc.`/`pre.` block code | single-period code/preformatted leaf blocks owning verbatim lines until a blank line; `.code_block` verbatim `escape` flag + attrs; Textile fixtures; Markdown untouched | after T10 | integrated on main (PR #23) |
-| Textile worker | T12 extended blocks (`bq..`/`bc..`/`pre..`) | double-period signatures stay active across blank lines: `bq..` flushes blank-line-separated paragraphs into one blockquote, `bc..`/`pre..` keep blank lines as code content; both end at the next block signature | after T11 | implemented on main (uncommitted) |
+| Textile worker | T12 extended blocks (`bq..`/`bc..`/`pre..`) | double-period signatures stay active across blank lines: `bq..` flushes blank-line-separated paragraphs into one blockquote, `bc..`/`pre..` keep blank lines as code content; both end at the next block signature | after T11 | integrated on main (PR #24) |
+| Textile worker | T13 Textile footnotes | `[N]` references → `.footnote_ref` sup links + `fnN.` blocks (paragraph attrs + leading sup); Textile fixtures; Markdown untouched | after T12 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -438,7 +439,42 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   pins updated for the new contract.
 - **Parallelism:** yes; Textile-local, Markdown untouched.
 - **Integration:** after T11 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 172/172 tests green;
+- **State:** integrated on main (PR #24). 172/172 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T13 — Textile footnotes (`fnN.`/`[N]`)
+
+- **Objective:** implement footnote references and blocks — `[N]` inline
+  markers linking to `fnN.` paragraph blocks — the last documented
+  inline↔block coupling.
+- **Authoritative sources:** Hobix Textile Reference "Footnotes"
+  ("footnote references are like this[1]... you begin a new paragraph
+  with fn and the footnote's number, followed by a dot and a space",
+  rendered example `[1]` → `<sup><a href="#fn1">1</a></sup>`); Movable
+  Type Textile 2 Syntax "Footnotes" (same structure, adds
+  `class="footnote"` on both the reference and the block). Both
+  clean-room allowed. Oliver renders the Textile 2 (classed) form.
+- **Seams:** `src/document.zig` (new `.footnote_ref` inline tag),
+  `src/html.zig` (`<sup class="footnote"><a href="#fnN">N</a></sup>`
+  open + close case), `src/textile.zig` (`FootnoteSig`/
+  `tryFootnoteMarker` with the §8 modifier set, `scanFootnoteRef` in the
+  inline scan pass, `footnote` fields on `ActiveBlock`, the sup prepend
+  in `closeBlock`, `fnN.` in the extended-block terminator), Textile
+  fixtures/index, feature matrix, parity (new §11), model/tests/ledger
+  docs, README.
+- **Acceptance:** the Hobix footnote example byte-for-byte with the
+  Textile 2 classes; multiple footnotes in order; §8 modifiers on `fnN.`
+  signatures (structural class/id first, user style/lang after); any
+  digit run (`[12]`), numbers beyond `u16` stay literal; non-digit
+  brackets, `[1x]`, empty signatures, and `fnx.` stay literal; `fnN.`
+  terminates extended blocks; the 652/652 gate is untouched.
+- **Tests:** 4 unit tests (block structure + sup span, inline refs,
+  multi-digit, modifiers), 4 Textile fixture pairs, and the
+  `link-alias-literal` pins updated for the new `[1]` contract.
+- **Parallelism:** yes; Textile + one new shared inline tag, Markdown
+  untouched.
+- **Integration:** after T12 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 175/175 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

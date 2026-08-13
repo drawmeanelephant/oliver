@@ -24,15 +24,18 @@ Node {
 
 `Tag` in the slice: `document`, `paragraph`, `heading`, `thematic_break`,
 `code_block`, `html_block`, `block_quote`, `list`, `list_item`, `text`, `emphasis`, `strong`, `bold`, `italic`, `deleted`, `inserted`, `superscript`, `subscript`, `span`, `code_span`, `link`, `image`,
-`autolink`, `raw_html`, `soft_break`, `hard_break`. Blocks and inlines are
-distinguished by `Tag.isBlock` / `Tag.isInline`. The `bold`/`italic`/
-`deleted`/`inserted`/`superscript`/`subscript`/`span` tags are Textile-only
-phrase modifiers (docs/TEXTILE-PARITY.md §1); Markdown never produces them. `Data` carries `heading`
-level (1..6), list kind/marker metadata/start/looseness, the borrowed `text`
-slice, arena-owned `code_span` content, arena-owned `code_block` content/info,
+`autolink`, `raw_html`, `soft_break`, `hard_break`, `footnote_ref`. Blocks
+and inlines are distinguished by `Tag.isBlock` / `Tag.isInline`. The
+`bold`/`italic`/`deleted`/`inserted`/`superscript`/`subscript`/`span` tags
+are Textile-only phrase modifiers (docs/TEXTILE-PARITY.md §1); Markdown
+never produces them. `Data` carries `heading` level (1..6), list
+kind/marker metadata/start/looseness, the borrowed `text` slice,
+arena-owned `code_span` content, arena-owned `code_block` content/info,
 the arena-owned `html_block` verbatim content,
 the arena-owned `link` href/title,
-the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
+the arena-owned `image` src/alt/title, the arena-owned `autolink` href/label,
+or the `footnote_ref` number (Textile `[N]` references; Markdown never
+produces it).
 `raw_html` has no data payload; its source bytes are read from `Node.span`.
 
 ## Design decisions
@@ -176,6 +179,7 @@ emit them in a fixed documented order.
 | `span` | Textile `%x%` | `.span` (no attributes yet) |
 | `` `code span` `` | `@code@` | `.code_span` (arena-owned payload: Markdown §6.1-normalized vs Textile-verbatim) |
 | `[x](url "title")` | Textile `"text":url`, `"text (title)":url` | `.link` (arena-owned href/title) |
+| (no Markdown equivalent) | Textile `[N]` footnote references + `fnN.` blocks | `.footnote_ref` (number) inline; `.paragraph` with `class="footnote" id="fnN"` attrs + leading `.superscript` (docs/TEXTILE-PARITY.md §11) |
 | `![alt](url "title")` | Textile `!url!`, `!url(alt)!`, `!url!:href` | `.image` (arena-owned src/alt/title) |
 | `<scheme:...>` / `<a@b.c>` | (Textile has no autolink; literal) | `.autolink` (arena-owned href/label) |
 | raw HTML tag (`<tag>`, comment, PI, declaration, CDATA) | literal text | `.raw_html` in Markdown; `.text` in Textile |

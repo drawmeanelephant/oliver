@@ -51,7 +51,9 @@ consulted.
 | `bc.` block code | `.code_block` (escaped content, `escape` flag) | `<pre><code>` with `<`/`>` escaped | implemented (T11) |
 | `pre.` preformatted text | `.code_block` (verbatim, `escape = false`) | `<pre>` verbatim | implemented (T11) |
 | `bq..` extended quote | one `.block_quote` of blank-line-separated `.paragraph`s | `<blockquote><p>…</p><p>…</p></blockquote>` | implemented (T12) |
-| `bc..` / `pre..` extended code | `.code_block` (blank lines as content) | `<pre><code>` / `<pre>` with blank lines | implemented (T12) |
+| `bc..`/`pre..` extended code | `.code_block` with blank lines as content | `<pre><code>` / verbatim `<pre>` | implemented (T12) |
+| `[N]` footnote reference | `.footnote_ref` (number) | `<sup class="footnote"><a href="#fnN">N</a></sup>` | implemented (T13) |
+| `fnN.` footnote block | `.paragraph` (attrs `class="footnote" id="fnN"`, leading `.superscript`) | `<p class="footnote" id="fnN"><sup>N</sup> body</p>` | implemented (T13) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -76,16 +78,17 @@ planned/deferred. The notable ones, so the record is honest:
   CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
   bodies literal (fixture `image-literal`).
-- **Block-quote citations (`bq.:URL`)**, **footnotes**,
-  **line attributes**, **`==` escaping**, and the
+- **Block-quote citations (`bq.:URL`)**, **line attributes**,
+  **`==` escaping**, and the
   **character-replacement macros** (curly quotes, em/en dashes, ellipsis,
   `(c)`/`(r)`/`(tm)`). All planned/deferred in the feature matrix.
 
 Tables were the last large *block* gap; they are now implemented (T8) —
 see §6. The largest remaining *inline* gap, link aliases, is now
 implemented too (T9) — see §7. Block attributes are implemented (T10) —
-see §8 — `bc.`/`pre.` block code is implemented (T11) — see §9 — and
-`bq..`/`bc..`/`pre..` extended blocks are implemented (T12) — see §10.
+see §8 — `bc.`/`pre.` block code is implemented (T11) — see §9 —
+`bq..`/`bc..`/`pre..` extended blocks are implemented (T12) — see §10 —
+and footnotes (`fnN.`/`[N]`) are implemented (T13) — see §11.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -451,5 +454,38 @@ single-period forms), `p..`/`h1..` (not extended signatures — Oliver
 implements only the three forms the references discuss), and the
 near-miss `bq..x` all stay ordinary text. A single-period `bq.` still
 ends at the first blank line.
+
+## 11. Footnotes (T13): pinned behaviors
+
+Both references describe the same mechanism — Hobix "Footnotes" and
+Textile 2 "Footnotes". A `[N]` marker inline becomes a superscript link
+to the footnote, and an `fnN.` paragraph provides its content. Oliver
+renders the **Textile 2 form** (the newer, classed rendering):
+
+- `[N]` → `<sup class="footnote"><a href="#fnN">N</a></sup>`, where `N`
+  is the digit run inside the brackets (any number of digits; `[12]` is
+  valid, and numbers beyond `u16` stay literal).
+- `fnN. body` → `<p class="footnote" id="fnN"><sup>N</sup> body</p>` —
+  the structural `class="footnote" id="fnN"` plus a leading superscript
+  whose span is exactly the marker's `fnN`, then a space text node, then
+  the body (Hobix's rendered example shows the same space).
+
+**Modifiers.** The §8 block-attribute set applies between the digits and
+`fnN.`'s period (`fn1{color:blue}.`, `fn2>.`). The structural
+`class`/`id` always come first and win; user modifiers contribute their
+`style` and `lang` after them (the renderer writes attrs in order, so a
+user class/id would duplicate the structural pair). Pinned by
+`footnote-attr`.
+
+**Block behavior.** A `fnN.` signature is a paragraph signature: it
+interrupts an open block, and it terminates an open extended block
+(§10). Empty signatures (`fn1. `, `fn1{color:red}. ` — no content) stay
+literal, like the other block signatures.
+
+**Literal fallbacks (pinned by `footnote-literal`).** Non-digit
+brackets (`[x]`, `[abc]`), a digit run not closed by `]` (`[1x]`), a
+marker without a digit run (`fn.`), a non-digit marker (`fnx.`), and
+empty signatures all stay ordinary text. `[N]` is recognized in any
+inline position, including inside a footnote block itself.
 
 

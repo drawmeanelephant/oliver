@@ -136,17 +136,21 @@ pub const Tag = enum {
     /// A line break that renders as `<br />` in HTML (Markdown hard break,
     /// Textile line break).
     hard_break,
+    /// A Textile footnote reference `[N]`: renders as
+    /// `<sup class="footnote"><a href="#fnN">N</a></sup>` (Textile 2
+    /// "Footnotes"). Leaf: the payload is the footnote number.
+    footnote_ref,
 
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => true,
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => false,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => true,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref => true,
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => false,
         };
     }
@@ -165,6 +169,8 @@ pub const Data = union(enum) {
     /// `.heading`: level, 1..6, plus the Textile block attributes
     /// (`hN(...).`/`hN{...}.` signatures); Markdown headings carry none.
     heading: Heading,
+    /// `.footnote_ref`: the footnote number (Textile `[N]` references).
+    footnote_ref: u16,
     /// `.text`: borrowed slice of the document source.
     text: []const u8,
     /// `.code_span`: normalized content. Arena-owned copy (not a source
