@@ -1525,6 +1525,86 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/unicode.textile"),
         .expected = @embedFile("fixtures/textile/unicode.html"),
     },
+    // --- phrase modifiers (Textile 2 inline formatting; both references) ---
+    .{
+        .name = "phrase-modifiers",
+        .input = @embedFile("fixtures/textile/phrase-modifiers.textile"),
+        .expected = @embedFile("fixtures/textile/phrase-modifiers.html"),
+    },
+    .{
+        .name = "phrase-nesting",
+        .input = @embedFile("fixtures/textile/phrase-nesting.textile"),
+        .expected = @embedFile("fixtures/textile/phrase-nesting.html"),
+    },
+    .{
+        .name = "phrase-boundaries",
+        .input = @embedFile("fixtures/textile/phrase-boundaries.textile"),
+        .expected = @embedFile("fixtures/textile/phrase-boundaries.html"),
+    },
+    .{
+        .name = "phrase-in-heading",
+        .input = @embedFile("fixtures/textile/phrase-in-heading.textile"),
+        .expected = @embedFile("fixtures/textile/phrase-in-heading.html"),
+    },
+    // --- links (Textile 2; Hobix "External References") ---
+    .{
+        .name = "link-basic",
+        .input = @embedFile("fixtures/textile/link-basic.textile"),
+        .expected = @embedFile("fixtures/textile/link-basic.html"),
+    },
+    .{
+        .name = "link-title",
+        .input = @embedFile("fixtures/textile/link-title.textile"),
+        .expected = @embedFile("fixtures/textile/link-title.html"),
+    },
+    .{
+        .name = "link-bracket-trick",
+        .input = @embedFile("fixtures/textile/link-bracket-trick.textile"),
+        .expected = @embedFile("fixtures/textile/link-bracket-trick.html"),
+    },
+    .{
+        .name = "link-literal",
+        .input = @embedFile("fixtures/textile/link-literal.textile"),
+        .expected = @embedFile("fixtures/textile/link-literal.html"),
+    },
+    // --- images (Hobix "External References"; Textile 2 "Images") ---
+    .{
+        .name = "image-basic",
+        .input = @embedFile("fixtures/textile/image-basic.textile"),
+        .expected = @embedFile("fixtures/textile/image-basic.html"),
+    },
+    .{
+        .name = "image-linked",
+        .input = @embedFile("fixtures/textile/image-linked.textile"),
+        .expected = @embedFile("fixtures/textile/image-linked.html"),
+    },
+    .{
+        .name = "image-literal",
+        .input = @embedFile("fixtures/textile/image-literal.textile"),
+        .expected = @embedFile("fixtures/textile/image-literal.html"),
+    },
+    // --- lists (Hobix "Lists"; Textile 2 "Lists") ---
+    .{
+        .name = "list-basic",
+        .input = @embedFile("fixtures/textile/list-basic.textile"),
+        .expected = @embedFile("fixtures/textile/list-basic.html"),
+    },
+    .{
+        .name = "list-nested",
+        .input = @embedFile("fixtures/textile/list-nested.textile"),
+        .expected = @embedFile("fixtures/textile/list-nested.html"),
+    },
+    .{
+        .name = "list-mixed",
+        .input = @embedFile("fixtures/textile/list-mixed.textile"),
+        .expected = @embedFile("fixtures/textile/list-mixed.html"),
+    },
+    // --- composition and opacity across inline families ---
+    .{
+        .name = "inline-composition",
+        .input = @embedFile("fixtures/textile/inline-composition.textile"),
+        .expected = @embedFile("fixtures/textile/inline-composition.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {
@@ -1583,6 +1663,41 @@ test "shared model: equivalent inputs render identically through one renderer" {
             .markdown = "> quote",
             .textile = "bq. quote",
             .expected = "<blockquote>\n<p>quote</p>\n</blockquote>\n",
+        },
+        // Textile `*x*` (strong) converges with Markdown `**x**`; Textile
+        // `_x_` (emphasis) with Markdown `*x_`.
+        .{
+            .markdown = "**Hello**",
+            .textile = "*Hello*",
+            .expected = "<p><strong>Hello</strong></p>\n",
+        },
+        .{
+            .markdown = "*Hello*",
+            .textile = "_Hello_",
+            .expected = "<p><em>Hello</em></p>\n",
+        },
+        // Textile `"text":url` converges with the Markdown inline link.
+        .{
+            .markdown = "[x](http://u)",
+            .textile = "\"x\":http://u",
+            .expected = "<p><a href=\"http://u\">x</a></p>\n",
+        },
+        // Textile `!url!` converges with the Markdown empty-alt image.
+        .{
+            .markdown = "![](img.png)",
+            .textile = "!img.png!",
+            .expected = "<p><img src=\"img.png\" alt=\"\" /></p>\n",
+        },
+        // Textile `*`/`#` lists converge with Markdown lists.
+        .{
+            .markdown = "* one\n* two",
+            .textile = "* one\n* two",
+            .expected = "<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n",
+        },
+        .{
+            .markdown = "1. one\n2. two",
+            .textile = "# one\n# two",
+            .expected = "<ol>\n<li>one</li>\n<li>two</li>\n</ol>\n",
         },
     };
     for (pairs) |p| {

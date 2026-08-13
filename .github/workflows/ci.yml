@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: fmt + tests + conformance gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ziglang/setup-zig was deleted in the Zig org's GitHub->Codeberg
+      # migration (Nov 2025); mlugg/setup-zig is its maintained successor
+      # and a drop-in replacement supporting the same `version` input.
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Format check
+        run: zig fmt --check build.zig build.zig.zon src tests tools
+
+      - name: Full test suite
+        run: zig build test --summary all
+
+      # The classified conformance gate binds Oliver to the exact official
+      # CommonMark 0.31.2 corpus (byte count, example count, and SHA-256 are
+      # verified first) and fails on any supported regression, unexpected
+      # pass, or changed divergence. The corpus is fetched per
+      # docs/TESTS.md; the harness refuses a different file.
+      - name: Fetch official CommonMark 0.31.2 corpus
+        run: curl -fsSL -o spec.txt https://spec.commonmark.org/0.31.2/spec.txt
+
+      - name: Classified conformance gate (652/652)
+        run: zig build spec-conformance -- spec.txt --gate

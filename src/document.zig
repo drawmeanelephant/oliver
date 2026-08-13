@@ -11,8 +11,9 @@
 //! - The root node is always a `.document` whose children are blocks.
 //! - Block tags contain block or inline children as documented per tag;
 //!   `thematic_break`, `code_block`, and `html_block` are childless leaves.
-//! - `emphasis`/`strong`/`link` contain inline children; the leaf inline
-//!   tags (`text`, `code_span`, `image`, `autolink`, `raw_html`,
+//! - `emphasis`/`strong`/`bold`/`italic`/`deleted`/`inserted`/
+//!   `superscript`/`subscript`/`span`/`link` contain inline children; the
+//!   leaf inline tags (`text`, `code_span`, `image`, `autolink`, `raw_html`,
 //!   `soft_break`, `hard_break`) never have children.
 //! - `list` children are `list_item` blocks; `list_item` children are blocks.
 //! - `Node.data.text` always points into the document's source bytes;
@@ -59,12 +60,32 @@ pub const Tag = enum {
     list_item,
     /// Plain text. `data.text` is a slice of the source.
     text,
-    /// Emphasized inline content (Markdown `*x*`, `_x_`). Children: inlines.
-    emphasis,
-    /// Strongly emphasized inline content (Markdown `**x**`, `__x__`).
+    /// Emphasized inline content (Markdown `*x*`, `_x_`; Textile `_x_`).
     /// Children: inlines.
+    emphasis,
+    /// Strongly emphasized inline content (Markdown `**x**`, `__x__`; Textile
+    /// `*x*`). Children: inlines.
     strong,
-    /// Inline code (Markdown backtick span; Textile `@x@` planned). No
+    /// Bold inline content (Textile `**x**`). Children: inlines. Textile
+    /// distinguishes bold `**x**` → `<b>` from strong `*x*` → `<strong>`;
+    /// Markdown has no bold tag.
+    bold,
+    /// Italic inline content (Textile `__x__`). Children: inlines. Textile
+    /// distinguishes italic `__x__` → `<i>` from emphasis `_x_` → `<em>`;
+    /// Markdown has no italic tag.
+    italic,
+    /// Deleted inline content (Textile `-x-`). Children: inlines.
+    deleted,
+    /// Inserted inline content (Textile `+x+`). Children: inlines.
+    inserted,
+    /// Superscript inline content (Textile `^x^`). Children: inlines.
+    superscript,
+    /// Subscript inline content (Textile `~x~`). Children: inlines.
+    subscript,
+    /// A generic inline span (Textile `%x%`). Children: inlines. No payload:
+    /// attribute-bearing forms (`%{style}x%` etc.) are a later milestone.
+    span,
+    /// Inline code (Markdown backtick span; Textile `@x@`). No
     /// children; `data.code_span` is the normalized content, one of the text
     /// payloads owned by the document arena rather than borrowed from the
     /// source (newlines become spaces, so it cannot be a source slice).
@@ -101,13 +122,13 @@ pub const Tag = enum {
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item => true,
-            .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => false,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => true,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break => true,
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item => false,
         };
     }

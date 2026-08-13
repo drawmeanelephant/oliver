@@ -1,0 +1,4 @@
+!>obake.gif!
+!a b.png!
+!img.png
+!img.png!word

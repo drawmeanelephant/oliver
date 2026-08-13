@@ -32,7 +32,7 @@ divergences.
 | fenced code blocks | implemented | §4.5, per docs/FENCED-CODE.md. Backtick or tilde opener of length ≥3 with ≤3 leading columns; same-marker closer at least as long, ≤3-column indent, trailing spaces/tabs only. Backtick info strings reject backticks; the complete trimmed info string resolves §2.4 backslash escapes and §2.5 entities, is retained, and its first word becomes an escaped `language-…` class. Content is literal, removes up to the opener indentation, normalizes every content line ending to `\n`, and closes without backtracking at the containing block/document end. Emits arena-owned `.code_block { content, info }` and deterministic `<pre><code>`. **Scorecard: 29/29**. |
 | indented code blocks | implemented | §4.4. One or more chunks of lines each indented ≥4 columns (tabs expand to four-column tab stops), separated by blank lines. Cannot interrupt a paragraph; ends at the first line with <4 columns of indentation, so a paragraph may follow immediately. Content is the literal bytes minus four columns of indentation — a tab straddling the boundary leaves its remaining columns as spaces — with blank lines between chunks retained, trailing blank lines dropped, and one final newline. List and quote composition follows the container stack. Emits arena-owned `.code_block { content, info = null }`. **Scorecard: 12/12**. |
 | HTML blocks | implemented | §4.6, all seven types, per docs/HTML-BLOCKS.md. Type 1 (`<script|pre|style|textarea`, case-insensitive), type 2 (`<!--`), type 3 (`<?`), type 4 (`<!` + letter), type 5 (`<![CDATA[`) end at their matching terminator on the line (`</script>` etc., `-->`, `?>`, `>`, `]]>`) or a blank line; type 6 (`<`/`</` + one of the 62 HTML block-tag names) and type 7 (a complete open/closing tag on its own line) end at a blank line (or containing-block boundary). Types 1–6 can interrupt a paragraph; type 7 cannot. Content is the container-stripped remainder with leading whitespace preserved, emitted verbatim as a `.html_block` leaf (pass-through policy, same as inline HTML). **Scorecard: 44/44**. |
-| tables (GFM extension) | planned | Not part of CommonMark. Oliver will define tables as an explicit extension with its own chosen syntax (GFM-style `|` rows + delimiter row), documented before implementation. |
+| tables (GFM extension) | planned | Not part of CommonMark. Oliver will define tables as an explicit extension with its own chosen syntax (GFM-style `|` rows + delimiter row), documented before implementation. This row is the contract doc the docs-authorship decision points at (recorded ambiguity 21). |
 | link reference definitions | implemented | §4.7: `[label]: destination ["title"]` collected during the block pass, before any inline parsing (a use may precede its definition). Extracted at paragraph close: the first line must be `[` + label + `]` + optional spaces/tabs + destination; an optional title may follow on the same line (separated by spaces/tabs) or on the next line; nothing else may follow the title on its line; indentation beyond 3 spaces cannot start a definition. First definition wins per label; labels are case-folded (Unicode full case fold, §6.3) with internal whitespace collapsed to a single space; an unclosed `[` cannot be a definition. Paragraphs consisting solely of definitions disappear from output; a definition may sit inside a paragraph of other content (the surrounding paragraph keeps its own inline pass). |
 | blank lines | implemented | §3; whitespace-only lines separate blocks and are never part of content. |
 
@@ -100,7 +100,7 @@ below).
 | line breaks | implemented | Newline inside a paragraph → hard break → `<br />`. Textile 2 is explicit ("newlines for XHTML content receive a `<br />` tag at the end of the line, with the exception of the last line in the paragraph"); Hobix prose agrees ("Line breaks are converted to HTML breaks") though its rendered example shows a plain newline — recorded below. |
 | block quotes | implemented | Single-period `bq.` from the Hobix Textile Reference, Movable Type Textile 2 Syntax, and the current Textile Markup Language Documentation. The signature must be followed by space/tab; all separator whitespace is consumed. Unmarked following lines continue one paragraph inside `.block_quote` with Textile hard breaks until a blank line or a recognized `p.`, `hN.`, or `bq.` signature; signatures interrupt an open block. The quote and child paragraph spans exclude the marker/separator and cover their content. An empty `bq. ` stays literal because the sources do not specify empty quote behavior. Extended `bq..` and citation `bq.:URL` remain literal/deferred. |
 | pre/code | planned | `pre.` and `bc.` (block code, which also escapes `<`/`>`). |
-| lists | planned | `*` unordered, `#` ordered; nesting by repeating the marker (`**` = nested). Styling markers (`(class#id)* one` vs `*(class#id) one`) from Textile 2. |
+| lists | implemented | `*` unordered, `#` ordered; nesting by repeating the marker (`**` = nested), per both references. Each item is one line; lists are tight; a blank line, a block signature, or a non-marker line closes the list tree. A different marker at the same depth starts a sibling list; a depth jump opens empty intermediate items; `*#` runs or markers without a following space/tab are ordinary text (docs/TEXTILE-PARITY.md §3). Styling markers (`(class#id)* one` vs `*(class#id) one`) and multi-line items remain deferred. |
 | tables | planned | `|a|b|c|` rows; `|_. header|`; cell modifiers (`{style}`, `(class)`, alignment, `\2` colspan, `/3` rowspan); table/row attributes. |
 | footnotes | planned | `fn1.` blocks and `[1]` references. |
 | escaping blocks | planned | `==` delimited regions and `notextile.` (raw) — Textile 2 documents `==`; Oliver will also accept `notextile.` where documented. |
@@ -114,21 +114,21 @@ below).
 | feature | status | Oliver behavior / notes |
 | --- | --- | --- |
 | plain text | implemented | Verbatim bytes; escaped at render like Markdown (shared renderer). |
-| emphasis `_x_` | planned | → `<em>`. Both references agree. |
-| strong `*x*` | planned | → `<strong>`. Both references agree. |
-| bold `**x**` / italic `__x__` | planned | → `<b>` / `<i>`. Both references agree (Hobix: "doubling the underscores or asterisks"). |
-| deleted `-x-` / inserted `+x+` | planned | → `<del>` / `<ins>`. Both references agree. |
-| superscript `^x^` / subscript `~x~` | planned | → `<sup>` / `<sub>`. Both references agree. |
+| emphasis `_x_` | implemented | → `<em>`. Both references agree. Same-line, with the shared whitespace/punctuation boundary contract (docs/TEXTILE-PARITY.md §3). |
+| strong `*x*` | implemented | → `<strong>`. Both references agree. Same boundary contract. |
+| bold `**x**` / italic `__x__` | implemented | → `<b>` / `<i>`. Both references agree (Hobix: "doubling the underscores or asterisks"). Runs of 3+ stay entirely literal. |
+| deleted `-x-` / inserted `+x+` | implemented | → `<del>` / `<ins>`. Both references agree. |
+| superscript `^x^` / subscript `~x~` | implemented | → `<sup>` / `<sub>`. Both references agree. |
 | code `@x@` | implemented | Same-line code phrase → shared opaque `.code_span` → `<code>`; payload bytes are verbatim and the full `@...@` source range is the node span. Textile 2 explicitly requires `<`/`>` escaping; the shared renderer also escapes `&`, `"`, and NUL. Open/close operators must touch non-whitespace content and use outside Unicode whitespace/punctuation boundaries; intraword, empty, edge-whitespace, unmatched, embedded-`@`, and cross-line shapes fall back literally. Backslash has no escape role in the cited references. Exact clean-room contract: `docs/TEXTILE-INLINE-CODE.md`. |
 | citation `??x??` | planned | → `<cite>`. Hobix only. |
-| span `%x%` | planned | → `<span>` (with attributes). Both references agree. |
+| span `%x%` | implemented | → `<span>` (no attributes yet). Both references agree. Attribute forms (`%{style}x%` etc.) stay planned. |
 | big `++x++` / small `--x--` | deferred | Textile 2 only; Hobix does not document them. Oliver will not implement until the inline milestone and will record the choice. |
-| links | planned | `"text":url`, optional `(title)` inside the quotes, aliases `[alias]url` + `"text":alias`. Both references agree on the core form. |
-| images | planned | `!url!`, alt `(alt)`, size modifiers, link attachment `!url!:href`, alignment/attribute modifiers. Both references agree on core; Textile 2 adds sizing syntax. |
+| links | implemented | `"text":url`, optional `(title)` inside the quotes (both references). URL runs to whitespace or `)]}`; trailing sentence punctuation is excluded (Hobix); the bracket trick `You["gotta":url]seethis!` works (Textile 2). Display text is plain text (not re-scanned). Aliases `[alias]url` + `"text":alias` remain planned. See docs/TEXTILE-PARITY.md §3. |
+| images | implemented | `!url!`, alt `(alt)` (Hobix) / ` (alt)` (Textile 2), link attachment `!url!:href` (Hobix). The alt doubles as the title per the Hobix example. Size, alignment, and attribute modifiers remain planned; modifier-prefixed or whitespace-containing bodies stay literal. See docs/TEXTILE-PARITY.md §3. |
 | acronyms | deferred | `CSS(Cascading Style Sheets)` → `<acronym title=...>`. Hobix only. |
 | escaping | planned | `==...==` inline region (Textile 2). Backslash escaping varies by version and is unresolved in the references; Oliver will choose one documented form when implementing. |
 | character replacements | deferred | Curly quotes, `--`→em-dash, `...`→ellipsis, `(c)`/`(r)`/`(tm)`, Textile 2 macros. Oliver deliberately defers all implicit typography: implicit text transformation is the kind of magic a library should make explicit, and it is not needed by the migration consumers. |
-| whitespace sensitivity | planned | Textile 2: inline operators need whitespace before/after to be recognized; brackets/braces can force recognition. The boundary rule is implemented for `@code@`; bracket/brace forcing and the remaining phrase operators stay planned. |
+| whitespace sensitivity | implemented | Textile 2: inline operators need whitespace before/after to be recognized; brackets/braces can force recognition. The boundary rule (Unicode whitespace or punctuation/symbol before an opener and after a closer, non-whitespace content edges) is implemented uniformly for `@code@`, every phrase operator, links, and images (docs/TEXTILE-PARITY.md §3). Bracket/brace forcing stays planned. |
 
 ## Recorded ambiguities and chosen behaviors
 
@@ -222,3 +222,42 @@ below).
     the only closer candidate; invalid shapes remain literal; backslash is
     inert.** Bracket/brace forcing and `==...==` escaping are later features.
     See `docs/TEXTILE-INLINE-CODE.md`.
+18. **Textile phrase operators share the `@code@` boundary contract.** Both
+    references agree on the operator set and the doubling rule (`**` → bold,
+    `__` → italic); neither defines nesting, run splitting, intraword
+    enforcement, or mismatched-closer behavior. **Oliver: openers/closers use
+    the same Unicode whitespace/punctuation boundaries as `@code@`; matching
+    is strict LIFO by character and run length; phrase content is scanned for
+    nested phrases; runs longer than any documented operator (and unmatched
+    openers) stay entirely literal; `++`/`--` big/small are deferred.**
+    See docs/TEXTILE-PARITY.md §3.
+19. **Textile link/image URL edges.** Both references require whitespace
+    around a hyperlink and say common punctuation may follow; Textile 2
+    documents the bracket/brace trick. Neither defines URL terminators or
+    display-text formatting. **Oliver: the URL stops at whitespace or
+    `)]}`; trailing sentence punctuation (`.`, `,`, `;`, `:`, `!`, `?`,
+    quotes, `)]}`) is excluded; link display text and image src/alt are
+    opaque plain text; the image `(alt)` doubles as title.**
+    See docs/TEXTILE-PARITY.md §3.
+20. **Textile list termination and item shape.** Both references show lists
+    as marker-prefixed lines and nesting by marker count; neither defines
+    multi-line items, lazy continuation, mixed markers at one depth, or
+    depth jumps. **Oliver: items are single lines; lists are tight; a blank
+    line, a block signature, or a non-marker line closes the tree; a
+    different marker at the same depth starts a sibling list; a depth jump
+    opens empty intermediate items.** See docs/TEXTILE-PARITY.md §3.
+21. **The repo's own docs use GFM tables by choice.** The authoring docs
+    (README.md plus ten `docs/*.md`: ARCHITECTURE, BLOCKS-PARSING,
+    DOCUMENT-MODEL, ENTITIES, FEATURE-MATRIX, IMAGES-PARSING,
+    INLINE-PARSING, TESTS, TEXTILE-PARITY, WORK-LEDGER) use GFM table
+    syntax, which Oliver renders literally today. This is deliberate: the
+    docs are read on GitHub and in source, where GFM tables are the native
+    format, and no Oliver consumer renders them (Oliver is markup
+    infrastructure; static-site generation is a documented non-goal).
+    Converting them to raw-HTML `<table>` blocks would let Oliver render
+    them today but would impose an authoring tax on every future table.
+    **Oliver: defer. The update points when the GFM tables extension lands
+    are the "tables (GFM extension)" row above (the contract doc) and the
+    table-shaped assertions that pin it — the DOCUMENT-MODEL.md
+    convergence table, the fixture index, and the shared-model convergence
+    pairs in tests/fixtures_test.zig.**
