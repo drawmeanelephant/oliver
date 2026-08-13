@@ -1,0 +1,11 @@
+p(foo not closed
+
+p>.no-space
+
+p.. double
+
+bq.. extended stays literal
+
+bq: citation stays literal
+
+h1x. not a heading

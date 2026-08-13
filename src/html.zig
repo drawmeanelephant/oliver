@@ -202,7 +202,9 @@ fn writeOpen(
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .block_quote => {
-            try writer.writeAll("<blockquote>\n");
+            try writer.writeAll("<blockquote");
+            try writeAttrs(writer, node.data.block_quote.attrs);
+            try writer.writeAll(">\n");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .table => {
@@ -268,14 +270,20 @@ fn writeOpen(
         .paragraph => {
             // §5.3: a paragraph directly in a tight list's item renders
             // without `<p>` (`suppress_p` is computed at push time).
-            if (!suppress_p) try writer.writeAll("<p>");
+            if (!suppress_p) {
+                try writer.writeAll("<p");
+                try writeAttrs(writer, node.data.paragraph.attrs);
+                try writer.writeByte('>');
+            }
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = suppress_p } });
         },
         .heading => {
-            const level = clampHeading(node.data.heading);
+            const level = clampHeading(node.data.heading.level);
             var buf: [8]u8 = undefined;
-            const tag = try std.fmt.bufPrint(&buf, "<h{d}>", .{level});
+            const tag = try std.fmt.bufPrint(&buf, "<h{d}", .{level});
             try writer.writeAll(tag);
+            try writeAttrs(writer, node.data.heading.attrs);
+            try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .thematic_break => {
@@ -442,7 +450,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
             }
         },
         .heading => {
-            const level = clampHeading(node.data.heading);
+            const level = clampHeading(node.data.heading.level);
             var buf: [8]u8 = undefined;
             const tag = try std.fmt.bufPrint(&buf, "</h{d}>\n", .{level});
             try writer.writeAll(tag);
@@ -600,7 +608,7 @@ fn addText(doc: *document.Document, parent: *document.Node, text: []const u8) !v
 test "html: escaping" {
     var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
     defer doc.deinit();
-    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
     try doc.appendChild(doc.root, p);
     try addText(&doc, p, "a & b < c > d \" e \x00 f");
     var out = try renderDoc(&doc);
@@ -612,7 +620,7 @@ test "html: soft vs hard breaks and void option" {
     {
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         try addText(&doc, p, "a");
         try doc.appendChild(p, try doc.createNode(.soft_break, .{ .start = 0, .end = 0 }, .none));
@@ -624,7 +632,7 @@ test "html: soft vs hard breaks and void option" {
     {
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         try addText(&doc, p, "a");
         try doc.appendChild(p, try doc.createNode(.hard_break, .{ .start = 0, .end = 0 }, .none));
@@ -647,8 +655,8 @@ test "html: heading clamp and empty document" {
     {
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        try doc.appendChild(doc.root, try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = 0 }));
-        try doc.appendChild(doc.root, try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = 7 }));
+        try doc.appendChild(doc.root, try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = .{ .level = 0 } }));
+        try doc.appendChild(doc.root, try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = .{ .level = 7 } }));
         var out = try renderDoc(&doc);
         defer out.deinit(testing.allocator);
         try testing.expectEqualStrings("<h1></h1>\n<h6></h6>\n", out.items);
@@ -669,7 +677,7 @@ test "html: emphasis and strong render from hand-built documents" {
     // §15, "Renderer-only").
     var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
     defer doc.deinit();
-    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
     try doc.appendChild(doc.root, p);
     const em = try doc.createNode(.emphasis, .{ .start = 0, .end = 12 }, .none);
     try doc.appendChild(p, em);
@@ -689,7 +697,7 @@ test "html: code span content is escaped, not re-parsed" {
     // code_span content as inline markup (leaf inline, docs/DOCUMENT-MODEL).
     var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
     defer doc.deinit();
-    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
     try doc.appendChild(doc.root, p);
     const cs = try doc.createNode(.code_span, .{ .start = 0, .end = 14 }, .{ .code_span = "a <b>& \"c\"`" });
     try doc.appendChild(p, cs);
@@ -702,7 +710,7 @@ test "html: raw HTML leaves write source spans verbatim" {
     const input = "<b>&</b>";
     var doc = try document.Document.init(testing.allocator, .{ .bytes = input });
     defer doc.deinit();
-    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = @intCast(input.len) }, .none);
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = @intCast(input.len) }, .{ .paragraph = .{} });
     try doc.appendChild(doc.root, p);
     try doc.appendChild(p, try doc.createNode(.raw_html, .{ .start = 0, .end = 3 }, .none));
     try doc.appendChild(p, try doc.createNode(.text, .{ .start = 3, .end = 4 }, .{ .text = doc.text(.{ .start = 3, .end = 4 }) }));
@@ -719,7 +727,7 @@ test "html: link renders href and title with escaping policy" {
     {
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         const lnk = try doc.createNode(.link, .{ .start = 0, .end = 0 }, .{
             .link = .{ .href = "/uri", .title = "the title" },
@@ -735,7 +743,7 @@ test "html: link renders href and title with escaping policy" {
         // encoded; `&` is HTML-escaped; safe URL chars stay.
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         const lnk = try doc.createNode(.link, .{ .start = 0, .end = 0 }, .{
             .link = .{ .href = "/my url\"\\foo()a&b", .title = null },
@@ -749,7 +757,7 @@ test "html: link renders href and title with escaping policy" {
         // title escaping: HTML-escaped, no percent-encoding.
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         const lnk = try doc.createNode(.link, .{ .start = 0, .end = 0 }, .{
             .link = .{ .href = "/u", .title = "a \"b\" & <c>" },
@@ -764,7 +772,7 @@ test "html: link renders href and title with escaping policy" {
         // No title attribute when the title is absent.
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         const lnk = try doc.createNode(.link, .{ .start = 0, .end = 0 }, .{
             .link = .{ .href = "/u", .title = null },
@@ -783,7 +791,7 @@ test "html: image renders as a void element with fixed attribute order" {
     {
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         try doc.appendChild(p, try doc.createNode(.image, .{ .start = 0, .end = 0 }, .{
             .image = .{ .src = "/uri", .alt = "foo", .title = "the title" },
@@ -796,7 +804,7 @@ test "html: image renders as a void element with fixed attribute order" {
         // Empty alt is always emitted; no title attribute when absent.
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         try doc.appendChild(p, try doc.createNode(.image, .{ .start = 0, .end = 0 }, .{
             .image = .{ .src = "/u", .alt = "", .title = null },
@@ -810,7 +818,7 @@ test "html: image renders as a void element with fixed attribute order" {
         // HTML-escaped like text.
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         try doc.appendChild(p, try doc.createNode(.image, .{ .start = 0, .end = 0 }, .{
             .image = .{ .src = "/my url\"&x", .alt = "a <b> & \"c\"", .title = "t&t" },
@@ -826,7 +834,7 @@ test "html: image renders as a void element with fixed attribute order" {
         // void_trailing_slash = false gives the HTML5-style <img>.
         var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
         defer doc.deinit();
-        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
         try doc.appendChild(doc.root, p);
         try doc.appendChild(p, try doc.createNode(.image, .{ .start = 0, .end = 0 }, .{
             .image = .{ .src = "/u", .alt = "a", .title = null },
@@ -853,7 +861,7 @@ test "html: tight and loose lists keep block framing deterministic" {
 
     const first = try doc.createNode(.list_item, .{ .start = 0, .end = 0 }, .none);
     try doc.appendChild(list, first);
-    const first_p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    const first_p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
     try doc.appendChild(first, first_p);
     try addText(&doc, first_p, "one");
 
@@ -865,13 +873,13 @@ test "html: tight and loose lists keep block framing deterministic" {
     try doc.appendChild(first, nested);
     const nested_item = try doc.createNode(.list_item, .{ .start = 0, .end = 0 }, .none);
     try doc.appendChild(nested, nested_item);
-    const nested_p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    const nested_p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
     try doc.appendChild(nested_item, nested_p);
     try addText(&doc, nested_p, "three");
 
     const second = try doc.createNode(.list_item, .{ .start = 0, .end = 0 }, .none);
     try doc.appendChild(list, second);
-    const second_p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none);
+    const second_p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
     try doc.appendChild(second, second_p);
     try addText(&doc, second_p, "two");
 
@@ -894,8 +902,8 @@ test "html: tight and loose lists keep block framing deterministic" {
 test "html: mixed blocks render independently of dialect" {
     var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
     defer doc.deinit();
-    try doc.appendChild(doc.root, try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = 2 }));
-    try doc.appendChild(doc.root, try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .none));
+    try doc.appendChild(doc.root, try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = .{ .level = 2 } }));
+    try doc.appendChild(doc.root, try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} }));
     var out = try renderDoc(&doc);
     defer out.deinit(testing.allocator);
     try testing.expectEqualStrings("<h2></h2>\n<p></p>\n", out.items);

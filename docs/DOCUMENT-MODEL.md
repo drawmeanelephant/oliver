@@ -165,6 +165,7 @@ emit them in a fixed documented order.
 | --- | --- | --- |
 | paragraph | paragraph / `p.` | `.paragraph` |
 | ATX/Setext heading | `hN.` heading | `.heading` (level) |
+| (no Markdown equivalent) | Textile block attributes `p(...).`, `hN{...}.`, `bq>.` (`{style}`, `(class#id)`, `[lang]`, alignment, padding) | ordered `attrs` (style/class/id/lang) on `.paragraph` / `.heading` / `.block_quote` (docs/TEXTILE-PARITY.md §8) |
 | thematic break | (planned) | `.thematic_break` |
 | fenced code block | `bc.` / `pre.` (planned) | `.code_block` (owned content/info) |
 | HTML block (Markdown §4.6 types 6/7) | (Textile has no HTML blocks; literal) | `.html_block` (owned verbatim content) |

@@ -17,7 +17,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | lead | M6 full conformance | §4.7 angle-destination separator rule; manifest/pins to 652/652 | after M5 | implemented on main (uncommitted) |
 | lead | M7 GFM tables extension | Markdown table open-leaf + header/delimiter/body parsing; `.table` family in model and HTML renderer; docs/TABLES.md contract | after M6 | integrated on main (PR #19) |
 | Textile worker | T8 Textile tables | Textile `|a|b|` block rows, cell/row/table modifiers, header-alignment propagation, flat-row rendering; Textile fixtures; no Markdown/core changes | after M7 (reuses the `.table` model family) | integrated on main (PR #20) |
-| Textile worker | T9 Textile link aliases | `[alias]url` definition lines + `"text":alias` references via a document-global alias table; Textile fixtures; no Markdown/core changes | after T8 | implemented on main (uncommitted) |
+| Textile worker | T9 Textile link aliases | `[alias]url` definition lines + `"text":alias` references via a document-global alias table; Textile fixtures; no Markdown/core changes | after T8 | integrated on main (PR #21) |
+| Textile worker | T10 Textile block attributes | `{style}`/`(class#id)`/`[lang]`/alignment/padding on `p.`/`hN.`/`bq.` signatures; block attrs in model + renderer; Textile fixtures; Markdown untouched | after T9 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -330,7 +331,42 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   (`"x":alias` ↔ `[x][a]`, byte-identical).
 - **Parallelism:** yes; Textile-local ownership, Markdown untouched.
 - **Integration:** after T8 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 163/163 tests green;
+- **State:** integrated on main (PR #21). 163/163 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T10 — Textile block attributes
+
+- **Objective:** implement the block attribute set (`{style}`,
+  `(class#id)`, `[lang]`, `< > = <>` alignment, `(`/`)` padding) on `p.`,
+  `hN.`, and `bq.` signatures — the last large documented block gap — so
+  block signatures carry the modifier machinery the table and alias work
+  already built.
+- **Authoritative sources:** Hobix Textile Reference "Attributes: Block
+  Attributes / Block Alignments" (class, id, class#id, style, lang, the
+  four alignments, `(`/`)` indentation, and the combined `h2()>.` /
+  `h3()>[no]{color:red}.` heading examples); Movable Type Textile 2
+  Syntax "Block Attributes". Both clean-room allowed.
+- **Seams:** `src/document.zig` (`.paragraph`/`.block_quote` gain attrs;
+  `.heading` becomes `{ level, attrs }`), `src/html.zig` (attrs on the
+  three block opens; `clampHeading` reads), `src/textile.zig` (a `.block`
+  modifier kind in `scanMods`; `parseBlockSignature`; reworked
+  `tryHeading`/`tryParagraphMarker`/`tryBlockQuoteMarker`; `emitHeading`
+  carries attrs), Textile fixtures/index, feature matrix, parity (new
+  §8), model/test/ledger docs, README. Markdown untouched.
+- **Acceptance:** the Hobix §4 examples byte-for-byte (`p(example1).`,
+  `p(#big-red).`, `p(example1#big-red2).`, `p{color:blue;margin:30px}.`
+  with `; ` normalization, `p[fr].`, the four alignments, `p(.`/`p((.`/
+  `p))).` padding, `h2()>.`, `h3()>[no]{color:red}.`); `bq` attrs land
+  on the `<blockquote>` with the inner paragraph unmarked; malformed
+  signatures (`p(foo not closed`, `p>.no-space`, `p..`, `bq..`, `bq:`,
+  `h1x.`) stay literal; the 652/652 gate is untouched.
+- **Tests:** 4 unit tests (paragraph attrs incl. `; ` normalization and
+  id-only, alignment/padding/heading combinations, blockquote placement,
+  literal fallbacks), 5 Textile fixture pairs (Hobix battery, combined
+  forms, bq attrs, heading attrs, literal).
+- **Parallelism:** yes; Textile + model/renderer, Markdown untouched.
+- **Integration:** after T9 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 167/167 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

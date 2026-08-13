@@ -155,8 +155,16 @@ pub const Tag = enum {
 /// Per-tag payload. Only the field matching the tag is meaningful.
 pub const Data = union(enum) {
     none,
-    /// `.heading`: level, 1..6.
-    heading: u8,
+    /// `.paragraph`: the Textile block attributes (`p(...).`/`p{...}.`
+    /// signatures), empty for plain paragraphs. Markdown paragraphs carry
+    /// none.
+    paragraph: Paragraph,
+    /// `.block_quote`: the Textile block attributes (`bq(...).`/`bq{...}.`
+    /// signatures), empty for plain quotes. Markdown quotes carry none.
+    block_quote: BlockQuote,
+    /// `.heading`: level, 1..6, plus the Textile block attributes
+    /// (`hN(...).`/`hN{...}.` signatures); Markdown headings carry none.
+    heading: Heading,
     /// `.text`: borrowed slice of the document source.
     text: []const u8,
     /// `.code_span`: normalized content. Arena-owned copy (not a source
@@ -203,6 +211,24 @@ pub const Data = union(enum) {
     /// Textile colspan/rowspan, and the cell's Textile attributes,
     /// resolved at parse time so the renderer never indexes across nodes.
     table_cell: TableCell,
+};
+
+/// The payload of a `.paragraph` node: the Textile block attributes in the
+/// fixed render order (style/class/id/lang; docs/TEXTILE-PARITY.md §8).
+pub const Paragraph = struct {
+    attrs: []const Attribute = &.{},
+};
+
+/// The payload of a `.block_quote` node: the Textile block attributes.
+pub const BlockQuote = struct {
+    attrs: []const Attribute = &.{},
+};
+
+/// The payload of a `.heading` node: the level (1..6) and the Textile
+/// block attributes.
+pub const Heading = struct {
+    level: u8,
+    attrs: []const Attribute = &.{},
 };
 
 /// The payload of a `.code_block` leaf. `content` uses `\n` line endings and
@@ -430,7 +456,7 @@ test "document: creation, spans, deterministic pre-order traversal" {
     var doc = try Document.init(std.testing.allocator, src);
     defer doc.deinit();
 
-    const h = try doc.createNode(.heading, .{ .start = 0, .end = 4 }, .{ .heading = 1 });
+    const h = try doc.createNode(.heading, .{ .start = 0, .end = 4 }, .{ .heading = .{ .level = 1 } });
     const t = try doc.createNode(.text, .{ .start = 2, .end = 4 }, .{ .text = "hi" });
     try doc.appendChild(h, t);
     try doc.appendChild(doc.root, h);

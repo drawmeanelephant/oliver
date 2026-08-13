@@ -61,6 +61,11 @@
 //!   A header cell's alignment becomes the default for the cells below it
 //!   in the same column (Textile 2); cells render as flat `<tr>` rows with
 //!   no thead/tbody (docs/TEXTILE-PARITY.md §7).
+//! - Block signatures carry the full attribute set: `p{style}.`,
+//!   `p(class#id).`, `p[lang].`, `p().` indentation, and `p<.`/`p>.`/`p=.`/
+//!   `p<>.` alignment — the modifiers sit between the marker and its
+//!   period, for `p`, `bq`, and `hN` alike (Hobix §4;
+//!   docs/TEXTILE-PARITY.md §8).
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -121,22 +126,22 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try appendTableRow(doc, &table.?, row);
             continue;
         }
-        if (tryHeading(line)) |heading| {
+        if (try tryHeading(doc, line)) |heading| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
             try emitHeading(doc, line, heading, &defs);
             continue;
         }
-        if (tryParagraphMarker(line)) |content| {
+        if (try tryParagraphMarker(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try appendBlockContent(doc, &block, .paragraph, content, line.terminatorSpan());
+            try appendBlockContent(doc, &block, .paragraph, sig.attrs, sig.content, line.terminatorSpan());
             continue;
         }
-        if (tryBlockQuoteMarker(line)) |content| {
+        if (try tryBlockQuoteMarker(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try appendBlockContent(doc, &block, .block_quote, content, line.terminatorSpan());
+            try appendBlockContent(doc, &block, .block_quote, sig.attrs, sig.content, line.terminatorSpan());
             continue;
         }
         if (tryListMarker(line)) |lm| {
@@ -149,7 +154,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // §5, chosen behavior).
         if (lists.items.len > 0) closeLists(&lists);
         const kind: BlockKind = if (block) |active| active.kind else .paragraph;
-        try appendBlockContent(doc, &block, kind, line.contentSpan(), line.terminatorSpan());
+        try appendBlockContent(doc, &block, kind, &.{}, line.contentSpan(), line.terminatorSpan());
     }
     try closeBlock(doc, &block, &defs);
     closeLists(&lists);
@@ -161,6 +166,9 @@ const BlockKind = enum { paragraph, block_quote };
 const ActiveBlock = struct {
     kind: BlockKind,
     start: u32,
+    /// Block attributes from the opening signature's modifiers (empty for
+    /// unmarked paragraphs).
+    attrs: []const document.Attribute = &.{},
     lines: std.ArrayList(LineRef) = .empty,
 
     const LineRef = struct {
@@ -183,11 +191,12 @@ fn appendBlockContent(
     doc: *document.Document,
     block: *?ActiveBlock,
     kind: BlockKind,
+    attrs: []const document.Attribute,
     content: source.Span,
     terminator: source.Span,
 ) ParseError!void {
     if (block.* == null) {
-        block.* = .{ .kind = kind, .start = content.start };
+        block.* = .{ .kind = kind, .start = content.start, .attrs = attrs };
     }
     std.debug.assert(block.*.?.kind == kind);
     try block.*.?.lines.append(doc.allocator(), .{
@@ -206,12 +215,16 @@ fn closeBlock(doc: *document.Document, block: *?ActiveBlock, defs: *const AliasT
         .end = lines[lines.len - 1].content.end,
     };
     var parent = doc.root;
+    var para_attrs: []const document.Attribute = active.attrs;
     if (active.kind == .block_quote) {
-        const quote = try doc.createNode(.block_quote, span, .none);
+        // The `bq` signature's attributes belong to the `<blockquote>`;
+        // the single inner paragraph is unmarked.
+        const quote = try doc.createNode(.block_quote, span, .{ .block_quote = .{ .attrs = active.attrs } });
         try doc.appendChild(doc.root, quote);
         parent = quote;
+        para_attrs = &.{};
     }
-    const paragraph = try doc.createNode(.paragraph, span, .none);
+    const paragraph = try doc.createNode(.paragraph, span, .{ .paragraph = .{ .attrs = para_attrs } });
     try doc.appendChild(parent, paragraph);
 
     for (lines, 0..) |ref, i| {
@@ -298,7 +311,7 @@ fn appendListItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), lm:
         try doc.appendChild(parent, list);
         const item = try doc.createNode(.list_item, lm.content, .none);
         try doc.appendChild(list, item);
-        const para = try doc.createNode(.paragraph, lm.content, .none);
+        const para = try doc.createNode(.paragraph, lm.content, .{ .paragraph = .{} });
         try doc.appendChild(item, para);
         // Only the deepest item carries this line's content; intermediate
         // levels created by a depth jump get an empty item.
@@ -314,7 +327,7 @@ fn appendSiblingItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), 
     top.list.span.end = lm.content.end;
     const item = try doc.createNode(.list_item, lm.content, .none);
     try doc.appendChild(top.list, item);
-    const para = try doc.createNode(.paragraph, lm.content, .none);
+    const para = try doc.createNode(.paragraph, lm.content, .{ .paragraph = .{} });
     try doc.appendChild(item, para);
     try parseInlines(doc, para, lm.content, defs);
     top.item = item;
@@ -412,7 +425,7 @@ const Mods = struct {
     pad_right: u8 = 0,
 };
 
-const ModKind = enum { signature, row, cell };
+const ModKind = enum { signature, row, cell, block };
 
 /// A successful modifier scan.
 const ModScan = struct {
@@ -423,13 +436,13 @@ const ModScan = struct {
     dot_terminated: bool,
 };
 
-/// Recognizes one run of table modifier tokens starting at `i`: `{style}`,
-/// `(class#id)`, `[lang]`, `(`/`)` padding, `<`, `>`, `=`, cell-only `<>`,
-/// row/cell-only `^`/`~`/`_`, and cell-only `\n` colspan / `/n` rowspan.
-/// Returns null when any token is malformed or not allowed in the context,
-/// so the whole line stays literal. The run ends at the first `.`
-/// (dot-terminated; the caller checks the required following whitespace)
-/// or, for rows, directly at a `|` (Textile 2's no-period form).
+/// Recognizes one run of table/block modifier tokens starting at `i`:
+/// `{style}`, `(class#id)`, `[lang]`, `(`/`)` padding, `<`, `>`, `=`,
+/// cell/block-only `<>`, row/cell-only `^`/`~`/`_`, and cell-only `\n`
+/// colspan / `/n` rowspan. Returns null when any token is malformed or not
+/// allowed in the context, so the whole line stays literal. The run ends at
+/// the first `.` (dot-terminated; the caller checks the required following
+/// whitespace) or, for rows, directly at a `|` (Textile 2's no-period form).
 fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
     var m = Mods{};
     var j = i;
@@ -448,10 +461,12 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
                 j = close + 1;
             },
             '(' => {
-                // A `(` directly before `(` or `)` is padding (Hobix: each
-                // `(` adds 1em of left padding); otherwise it opens a
-                // `(class#id)` spec terminated by `)`.
-                if (j + 1 < bytes.len and (bytes[j + 1] == '(' or bytes[j + 1] == ')')) {
+                // A `(` directly before `(`, `)`, the modifier terminator
+                // (`.`, or `|` for rows), or end of line is padding (Hobix:
+                // each `(` adds 1em of left padding, `p(.` needs no closing
+                // paren); otherwise it opens a `(class#id)` spec terminated
+                // by `)`.
+                if (j + 1 >= bytes.len or bytes[j + 1] == '(' or bytes[j + 1] == ')' or bytes[j + 1] == '.' or (kind == .row and bytes[j + 1] == '|')) {
                     m.pad_left += 1;
                     j += 1;
                 } else {
@@ -473,7 +488,7 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
             },
             '<' => {
                 if (j + 1 < bytes.len and bytes[j + 1] == '>') {
-                    if (kind != .cell) return null; // `<>` is cells-only
+                    if (kind != .cell and kind != .block) return null; // `<>` is cells/blocks-only
                     m.halign = .justify;
                     j += 2;
                 } else {
@@ -490,17 +505,17 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
                 j += 1;
             },
             '^' => {
-                if (kind == .signature) return null;
+                if (kind != .cell and kind != .row) return null;
                 m.valign = "vertical-align:top";
                 j += 1;
             },
             '~' => {
-                if (kind == .signature) return null;
+                if (kind != .cell and kind != .row) return null;
                 m.valign = "vertical-align:bottom";
                 j += 1;
             },
             '_' => {
-                if (kind == .signature) return null;
+                if (kind != .cell and kind != .row) return null;
                 m.header = true;
                 j += 1;
             },
@@ -781,7 +796,10 @@ fn appendStyleRule(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rule: 
 /// Composes a Textile style string from its parts in the pinned order:
 /// user `{style}`, padding-left, padding-right, horizontal alignment, then
 /// vertical alignment — joined with `; ` and terminated with `;` (Hobix
-/// examples; docs/TEXTILE-PARITY.md §7). Empty when no part applies.
+/// examples; docs/TEXTILE-PARITY.md §7). Empty when no part applies. A
+/// multi-declaration user style is normalized the way Hobix renders it:
+/// `{color:blue;margin:30px}` becomes `color:blue; margin:30px` (internal
+/// `;` grows a trailing space; a trailing `;` is dropped).
 fn composeStyle(
     doc: *document.Document,
     user_style: ?[]const u8,
@@ -792,7 +810,19 @@ fn composeStyle(
 ) ParseError![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(doc.allocator());
-    if (user_style) |s| try appendStyleRule(doc.allocator(), &out, s);
+    if (user_style) |s| {
+        if (std.mem.indexOfScalar(u8, s, ';') == null) {
+            try appendStyleRule(doc.allocator(), &out, s);
+        } else {
+            var start: usize = 0;
+            while (start < s.len) {
+                const semi = std.mem.indexOfScalarPos(u8, s, start, ';') orelse break;
+                if (semi > start) try appendStyleRule(doc.allocator(), &out, s[start..semi]);
+                start = semi + 1;
+            }
+            if (start < s.len) try appendStyleRule(doc.allocator(), &out, s[start..]);
+        }
+    }
     if (pad_left > 0) try appendStyleRule(doc.allocator(), &out, try std.fmt.allocPrint(doc.allocator(), "padding-left:{d}em", .{pad_left}));
     if (pad_right > 0) try appendStyleRule(doc.allocator(), &out, try std.fmt.allocPrint(doc.allocator(), "padding-right:{d}em", .{pad_right}));
     if (halign_frag) |f| try appendStyleRule(doc.allocator(), &out, f);
@@ -804,7 +834,8 @@ fn composeStyle(
 
 /// Composes the fixed render-order attribute list (style, class, id, lang)
 /// with arena-owned copies (Textile normalizes the values, so they cannot
-/// borrow the source; docs/DOCUMENT-MODEL.md).
+/// borrow the source; docs/DOCUMENT-MODEL.md). Empty class/id values are
+/// omitted — a `(#id)`-only spec renders just the id attribute (Hobix).
 fn composeAttrs(
     doc: *document.Document,
     style: ?[]const u8,
@@ -817,36 +848,40 @@ fn composeAttrs(
     if (style) |s| {
         if (s.len > 0) try list.append(doc.allocator(), .{ .name = "style", .value = try doc.allocator().dupe(u8, s) });
     }
-    if (class) |c| try list.append(doc.allocator(), .{ .name = "class", .value = try doc.allocator().dupe(u8, c) });
-    if (id) |i| try list.append(doc.allocator(), .{ .name = "id", .value = try doc.allocator().dupe(u8, i) });
+    if (class) |c| {
+        if (c.len > 0) try list.append(doc.allocator(), .{ .name = "class", .value = try doc.allocator().dupe(u8, c) });
+    }
+    if (id) |i| {
+        if (i.len > 0) try list.append(doc.allocator(), .{ .name = "id", .value = try doc.allocator().dupe(u8, i) });
+    }
     if (lang) |l| try list.append(doc.allocator(), .{ .name = "lang", .value = try doc.allocator().dupe(u8, l) });
     return list.toOwnedSlice(doc.allocator());
 }
 
-const Heading = struct {
-    level: u8,
-    /// Content span (after the marker and its separator whitespace).
+/// The parsed result of a block signature line (`p<mods>.`, `bq<mods>.`,
+/// `hN<mods>.`): the composed block attributes and the content span after
+/// the marker's separator whitespace.
+const BlockSignature = struct {
+    attrs: []const document.Attribute,
     content: source.Span,
 };
 
-/// Recognizes `h1.`–`h6.` block markers. The marker must be followed by a
-/// space or tab (both references require a space after the signature's
-/// period). Content is everything after the marker's separator whitespace,
-/// preserved verbatim.
-fn tryHeading(line: source.Line) ?Heading {
+/// Scans the modifier run between a block marker and its period (`{style}`,
+/// `(class#id)`, `[lang]`, `(`/`)` padding, `<`/`>`/`=`/`<>` alignment),
+/// composes the block attributes, and returns the content span after the
+/// period and its separator whitespace. Malformed modifiers, or a period
+/// not followed by a space/tab, make the whole line ordinary text.
+fn parseBlockSignature(doc: *document.Document, line: source.Line, mod_start: usize) ParseError!?BlockSignature {
     const t = line.text;
-    if (t.len < 3) return null;
-    if (t[0] != 'h') return null;
-    const digit = t[1];
-    if (digit < '1' or digit > '6') return null;
-    if (t[2] != '.') return null;
-    if (t.len == 3) return null; // marker must be followed by a space/tab
-    if (t[3] != ' ' and t[3] != '\t') return null;
-
-    var i: usize = 3;
+    const scan = scanMods(t, mod_start, .block) orelse return null;
+    if (!scan.dot_terminated) return null;
+    if (scan.end + 1 >= t.len or !isWhitespaceByte(t[scan.end + 1])) return null;
+    var i = scan.end + 2;
     while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+    const style = try composeStyle(doc, scan.mods.user_style, scan.mods.pad_left, scan.mods.pad_right, halignFragment(scan.mods.halign), scan.mods.valign);
+    const attrs = try composeAttrs(doc, style, scan.mods.class, scan.mods.id, scan.mods.lang);
     return .{
-        .level = digit - '0',
+        .attrs = attrs,
         .content = .{
             .start = @intCast(line.start + i),
             .end = @intCast(line.content_end),
@@ -854,46 +889,102 @@ fn tryHeading(line: source.Line) ?Heading {
     };
 }
 
-/// Recognizes a `p.` paragraph marker, returning the content span after the
-/// marker and its separator whitespace. `p.` without a following space/tab is
-/// ordinary text.
-fn tryParagraphMarker(line: source.Line) ?source.Span {
+const Heading = struct {
+    level: u8,
+    /// Block attributes from the marker's modifiers (empty for plain `hN.`).
+    attrs: []const document.Attribute = &.{},
+    /// Content span (after the marker and its separator whitespace).
+    content: source.Span,
+};
+
+/// Recognizes `h1.`–`h6.` block markers, with optional block modifiers
+/// between the level digit and the period (`h2()>.`, `h3[no]{color:red}.`,
+/// Hobix §4). The marker must be followed by a space or tab (both
+/// references require a space after the signature's period). Content is
+/// everything after the marker's separator whitespace, preserved verbatim.
+fn tryHeading(doc: *document.Document, line: source.Line) ParseError!?Heading {
     const t = line.text;
     if (t.len < 3) return null;
-    if (t[0] != 'p' or t[1] != '.') return null;
-    if (t[2] != ' ' and t[2] != '\t') return null;
-    var i: usize = 2;
-    while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+    if (t[0] != 'h') return null;
+    const digit = t[1];
+    if (digit < '1' or digit > '6') return null;
+    if (t[2] == '.') {
+        if (t.len == 3) return null; // marker must be followed by a space/tab
+        if (t[3] != ' ' and t[3] != '\t') return null;
+        var i: usize = 3;
+        while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+        return .{
+            .level = digit - '0',
+            .attrs = &.{},
+            .content = .{
+                .start = @intCast(line.start + i),
+                .end = @intCast(line.content_end),
+            },
+        };
+    }
+    const sig = (try parseBlockSignature(doc, line, 2)) orelse return null;
     return .{
-        .start = @intCast(line.start + i),
-        .end = @intCast(line.content_end),
+        .level = digit - '0',
+        .attrs = sig.attrs,
+        .content = sig.content,
     };
 }
 
-/// Recognizes the single-period `bq.` block-quote signature. Published Textile
+/// Recognizes a `p.` paragraph marker (with optional block modifiers between
+/// the `p` and the period), returning the composed block attributes and the
+/// content span after the marker and its separator whitespace. `p.` without a
+/// following space/tab, or a malformed modifier run, is ordinary text.
+fn tryParagraphMarker(doc: *document.Document, line: source.Line) ParseError!?BlockSignature {
+    const t = line.text;
+    if (t.len < 3) return null;
+    if (t[0] != 'p') return null;
+    if (t[1] == '.') {
+        if (t[2] != ' ' and t[2] != '\t') return null;
+        var i: usize = 2;
+        while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+        return .{
+            .attrs = &.{},
+            .content = .{
+                .start = @intCast(line.start + i),
+                .end = @intCast(line.content_end),
+            },
+        };
+    }
+    return parseBlockSignature(doc, line, 1);
+}
+
+/// Recognizes the single-period `bq.` block-quote signature (with optional
+/// block modifiers: `bq{color:red}.`, `bq>.`, ...). Published Textile
 /// documentation requires a period followed by a space; Oliver consistently
 /// accepts a tab as signature separator too. An empty content range is not a
 /// quote: empty `bq.` behavior is unspecified by the documentation, so the
 /// whole line remains literal. This also deliberately excludes the separately
 /// documented extended (`bq..`) and citation (`bq.:URL`) forms.
-fn tryBlockQuoteMarker(line: source.Line) ?source.Span {
+fn tryBlockQuoteMarker(doc: *document.Document, line: source.Line) ParseError!?BlockSignature {
     const t = line.text;
     if (t.len < 4) return null;
-    if (!std.mem.eql(u8, t[0..3], "bq.")) return null;
-    if (t[3] != ' ' and t[3] != '\t') return null;
-
-    var i: usize = 3;
-    while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
-    if (i == t.len) return null;
-    return .{
-        .start = @intCast(line.start + i),
-        .end = @intCast(line.content_end),
-    };
+    if (!std.mem.eql(u8, t[0..2], "bq")) return null;
+    if (t[2] == '.') {
+        if (t[3] != ' ' and t[3] != '\t') return null;
+        var i: usize = 3;
+        while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+        if (i == t.len) return null;
+        return .{
+            .attrs = &.{},
+            .content = .{
+                .start = @intCast(line.start + i),
+                .end = @intCast(line.content_end),
+            },
+        };
+    }
+    const sig = (try parseBlockSignature(doc, line, 2)) orelse return null;
+    if (sig.content.start >= sig.content.end) return null;
+    return sig;
 }
 
 fn emitHeading(doc: *document.Document, line: source.Line, heading: Heading, defs: *const AliasTable) ParseError!void {
     const node = try doc.createNode(.heading, line.contentSpan(), .{
-        .heading = heading.level,
+        .heading = .{ .level = heading.level, .attrs = heading.attrs },
     });
     try doc.appendChild(doc.root, node);
     try parseInlines(doc, node, heading.content, defs);
@@ -1515,12 +1606,12 @@ test "textile: headings and paragraph structure" {
     defer result.deinit();
     const root = result.document.root;
     try std.testing.expectEqual(document.Tag.heading, root.children.items[0].tag);
-    try std.testing.expectEqual(@as(u8, 1), root.children.items[0].data.heading);
+    try std.testing.expectEqual(@as(u8, 1), root.children.items[0].data.heading.level);
     try std.testing.expectEqualStrings("One", root.children.items[0].children.items[0].data.text);
     try std.testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
     try std.testing.expectEqualStrings("Two", root.children.items[1].children.items[0].data.text);
     try std.testing.expectEqual(document.Tag.heading, root.children.items[2].tag);
-    try std.testing.expectEqual(@as(u8, 6), root.children.items[2].data.heading);
+    try std.testing.expectEqual(@as(u8, 6), root.children.items[2].data.heading.level);
 }
 
 test "textile: marker recognition edge cases" {
@@ -1659,7 +1750,7 @@ test "textile: headings and quoted paragraphs share the inline code scanner" {
 
     const heading = root.children.items[0];
     try std.testing.expectEqual(document.Tag.heading, heading.tag);
-    try std.testing.expectEqual(@as(u8, 2), heading.data.heading);
+    try std.testing.expectEqual(@as(u8, 2), heading.data.heading.level);
     try std.testing.expectEqual(@as(usize, 1), heading.children.items.len);
     try std.testing.expectEqual(document.Tag.code_span, heading.children.items[0].tag);
     try std.testing.expectEqual(source.Span{ .start = 4, .end = 10 }, heading.children.items[0].span);
@@ -2599,4 +2690,135 @@ test "textile: link alias storm stays linear and deterministic" {
     var second = second_writer.toArrayList();
     defer second.deinit(std.testing.allocator);
     try std.testing.expectEqualSlices(u8, first.items, second.items);
+}
+
+test "textile: block attributes on paragraph signatures" {
+    const oliver = @import("oliver.zig");
+
+    // Class, id, combined class#id, style, and lang (Hobix §4 examples).
+    {
+        var result = try oliver.parse(std.testing.allocator, "p(example1). An example\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.paragraph, p.tag);
+        try std.testing.expectEqual(@as(usize, 1), p.data.paragraph.attrs.len);
+        try std.testing.expectEqualStrings("class", p.data.paragraph.attrs[0].name);
+        try std.testing.expectEqualStrings("example1", p.data.paragraph.attrs[0].value);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "p(#big-red). Red here\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), p.data.paragraph.attrs.len);
+        try std.testing.expectEqualStrings("id", p.data.paragraph.attrs[0].name);
+        try std.testing.expectEqualStrings("big-red", p.data.paragraph.attrs[0].value);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "p(example1#big-red2). Red here\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 2), p.data.paragraph.attrs.len);
+        try std.testing.expectEqualStrings("class", p.data.paragraph.attrs[0].name);
+        try std.testing.expectEqualStrings("example1", p.data.paragraph.attrs[0].value);
+        try std.testing.expectEqualStrings("id", p.data.paragraph.attrs[1].name);
+        try std.testing.expectEqualStrings("big-red2", p.data.paragraph.attrs[1].value);
+    }
+    // Multi-declaration user styles are normalized: `;` grows a trailing
+    // space, matching Hobix's `style="color:blue; margin:30px;"`.
+    {
+        var result = try oliver.parse(std.testing.allocator, "p{color:blue;margin:30px}. Spacey blue\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), p.data.paragraph.attrs.len);
+        try std.testing.expectEqualStrings("style", p.data.paragraph.attrs[0].name);
+        try std.testing.expectEqualStrings("color:blue; margin:30px;", p.data.paragraph.attrs[0].value);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "p[fr]. rouge\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), p.data.paragraph.attrs.len);
+        try std.testing.expectEqualStrings("lang", p.data.paragraph.attrs[0].name);
+        try std.testing.expectEqualStrings("fr", p.data.paragraph.attrs[0].value);
+    }
+}
+
+test "textile: block alignment, indentation, and heading combinations" {
+    const oliver = @import("oliver.zig");
+
+    // `p<.`/`p>.`/`p=.`/`p<>.` set text-align; `p(.`/`p((.`/`p))).` set
+    // padding (Hobix §4: a bare `(` needs no closing paren).
+    const align_input = "p<. left\n\np>. right\n\np=. center\n\np<>. justify\n\np(. one\n\np((. two\n\np))). three\n";
+    var result = try oliver.parse(std.testing.allocator, align_input, .textile, .{});
+    defer result.deinit();
+    const expect_styles = [_][]const u8{
+        "text-align:left;",
+        "text-align:right;",
+        "text-align:center;",
+        "text-align:justify;",
+        "padding-left:1em;",
+        "padding-left:2em;",
+        "padding-right:3em;",
+    };
+    try std.testing.expectEqual(@as(usize, expect_styles.len), result.document.root.children.items.len);
+    for (result.document.root.children.items, 0..) |node, i| {
+        try std.testing.expectEqual(document.Tag.paragraph, node.tag);
+        try std.testing.expectEqual(@as(usize, 1), node.data.paragraph.attrs.len);
+        try std.testing.expectEqualStrings("style", node.data.paragraph.attrs[0].name);
+        try std.testing.expectEqualStrings(expect_styles[i], node.data.paragraph.attrs[0].value);
+    }
+
+    // The combined heading examples from Hobix.
+    {
+        var result2 = try oliver.parse(std.testing.allocator, "h2()>. Bingo.\n", .textile, .{});
+        defer result2.deinit();
+        const h = result2.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.heading, h.tag);
+        try std.testing.expectEqual(@as(u8, 2), h.data.heading.level);
+        try std.testing.expectEqual(@as(usize, 1), h.data.heading.attrs.len);
+        try std.testing.expectEqualStrings("padding-left:1em; padding-right:1em; text-align:right;", h.data.heading.attrs[0].value);
+    }
+    {
+        var result2 = try oliver.parse(std.testing.allocator, "h3()>[no]{color:red}. Bingo\n", .textile, .{});
+        defer result2.deinit();
+        const h = result2.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 2), h.data.heading.attrs.len);
+        try std.testing.expectEqualStrings("style", h.data.heading.attrs[0].name);
+        try std.testing.expectEqualStrings("color:red; padding-left:1em; padding-right:1em; text-align:right;", h.data.heading.attrs[0].value);
+        try std.testing.expectEqualStrings("lang", h.data.heading.attrs[1].name);
+        try std.testing.expectEqualStrings("no", h.data.heading.attrs[1].value);
+    }
+}
+
+test "textile: blockquote attributes land on the quote, not the inner paragraph" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(std.testing.allocator, "bq{color:red}. A red quote\n\nbq>. right aligned\n", .textile, .{});
+    defer result.deinit();
+    const root = result.document.root;
+    try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+    for (root.children.items) |quote| {
+        try std.testing.expectEqual(document.Tag.block_quote, quote.tag);
+        try std.testing.expectEqual(@as(usize, 1), quote.data.block_quote.attrs.len);
+        // The inner paragraph is unmarked.
+        const inner = quote.children.items[0];
+        try std.testing.expectEqual(document.Tag.paragraph, inner.tag);
+        try std.testing.expectEqual(@as(usize, 0), inner.data.paragraph.attrs.len);
+    }
+}
+
+test "textile: malformed block signatures stay literal" {
+    const oliver = @import("oliver.zig");
+    // Unterminated class, missing space after the period, doubled periods,
+    // and the deferred extended/citation quote forms are ordinary text.
+    var result = try oliver.parse(
+        std.testing.allocator,
+        "p(foo not closed\n\np>.no-space\n\np.. double\n\nbq.. extended\n\nbq: citation\n\nh1x. not a heading\n",
+        .textile,
+        .{},
+    );
+    defer result.deinit();
+    for (result.document.root.children.items) |node| {
+        try std.testing.expectEqual(document.Tag.paragraph, node.tag);
+        try std.testing.expectEqual(@as(usize, 0), node.data.paragraph.attrs.len);
+    }
 }

@@ -148,4 +148,27 @@ the user-facing prose and examples above (first-definition-wins and
 case-sensitive exact matching mirror the Markdown §4.7 machinery as
 chosen, deterministic defaults where the references are silent).
 
+## Sources consulted (session 5 — Textile block attributes)
+
+- Hobix "Textile Reference" "Attributes: Block Attributes / Block
+  Alignments" <https://hobix.com/textile> — the class/id/class#id/style/
+  lang examples (`p(example1).`, `p(#big-red).`, `p(example1#big-red2).`,
+  `p{color:blue;margin:30px}.` with its `style="color:blue; margin:30px;"`
+  normalization, `p[fr].`), the four alignments (`p<.`/`p>.`/`p=.`/
+  `p<>.` → `text-align` styles), the `(`/`)` indentation forms (`p(.`
+  through `p))).` — a bare `(` needs no closing paren), and the combined
+  heading examples (`h2()>. Bingo.`, `h3()>[no]{color:red}. Bingo`) with
+  their exact rendered attributes.
+- Movable Type "Textile 2 Syntax" "Block Attributes"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html> —
+  the modifier placement between the signature and its period and the
+  required space after the period.
+
+No Textile parser implementation source was consulted for the T10 block
+attribute work; the pinned behaviors in docs/TEXTILE-PARITY.md §8 are
+derived from the user-facing prose and examples above (the `; ` style
+normalization and empty-class omission are faithful renderings of the
+Hobix examples, and the table-only token restrictions reuse the already-
+pinned table machinery).
+
 No Markdown or Textile parser implementation source was consulted.

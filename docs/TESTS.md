@@ -18,12 +18,15 @@ Tests are product contracts. `zig build test` runs three suites:
    table structure/spans/attributes (cell modifiers, colspan/rowspan,
    header-alignment propagation, signature and row modifiers, literal
    fallbacks, block closing, a 20,000-row storm, and GFM-model
-   convergence), a 10,000-pair phrase storm, and a 2,000-deep
+   convergence), block attributes on `p.`/`hN.`/`bq.` signatures (class,
+   id, style with `; ` normalization, lang, the four alignments, `(`/`)`
+   padding, heading combinations, blockquote placement, and literal
+   fallbacks), a 10,000-pair phrase storm, and a 2,000-deep
    phrase-nesting workload.
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 56 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 61 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -50,7 +53,12 @@ Tests are product contracts. `zig build test` runs three suites:
    attributes, colspan, rowspan, cell style, signature on its own line,
    row attributes — plus the Textile 2 complex example, header-alignment
    propagation, inline cells, literal fallbacks, and block closing;
-   docs/TEXTILE-PARITY.md §6). It
+   docs/TEXTILE-PARITY.md §6), and block attributes
+   (the Hobix §4 battery byte-for-byte — class, id, class#id, style with
+   `; ` normalization, lang, the four alignments, `(`/`)` padding,
+   combined `h2()>.`/`h3()>[no]{color:red}.` forms, `bq` attrs on the
+   `<blockquote>`, heading attrs, and literal fallback shapes;
+   docs/TEXTILE-PARITY.md §8). It
    also verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
    deterministic repeat rendering (list stress: 2k nested items, 10k
@@ -64,7 +72,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **163/163 tests passing** with Zig 0.16.0.
+The current complete result is **167/167 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
