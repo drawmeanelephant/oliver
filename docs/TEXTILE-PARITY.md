@@ -58,6 +58,7 @@ consulted.
 | character replacements (`"`/`'` → curly, `--`/` - `, `...`, digit-adjacent `x`, `(c)`/`(r)`/`(tm)`, `(1/4)`/`(1/2)`/`(3/4)`, `(o)`, `(+/-)`) | `.text` (arena-owned replaced payload) | `“ ” ‘ ’ — – … × © ® ™ ¼ ½ ¾ ° ±` | implemented (T15) |
 | inline `==...==` escaping | `.text` (borrowed literal payload, no replacements) | literal text, HTML-escaped | implemented (T16) |
 | block-level `==` escaping (lone `==` lines) | `.html_block` (verbatim payload) | raw passthrough, no `<p>` wrapper | implemented (T16) |
+| `|mods|.` line attributes | `.paragraph.attrs` (the §8 set) | `<p style="…" class="…" id="…" lang="…">` | implemented (T17) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -82,7 +83,6 @@ planned/deferred. The notable ones, so the record is honest:
   CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
   bodies literal (fixture `image-literal`).
-- **Line attributes** remain planned/deferred.
 
 The character-replacement macros — curly quotes, em/en dashes, ellipsis,
 `x` dimension sign, `(c)`/`(r)`/`(tm)`, and the fraction/degree/plus-minus
@@ -98,8 +98,9 @@ see §8 — `bc.`/`pre.` block code is implemented (T11) — see §9 —
 `bq..`/`bc..`/`pre..` extended blocks are implemented (T12) — see §10 —
 footnotes (`fnN.`/`[N]`) are implemented (T13) — see §11 —
 block-quote citations (`bq.:URL`) are implemented (T14) — see §12 —
-the character-replacement macros are implemented (T15) — see §13 — and
-`==` escaping (inline and block) is implemented (T16) — see §14.
+the character-replacement macros are implemented (T15) — see §13 —
+`==` escaping (inline and block) is implemented (T16) — see §14 — and
+line attributes (`|mods|.`) are implemented (T17) — see §15.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -658,5 +659,53 @@ the merge rule. Inside `@code@`, link display text, and image
 src/alt/title the `==` bytes are opaque. The escaped span cannot be
 re-entered: content is scanned for the closer in one pass, so nested
 escapes do not occur.
+
+## 15. Line attributes (T17): pinned behaviors
+
+The line-attribute form is a pipe-delimited variant of the §8 block
+attributes: a line beginning with a pipe, a modifier run, a closing
+pipe, a period, and separator whitespace applies the modifier set to
+the paragraph. `|{color:red}(note#one)>[fr]|. Styled` renders
+`<p style="color:red; text-align:right;" class="note" id="one"
+lang="fr">Styled</p>` — byte-identical to `p{color:red}(note#one)>[fr].
+Styled` (the unit tests assert the attribute lists are equal element for
+element).
+
+**Provenance (recorded in docs/CLEANROOM.md session 12).** The `|...|.`
+pipe form is **not** present in the three clean-room references. Textile
+2's only pipe-delimited block parameter is the **`|filter|`** filter
+form ("A filter may be invoked to further format the text for this
+signature"), and neither Hobix, the current Textile docs, nor the
+supplementary user-facing sources checked (the original textism
+reference, the RedCloth reference manual, learnxinyminutes, the
+php-textile docs) document a pipe-attribute paragraph form. Oliver
+implements the construct per the user's specification, built entirely
+on the documented §8 modifier set — so the *modifiers* and their
+composition are reference-backed; only the pipe wrapping is per-spec.
+
+**The grammar.** The modifier run between the pipes is scanned with the
+exact §8 token set (`{style}`, `(class#id)`, `[lang]`, `(`/`)`
+padding, `<`/`>`/`=`/`<>` alignment) and terminates at the closing
+pipe; the period must follow immediately and be followed by a
+space/tab, and the content must be non-empty. The composed attribute
+list is the same fixed render-order list (style, class, id, lang) the
+`p<mods>.` marker produces, landing on `.paragraph.attrs` — the shared
+model and renderer are untouched. Row/cell-only tokens (`^`, `~`, `_`,
+`\` colspan, `/` rowspan) are rejected.
+
+**Block behavior.** The line-attribute line is a paragraph signature:
+like `p<mods>.` it interrupts an open paragraph, closes the list tree,
+and terminates an open extended `bq..`/`bc..`/`pre..` block, and its
+paragraph continues through unmarked lines (hard breaks) until a blank
+line. It is never a table row — rows must end with `|`, and the
+attribute form ends with content — so `|{color:red}|. x` after a row
+closes the table and starts a styled paragraph.
+
+**Literal fallbacks (pinned by `line-attr-literal`).** No closing pipe
+(`|{color:red}|x`), a dot-terminated run (`|{color:red}. text`), a
+period not followed by space (`|x|.y`), an empty modifier run (`||. x`),
+an empty content (`|x|. `), a malformed modifier (`|{bad`), and any
+row/cell-only token (`|^|. x`) all keep the whole line ordinary text.
+
 
 

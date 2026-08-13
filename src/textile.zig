@@ -94,6 +94,10 @@
 //!   dropping regular HTML into the document. An inline `==...==` suspends
 //!   all inline formatting and the character replacements for the delimited
 //!   span, which renders as literal text (docs/TEXTILE-PARITY.md §14).
+//! - Line attributes: a line beginning with `|mods|. ` — a §8
+//!   block-modifier run between pipes, then a period, a space, and
+//!   content — applies the modifier set to the paragraph, converging with
+//!   the `p<mods>.` marker machinery (docs/TEXTILE-PARITY.md §15).
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -235,6 +239,15 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             closeLists(&lists);
             try openTable(doc, &table, &.{});
             try appendTableRow(doc, &table.?, row);
+            continue;
+        }
+        // The line-attribute form `|mods|. content` is a paragraph
+        // signature: it interrupts an open paragraph like `p<mods>.` and
+        // closes the list tree (docs/TEXTILE-PARITY.md §15).
+        if (try tryLineAttr(doc, line)) |sig| {
+            try closeBlock(doc, &block, &defs);
+            closeLists(&lists);
+            try appendBlockContent(doc, &block, .paragraph, sig.attrs, sig.content, line.terminatorSpan(), null);
             continue;
         }
         if (try tryHeading(doc, line)) |heading| {
@@ -789,9 +802,10 @@ fn appendFootnoteContent(doc: *document.Document, block: *?ActiveBlock, sig: Foo
 /// terminates an open extended block (Textile 2: extended signatures stay
 /// active "until the next signature is found"): a `table<mods>.`
 /// signature, an extended or single-period `bq.`/`bc.`/`pre.` signature,
-/// an `hN.` heading, a `p.` paragraph marker, or a `fnN.` footnote
-/// signature. List markers and table rows are not block signatures and
-/// remain content inside an extended block.
+/// an `hN.` heading, a `p.` paragraph marker, a `fnN.` footnote
+/// signature, or the `|mods|.` line-attribute paragraph form. List
+/// markers and table rows are not block signatures and remain content
+/// inside an extended block.
 fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryTableSignature(doc, line) != null) return true;
     if (try tryExtendedMarker(doc, line) != null) return true;
@@ -800,6 +814,7 @@ fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryBlockQuoteMarker(doc, line) != null) return true;
     if (try tryCodeMarker(doc, line) != null) return true;
     if (try tryFootnoteMarker(doc, line) != null) return true;
+    if (try tryLineAttr(doc, line) != null) return true;
     return false;
 }
 
@@ -990,7 +1005,7 @@ const Mods = struct {
     pad_right: u8 = 0,
 };
 
-const ModKind = enum { signature, row, cell, block };
+const ModKind = enum { signature, row, cell, block, line };
 
 /// A successful modifier scan.
 const ModScan = struct {
@@ -1027,11 +1042,11 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
             },
             '(' => {
                 // A `(` directly before `(`, `)`, the modifier terminator
-                // (`.`, or `|` for rows), or end of line is padding (Hobix:
-                // each `(` adds 1em of left padding, `p(.` needs no closing
-                // paren); otherwise it opens a `(class#id)` spec terminated
-                // by `)`.
-                if (j + 1 >= bytes.len or bytes[j + 1] == '(' or bytes[j + 1] == ')' or bytes[j + 1] == '.' or (kind == .row and bytes[j + 1] == '|')) {
+                // (`.`, or `|` for row/line runs), or end of line is padding
+                // (Hobix: each `(` adds 1em of left padding, `p(.` needs no
+                // closing paren); otherwise it opens a `(class#id)` spec
+                // terminated by `)`.
+                if (j + 1 >= bytes.len or bytes[j + 1] == '(' or bytes[j + 1] == ')' or bytes[j + 1] == '.' or ((kind == .row or kind == .line) and bytes[j + 1] == '|')) {
                     m.pad_left += 1;
                     j += 1;
                 } else {
@@ -1053,7 +1068,7 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
             },
             '<' => {
                 if (j + 1 < bytes.len and bytes[j + 1] == '>') {
-                    if (kind != .cell and kind != .block) return null; // `<>` is cells/blocks-only
+                    if (kind != .cell and kind != .block and kind != .line) return null; // `<>` is cells/blocks/lines-only
                     m.halign = .justify;
                     j += 2;
                 } else {
@@ -1100,7 +1115,7 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
         }
         if (j >= bytes.len) return null; // the run must end at `.` or `|`
         if (bytes[j] == '.') return .{ .mods = m, .end = j, .dot_terminated = true };
-        if (kind == .row and bytes[j] == '|') return .{ .mods = m, .end = j, .dot_terminated = false };
+        if ((kind == .row or kind == .line) and bytes[j] == '|') return .{ .mods = m, .end = j, .dot_terminated = false };
     }
     return null;
 }
@@ -1516,6 +1531,36 @@ fn tryParagraphMarker(doc: *document.Document, line: source.Line) ParseError!?Bl
         };
     }
     return parseBlockSignature(doc, line, 1);
+}
+
+/// Recognizes the line-attribute form `|mods|. content`: a line beginning
+/// with a pipe, a §8 block-modifier run, a closing pipe, a period, and
+/// separator whitespace with non-empty content. The composed attributes
+/// land on the paragraph exactly like a `p<mods>.` marker, through the same
+/// `parseBlockSignature`-style composition (style/class/id/lang in the fixed
+/// render order). Every malformed shape — no closing pipe, a dot-terminated
+/// run, no period after the pipe, a period not followed by space/tab, an
+/// empty modifier run, an empty content, or a row/cell-only token — keeps
+/// the whole line ordinary text (docs/TEXTILE-PARITY.md §15).
+fn tryLineAttr(doc: *document.Document, line: source.Line) ParseError!?BlockSignature {
+    const t = line.text;
+    if (t.len < 4 or t[0] != '|') return null;
+    const scan = scanMods(t, 1, .line) orelse return null;
+    if (scan.dot_terminated) return null; // the run must close with `|`, not `.`
+    if (scan.end + 1 >= t.len or t[scan.end + 1] != '.') return null;
+    if (scan.end + 2 >= t.len or !isWhitespaceByte(t[scan.end + 2])) return null;
+    var i = scan.end + 3;
+    while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+    if (i == t.len) return null; // empty content stays literal
+    const style = try composeStyle(doc, scan.mods.user_style, scan.mods.pad_left, scan.mods.pad_right, halignFragment(scan.mods.halign), scan.mods.valign);
+    const attrs = try composeAttrs(doc, style, scan.mods.class, scan.mods.id, scan.mods.lang);
+    return .{
+        .attrs = attrs,
+        .content = .{
+            .start = @intCast(line.start + i),
+            .end = @intCast(line.content_end),
+        },
+    };
 }
 
 /// The parsed result of a `bq.`/`bq.:URL` signature line.
@@ -4345,6 +4390,70 @@ test "textile: malformed == shapes stay literal" {
     try std.testing.expectEqualStrings("x", tp.children.items[0].data.text);
     try std.testing.expectEqualStrings(" ", tp.children.items[1].data.text);
     try std.testing.expectEqualStrings("y", tp.children.items[2].data.text);
+}
+test "textile: line attributes apply the block modifier set" {
+    const oliver = @import("oliver.zig");
+    // The `|mods|.` form converges with `p<mods>.`: the same §8 modifier
+    // set composes into the same attribute list (docs/TEXTILE-PARITY.md
+    // §15), byte-identically.
+    const marker = "p{color:red}(note#one)>[fr]. Styled";
+    const line = "|{color:red}(note#one)>[fr]|. Styled";
+    var from_p = try oliver.parse(std.testing.allocator, marker, .textile, .{});
+    defer from_p.deinit();
+    var from_line = try oliver.parse(std.testing.allocator, line, .textile, .{});
+    defer from_line.deinit();
+    const pa = from_p.document.root.children.items[0].data.paragraph.attrs;
+    const la = from_line.document.root.children.items[0].data.paragraph.attrs;
+    try std.testing.expectEqual(pa.len, la.len);
+    for (pa, la) |a, b| {
+        try std.testing.expectEqualStrings(a.name, b.name);
+        try std.testing.expectEqualStrings(a.value, b.value);
+    }
+    try std.testing.expectEqualStrings("Styled", from_line.document.root.children.items[0].children.items[0].data.text);
+    // Padding and justification compose in the pinned order.
+    var padded = try oliver.parse(std.testing.allocator, "|()>|. Padded right", .textile, .{});
+    defer padded.deinit();
+    try std.testing.expectEqualStrings("padding-left:1em; padding-right:1em; text-align:right;", padded.document.root.children.items[0].data.paragraph.attrs[0].value);
+    // The paragraph continues through unmarked lines like any `p.` block.
+    var multi = try oliver.parse(std.testing.allocator, "|{color:red}|. First\nsecond", .textile, .{});
+    defer multi.deinit();
+    const mp = multi.document.root.children.items[0];
+    try std.testing.expectEqualStrings("color:red;", mp.data.paragraph.attrs[0].value);
+    try std.testing.expectEqual(document.Tag.hard_break, mp.children.items[1].tag);
+}
+
+test "textile: malformed line attributes stay literal" {
+    const oliver = @import("oliver.zig");
+    // Every malformed shape keeps the whole line ordinary text
+    // (docs/TEXTILE-PARITY.md §15): no closing pipe, a dot-terminated run,
+    // no period after the pipe, an empty modifier run, an empty content, a
+    // malformed modifier, a row/cell-only token, and a period not followed
+    // by a space.
+    const cases = [_][]const u8{
+        "|{color:red}|x",
+        "|{color:red}. no closing pipe",
+        "||. empty mods",
+        "|x|. ",
+        "|{bad",
+        "|^|. row token",
+        "|x|.y no space",
+    };
+    for (cases) |input| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.paragraph, p.tag);
+        try std.testing.expectEqual(@as(usize, 0), p.data.paragraph.attrs.len);
+        try std.testing.expectEqualStrings(input, p.children.items[0].data.text);
+    }
+    // A valid line-attribute line terminates an open extended `bq..` like
+    // any paragraph signature.
+    var bq = try oliver.parse(std.testing.allocator, "bq.. one\n\ntwo\n|{color:red}|. red\np. back\n", .textile, .{});
+    defer bq.deinit();
+    const root = bq.document.root;
+    try std.testing.expectEqual(@as(usize, 3), root.children.items.len);
+    try std.testing.expectEqual(document.Tag.block_quote, root.children.items[0].tag);
+    try std.testing.expectEqualStrings("color:red;", root.children.items[1].data.paragraph.attrs[0].value);
 }
 
 test "textile: block == escaping emits raw html blocks" {

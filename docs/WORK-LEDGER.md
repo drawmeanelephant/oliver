@@ -24,7 +24,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T13 Textile footnotes | `[N]` references → `.footnote_ref` sup links + `fnN.` blocks (paragraph attrs + leading sup); Textile fixtures; Markdown untouched | after T12 | integrated on main (PR #25) |
 | Textile worker | T14 `bq.:URL` citations | citation URL after the block-quote period → the blockquote's `cite` attribute; block attrs combine; Textile fixtures; Markdown untouched | after T13 | integrated on main (PR #27) |
 | Textile worker | T15 character replacements | curly quotes, em/en dashes, ellipsis, dimension sign, `(c)`/`(r)`/`(tm)`, fractions/degree/plus-minus applied to plain text in the inline pass; arena-owned replaced payloads; Textile fixtures; Markdown untouched | after T14 | integrated on main (PR #28) |
-| Textile worker | T16 `==` escaping | lone `==` lines open a block-escape region emitted as a raw `.html_block`; inline `==...==` suspends formatting and replacements, emitting a literal `.text` node; Textile fixtures; Markdown untouched | after T15 | implemented on main (uncommitted) |
+| Textile worker | T16 `==` escaping | lone `==` lines open a block-escape region emitted as a raw `.html_block`; inline `==...==` suspends formatting and replacements, emitting a literal `.text` node; Textile fixtures; Markdown untouched | after T15 | integrated on main (PR #31) |
+| Textile worker | T17 line attributes | the `|mods|.` pipe form applies the §8 block-modifier set to the paragraph, byte-identical to `p<mods>.`; a `.line` modifier kind; Textile fixtures; Markdown untouched | after T16 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -589,7 +590,40 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   `escape-block-html`, `escape-literal`).
 - **Parallelism:** yes; Textile-only, Markdown untouched.
 - **Integration:** after T15 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 186/186 tests green;
+- **State:** integrated on main (PR #31). 186/186 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T17 — Textile line attributes (`|mods|.`)
+
+- **Objective:** implement the `|...|.` line-level attribute syntax — a
+  pipe-delimited variant of the §8 block attributes — converging with
+  the block-attribute machinery.
+- **Normative source:** the user's specification. Clean-room finding
+  (docs/CLEANROOM.md session 12): the pipe-attribute form is not in the
+  three references — Textile 2's only pipe-delimited block parameter is
+  the `|filter|` filter form — so the *pipe wrapping* is per-spec while
+  every modifier and its composition is the reference-documented §8
+  set. Supplementary user-facing sources checked: the original textism
+  reference, the RedCloth reference manual, learnxinyminutes, the
+  php-textile docs.
+- **Dependencies:** the §8 block-attribute machinery (T10), extended
+  blocks (T12), tables (T8) — the form must not collide with row syntax.
+- **Seams:** `src/textile.zig` only (a `.line` modifier kind terminating
+  at `|`, `tryLineAttr`, the parse-loop and `trySignature` wiring); the
+  shared model and renderer are untouched — the attrs land on
+  `.paragraph.attrs`.
+- **Acceptance:** byte-identical output to the `p<mods>.` marker for the
+  same modifier run; the full §8 set (style/class/id/lang, alignment,
+  padding) composes in the pinned order; the form interrupts paragraphs,
+  closes list trees, and terminates extended blocks; it never collides
+  with table rows; literal fallbacks for every malformed shape; the
+  652/652 gate is untouched.
+- **Tests:** 2 unit tests (attribute-list convergence with `p<mods>.`,
+  the literal battery + extended-block termination), 2 Textile fixture
+  pairs (`line-attr-basic`, `line-attr-literal`).
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T16 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 188/188 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

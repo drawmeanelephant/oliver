@@ -1986,6 +1986,23 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/escape-literal.textile"),
         .expected = @embedFile("fixtures/textile/escape-literal.html"),
     },
+    // The `|mods|.` line-attribute form applies the full §8 block-modifier
+    // set (style/class/id/lang, alignment, padding) to the paragraph,
+    // byte-identical to the `p<mods>.` marker (docs/TEXTILE-PARITY.md §15).
+    .{
+        .name = "line-attr-basic",
+        .input = @embedFile("fixtures/textile/line-attr-basic.textile"),
+        .expected = @embedFile("fixtures/textile/line-attr-basic.html"),
+    },
+    // Malformed shapes stay literal: no closing pipe, a dot-terminated run,
+    // no period after the pipe, an empty modifier run, empty content, a
+    // malformed modifier, a row/cell-only token, and a period not followed
+    // by a space.
+    .{
+        .name = "line-attr-literal",
+        .input = @embedFile("fixtures/textile/line-attr-literal.textile"),
+        .expected = @embedFile("fixtures/textile/line-attr-literal.html"),
+    },
 };
 
 fn renderHtml(input: []const u8, dialect: oliver.Dialect) !std.ArrayList(u8) {
