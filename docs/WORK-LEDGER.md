@@ -33,7 +33,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T22 citation + acronyms | Hobix's `??citation??` → `<cite>` (a doubled `?` joins the phrase family with attrs + nesting) and `ABC(def)` → `<acronym title="def">`; the both-flag delimiter fix (a run that is open and close tries close first, then opens); the acronym whole-run skip keeps the scan linear; Markdown untouched | after T21 | merged on main (PR #37) |
 | Textile worker | T23 dl. definition lists | Textile 2's `dl. term:definition` → `<dl>`/`<dt>`/`<dd>`, converging on the shared list model (a `.definition` kind + role-bearing `.list_item` payload); multi-line definitions, `dl<mods>.` attrs, the term-run rule, literal signature fallbacks; Markdown untouched | after T22 | merged on main (PR #38) |
 | Textile worker | T24 clear. marker | Textile 2's lone `clear.`/`clear<.`/`clear>.` line parks a CSS fragment (`clear:both`/`left`/`right`) that the next block folds ahead of its own style via the §8 block-attribute machinery; applies to every block family, closes open extended blocks, literal lookalikes; Markdown untouched | after T23 | merged on main (PR #40) |
-| Textile worker | T25 notextile. raw passthrough | the audit's last deferral: `notextile.`/`notextile..` (current Textile docs "No formatting"; Textile 2 uses `==` instead) opens a raw block emitted as one `.html_block` leaf — unformatted, unescaped, CRLF preserved — the signature form of the `==` escape; single-period blank termination, extended runs to the next signature, bare-marker blocks, literal lookalikes; Markdown untouched | after T24 | in flight (T25) |
+| Textile worker | T25 notextile. raw passthrough | the audit's last deferral: `notextile.`/`notextile..` (current Textile docs "No formatting"; Textile 2 uses `==` instead) opens a raw block emitted as one `.html_block` leaf — unformatted, unescaped, CRLF preserved — the signature form of the `==` escape; single-period blank termination, extended runs to the next signature, bare-marker blocks, literal lookalikes; Markdown untouched | after T24 | merged on main (PR #41) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -918,8 +918,12 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   (`notextile-basic`, `notextile-literal`).
 - **Parallelism:** yes; Textile-only, Markdown untouched.
 - **Integration:** after T24 (the 652/652 gate is re-verified).
-- **State:** in flight (T25). 203/203 tests green; canonical scorecard
-  still 652/652 with 0 not-yet and 0 divergences.
+- **State:** merged on main (PR #41). 203/203 tests green; canonical
+  scorecard still 652/652 with 0 not-yet and 0 divergences. The wrap-up
+  pass that followed (TEXTILE-PARITY §24) re-verified every matrix row
+  against the live renderer, corrected the fixture count to 275 Markdown
+  / 105 Textile pairs, and closed the audit with a coverage scorecard —
+  the deferral pile is empty.
 
 ## C1 — Classified conformance expectations
 

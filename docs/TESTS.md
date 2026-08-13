@@ -31,7 +31,7 @@ Tests are product contracts. `zig build test` runs three suites:
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 106 Textile fixture pairs.
+   The explicit index contains 275 Markdown and 105 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -134,8 +134,11 @@ Tests are product contracts. `zig build test` runs three suites:
    mirrored orders, inside link display text, the brace-edge rule
    that keeps `{*}`/`{-L}` whole, and the literal fallbacks;
 
-   docs/TEXTILE-PARITY.md §18). It
-   also verifies shared-model convergence,
+   docs/TEXTILE-PARITY.md §18). Every Textile fixture family in the
+   index is counted in the final coverage scorecard,
+   docs/TEXTILE-PARITY.md §24 — one fixture pair per row, summing to the
+   105 Textile pairs here. The suite also
+   verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
    deterministic repeat rendering (list stress: 2k nested items, 10k
    same-marker items, 15k alternating markers, 12k variably indented
