@@ -3560,12 +3560,15 @@ fn discoverLinksAndImages(
                     // to (not including) the closing paren. The last
                     // consumed item may extend past the closing paren (e.g.
                     // `[foo](/uri) and more`) — truncate it so its tail
-                    // stays literal text after the construct.
+                    // stays literal text after the construct. The tail is
+                    // re-appended *after* the shrink below, which otherwise
+                    // would clobber it (bug: trailing text after an inline
+                    // link was dropped).
                     var j = i + 1;
                     while (j < old.len and itemSpan(old[j]).start < lp.paren_end) : (j += 1) {}
-                    if (itemSpan(old[j - 1]).end > lp.paren_end) {
+                    const keep_tail = j > i + 1 and itemSpan(old[j - 1]).end > lp.paren_end;
+                    if (keep_tail) {
                         setItemSpan(&old[j - 1], .{ .start = lp.paren_end, .end = itemSpan(old[j - 1]).end });
-                        try out.append(doc.allocator(), old[j - 1]);
                     }
 
                     out.shrinkRetainingCapacity(o);
@@ -3591,6 +3594,9 @@ fn discoverLinksAndImages(
                         // monotone check above); record its out position so
                         // those openers are recognized as dead.
                         max_link_opener_out = @max(max_link_opener_out, o);
+                    }
+                    if (keep_tail) {
+                        try out.append(doc.allocator(), old[j - 1]);
                     }
                     // The matched opener and everything trapped above it
                     // were consumed by the construct; entries below stay
@@ -3618,9 +3624,9 @@ fn discoverLinksAndImages(
 
                         var j = i + 1;
                         while (j < old.len and itemSpan(old[j]).start < close_end + 2) : (j += 1) {}
-                        if (itemSpan(old[j - 1]).end > close_end + 2) {
+                        const keep_tail = j > i + 1 and itemSpan(old[j - 1]).end > close_end + 2;
+                        if (keep_tail) {
                             setItemSpan(&old[j - 1], .{ .start = close_end + 2, .end = itemSpan(old[j - 1]).end });
-                            try out.append(doc.allocator(), old[j - 1]);
                         }
 
                         out.shrinkRetainingCapacity(o);
@@ -3643,6 +3649,9 @@ fn discoverLinksAndImages(
                                 },
                             });
                             max_link_opener_out = @max(max_link_opener_out, o);
+                        }
+                        if (keep_tail) {
+                            try out.append(doc.allocator(), old[j - 1]);
                         }
                         while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
                         i = j - 1;
@@ -3663,9 +3672,9 @@ fn discoverLinksAndImages(
                         // Consume items covering the label `[...]`.
                         var j = i + 1;
                         while (j < old.len and itemSpan(old[j]).start < lab.after) : (j += 1) {}
-                        if (itemSpan(old[j - 1]).end > lab.after) {
+                        const keep_tail = j > i + 1 and itemSpan(old[j - 1]).end > lab.after;
+                        if (keep_tail) {
                             setItemSpan(&old[j - 1], .{ .start = @intCast(lab.after), .end = itemSpan(old[j - 1]).end });
-                            try out.append(doc.allocator(), old[j - 1]);
                         }
 
                         out.shrinkRetainingCapacity(o);
@@ -3688,6 +3697,9 @@ fn discoverLinksAndImages(
                                 },
                             });
                             max_link_opener_out = @max(max_link_opener_out, o);
+                        }
+                        if (keep_tail) {
+                            try out.append(doc.allocator(), old[j - 1]);
                         }
                         while (stack.items.len > 0 and stack.items[stack.items.len - 1] >= o) _ = stack.pop();
                         i = j - 1;

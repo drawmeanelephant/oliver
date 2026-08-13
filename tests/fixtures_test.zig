@@ -376,6 +376,11 @@ const markdown_fixtures = [_]MarkdownFixture{
     },
     // --- inline links (docs/INLINE-PARSING.md §6.6) ---
     .{
+        .name = "link-trailing-text",
+        .input = @embedFile("fixtures/markdown/link-trailing-text.md"),
+        .expected = @embedFile("fixtures/markdown/link-trailing-text.html"),
+    },
+    .{
         .name = "link-simple",
         .input = @embedFile("fixtures/markdown/link-simple.md"),
         .expected = @embedFile("fixtures/markdown/link-simple.html"),
