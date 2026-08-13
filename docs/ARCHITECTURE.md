@@ -45,9 +45,11 @@ The two boundaries that matter:
   decided. `src/html.zig` renders the Document;  `src/cooklang_html.zig`
   renders the Recipe under its own documented policy,
   `src/cooklang_serialize.zig` writes canonical `.cook` (semantic, not
-  byte-identical round-trip — docs/COOKLANG.md §10), and
+  byte-identical round-trip — docs/COOKLANG.md §10),
   `src/cooklang_scale.zig` derives scaled Recipes purely from the
-  model — no filesystem resolution, ever (docs/COOKLANG.md §11).
+  model — no filesystem resolution, ever (docs/COOKLANG.md §11) — and
+  `src/cooklang_menu.zig` exposes the `.menu` day/meal structure as a
+  semantic view over a parsed Recipe (docs/COOKLANG.md §12).
 
 ## Module map
 
@@ -64,6 +66,7 @@ The two boundaries that matter:
 | `src/cooklang_html.zig` | deterministic Cooklang HTML policy (Recipe) |
 | `src/cooklang_serialize.zig` | canonical Cooklang serializer (Recipe → valid `.cook`) |
 | `src/cooklang_scale.zig` | pure Cooklang scaling (Recipe → scaled Recipe, exact rationals) |
+| `src/cooklang_menu.zig` | `.menu` convenience view (Recipe → day/meal structure) |
 | `src/main.zig` | provisional CLI: arguments + stdio only; no parser semantics |
 | `tools/cooklang_conformance.zig` | Cooklang canonical-corpus harness (`zig build cooklang-conformance`) |
 | `tests/fixtures_test.zig` | fixture-driven tests + adversarial smoke tests |

@@ -531,6 +531,21 @@ the file start.
 
 No Markdown or Textile parser implementation source was consulted.
 
+Session 23 (CK5 menu view) provenance record: the `.menu` convenience
+layer uses only the official conventions' "Menu Files" section
+(https://cooklang.org/docs/conventions/, fetched 2026-08-13) and its
+example menu (Monday–Wednesday + dated days), plus the already-pinned
+section and recipe-reference semantics from the spec and corpus. No
+parser implementation source was consulted. Chosen behaviors, all
+narrowest-defensible from that page and pinned by Oliver-owned tests:
+(1) sections are days, in order; (2) an ISO date is recognized only as
+a trailing `(YYYY-MM-DD)` title group with valid month/day — the
+conventions' examples are the only date forms, so anything else stays
+part of the name; (3) reference directives (`{2}`, `{}`, `{4%servings}`)
+are preserved as source text and never deduplicated or resolved; (4)
+the view is interpretation over the existing Cooklang parse — Oliver
+has no second parser and no meal-planning logic (docs/COOKLANG.md §12).
+
 Session 22 (CK3 pure scaling) provenance record: the scaling operation
 uses only the official Cooklang conventions, "Scaling and Servings"
 (https://cooklang.org/docs/conventions/, fetched 2026-08-13), which is
