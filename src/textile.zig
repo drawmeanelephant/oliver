@@ -1,10 +1,11 @@
 //! Textile frontend.
 //!
 //! Blocks: paragraphs, `h1.`–`h6.` headings, single-period `bq.` block
-//! quotes, `*`/`#` lists with marker-depth nesting, and `|a|b|` tables
-//! (single-line rows with cell modifiers, an optional `table<mods>.`
-//! signature, colspan/rowspan, and Textile 2's header-alignment
-//! propagation). Inlines: plain text,
+//! quotes, `*`/`#` lists with marker-depth nesting, `dl.` definition
+//! lists (`term:definition` lines with multi-line definitions, Textile
+//! 2), and `|a|b|` tables (single-line rows with cell modifiers, an
+//! optional `table<mods>.` signature, colspan/rowspan, and Textile 2's
+//! header-alignment propagation). Inlines: plain text,
 //! hard line breaks, same-line `@code@` phrases, the phrase-modifier family
 //! (`*strong*`, `_emphasis_`, `**bold**`, `__italic__`, `-deleted-`,
 //! `+inserted+`, `^superscript^`, `~subscript~`, `%span%`,
@@ -146,6 +147,8 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var table: ?TableState = null;
     var code: ?CodeBlockState = null;
     var escape: ?EscapeState = null;
+    var dlist: ?DefListState = null;
+    defer if (dlist) |*d| d.lines.deinit(doc.allocator());
     while (lines.next()) |line| {
         // The block-level `==` escape (Textile 2 "Escaping") runs before
         // every other rule: while the region is open, every line — blank or
@@ -165,6 +168,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             closeLists(&lists);
             try closeTable(doc, &table, &defs);
             try closeCode(doc, &code);
+            try closeDefList(doc, &dlist, &defs);
             escape = .{ .start = @intCast(line.end), .end = @intCast(line.end) };
             continue;
         }
@@ -179,6 +183,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
             try closeTable(doc, &table, &defs);
+            try closeDefList(doc, &dlist, &defs);
             if (code != null and !code.?.extended) try closeCode(doc, &code);
             if (code != null and code.?.extended) {
                 try code.?.lines.append(doc.allocator(), line.contentSpan());
@@ -214,6 +219,25 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // verbatim content above; a def line between table rows closes the
         // table first).
         if (tryParseDef(line) != null) continue;
+        // An open definition list absorbs every non-signature line: a
+        // `term:definition` line starts a new pair, anything else continues
+        // the open definition (Textile 2 "Definition lists": a definition
+        // may span multiple lines). A recognized signature — including a
+        // fresh `dl.` — ends the list and is processed below.
+        if (dlist != null) {
+            if (try trySignature(doc, line)) {
+                try closeDefList(doc, &dlist, &defs);
+                // Fall through: the signature line opens its own block.
+            } else {
+                const content = line.contentSpan();
+                if (tryDefItemAt(doc, content)) |item| {
+                    try appendDefPair(doc, &dlist.?, item, line.terminatorSpan(), &defs);
+                } else {
+                    try appendDefContinuation(doc, &dlist.?, line);
+                }
+                continue;
+            }
+        }
         // An open extended `bq..` owns every non-signature line; a
         // recognized block signature ends it and is processed below
         // (Textile 2: extended signatures stay active "until the next
@@ -250,6 +274,14 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             closeLists(&lists);
             try openTable(doc, &table, sig.attrs);
             if (sig.row) |row| try appendTableRow(doc, &table.?, row);
+            continue;
+        }
+        if (try tryDefListSignature(doc, line)) |sig| {
+            try closeBlock(doc, &block, &defs);
+            closeLists(&lists);
+            try closeTable(doc, &table, &defs);
+            try closeCode(doc, &code);
+            try openDefList(doc, &dlist, sig, line, &defs);
             continue;
         }
         if (try parseTableRow(doc, line, 0)) |row| {
@@ -307,6 +339,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     try closeBlock(doc, &block, &defs);
     closeLists(&lists);
     try closeTable(doc, &table, &defs);
+    try closeDefList(doc, &dlist, &defs);
     try closeCode(doc, &code);
     // An unterminated escape region still renders its content (the region
     // implicitly closes at end of input; docs/TEXTILE-PARITY.md §14).
@@ -833,6 +866,7 @@ fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryCodeMarker(doc, line) != null) return true;
     if (try tryFootnoteMarker(doc, line) != null) return true;
     if (try tryLineAttr(doc, line) != null) return true;
+    if (try tryDefListSignature(doc, line) != null) return true;
     return false;
 }
 
@@ -935,6 +969,158 @@ fn appendSiblingItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), 
 /// reconciliation stack is dropped.
 fn closeLists(lists: *std.ArrayList(ListEntry)) void {
     lists.clearRetainingCapacity();
+}
+
+// ---------------------------------------------------------------------------
+// Definition lists (`dl.`).
+//
+// Textile 2 "Definition lists": `dl. term:definition` lines compose a
+// definition list. The term must be at the start of the line (or right
+// after the signature) with no space before the colon; the definition is
+// the rest of the line, and a definition may span multiple lines — a line
+// without a `term:` prefix continues the open definition ("there is no
+// space between the term and definition. The term must be at the start of
+// the line (or following the 'dl' signature as shown above)"). The list
+// converges on the shared `.list` model as a `.definition` kind whose
+// items carry their term/definition role (docs/TEXTILE-PARITY.md §21).
+// ---------------------------------------------------------------------------
+
+/// A parsed `term:definition` item from a `dl.` line.
+const DefItem = struct {
+    term: source.Span,
+    def: source.Span,
+};
+
+/// The parsed `dl.` signature: the composed block attributes and the first
+/// line's item.
+const DefSig = struct {
+    attrs: []const document.Attribute,
+    item: DefItem,
+};
+
+/// Parses `term:definition` from the content span: a non-empty run of
+/// non-whitespace, non-colon bytes immediately followed by `:`, then a
+/// non-empty definition (leading whitespace skipped). Anything else — a
+/// line with no colon, an empty term, an empty definition — is null, so
+/// the line continues the open definition.
+fn tryDefItemAt(doc: *const document.Document, content: source.Span) ?DefItem {
+    const bytes = doc.src.bytes[content.start..content.end];
+    var i: usize = 0;
+    while (i < bytes.len and bytes[i] != ':' and bytes[i] != ' ' and bytes[i] != '\t') : (i += 1) {}
+    if (i == 0 or i >= bytes.len or bytes[i] != ':') return null;
+    var j = i + 1;
+    while (j < bytes.len and (bytes[j] == ' ' or bytes[j] == '\t')) : (j += 1) {}
+    if (j >= bytes.len) return null;
+    const iterm = @as(u32, @intCast(i));
+    const idef = @as(u32, @intCast(j));
+    return .{
+        .term = .{ .start = content.start, .end = content.start + iterm },
+        .def = .{ .start = content.start + idef, .end = content.end },
+    };
+}
+
+/// Recognizes `dl<mods>.` definition-list signatures (Textile 2
+/// "Definition lists"). The marker must be followed by a space/tab, and
+/// the content must be a `term:definition` item — the first term must sit
+/// right after the signature (Textile 2: "The term must be at the start of
+/// the line (or following the 'dl' signature as shown above)"). Anything
+/// else — an empty signature or a line with no `term:` prefix — stays
+/// literal, like an empty `bq.`.
+fn tryDefListSignature(doc: *document.Document, line: source.Line) ParseError!?DefSig {
+    const t = line.text;
+    if (t.len < 4) return null;
+    if (t[0] != 'd' or t[1] != 'l') return null;
+    var attrs: []const document.Attribute = &.{};
+    var content: source.Span = undefined;
+    if (t[2] == '.') {
+        if (t[3] != ' ' and t[3] != '\t') return null;
+        var i: usize = 3;
+        while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+        content = .{ .start = @intCast(line.start + i), .end = @intCast(line.content_end) };
+    } else {
+        const sig = (try parseBlockSignature(doc, line, 2)) orelse return null;
+        attrs = sig.attrs;
+        content = sig.content;
+    }
+    const item = tryDefItemAt(doc, content) orelse return null;
+    return .{ .attrs = attrs, .item = item };
+}
+
+/// An open Textile definition list: the `.list` node (kind `.definition`;
+/// its last child is the open definition item) and the open definition's
+/// accumulated content lines, sealed into its paragraph when the next
+/// `term:def` line arrives or the block closes.
+const DefListState = struct {
+    list: *document.Node,
+    lines: std.ArrayList(ActiveBlock.LineRef) = .empty,
+};
+
+/// Opens a definition list from a `dl.` signature line: the list node and
+/// the signature line's first term/definition pair.
+fn openDefList(doc: *document.Document, dlist: *?DefListState, sig: DefSig, line: source.Line, defs: *const AliasTable) ParseError!void {
+    const list = try doc.createNode(.list, sig.item.term, .{ .list = .{
+        .kind = .definition,
+        .start = 1,
+        .loose = false,
+        .attrs = sig.attrs,
+    } });
+    try doc.appendChild(doc.root, list);
+    dlist.* = .{ .list = list, .lines = .empty };
+    try appendDefPair(doc, &dlist.*.?, sig.item, line.terminatorSpan(), defs);
+}
+
+/// Seals the open definition (parsing its accumulated lines into its
+/// paragraph, hard breaks between lines like any Textile paragraph), then
+/// starts a fresh term/definition pair from `item`.
+fn appendDefPair(doc: *document.Document, dlist: *DefListState, item: DefItem, terminator: source.Span, defs: *const AliasTable) ParseError!void {
+    try sealDef(doc, dlist, defs);
+    const term_item = try doc.createNode(.list_item, item.term, .{ .list_item = .{ .role = .term } });
+    try doc.appendChild(dlist.list, term_item);
+    const term_para = try doc.createNode(.paragraph, item.term, .{ .paragraph = .{} });
+    try doc.appendChild(term_item, term_para);
+    try parseInlines(doc, term_para, item.term, defs);
+    const def_item = try doc.createNode(.list_item, item.def, .{ .list_item = .{ .role = .definition } });
+    try doc.appendChild(dlist.list, def_item);
+    try dlist.lines.append(doc.allocator(), .{ .content = item.def, .terminator = terminator });
+    dlist.list.span.end = item.def.end;
+}
+
+/// Appends one continuation line to the open definition (a line without a
+/// `term:` prefix).
+fn appendDefContinuation(doc: *document.Document, dlist: *DefListState, line: source.Line) ParseError!void {
+    const content = line.contentSpan();
+    try dlist.lines.append(doc.allocator(), .{ .content = content, .terminator = line.terminatorSpan() });
+    const def_item = dlist.list.children.items[dlist.list.children.items.len - 1];
+    def_item.span.end = content.end;
+    dlist.list.span.end = content.end;
+}
+
+/// Parses the accumulated lines into the open definition item's paragraph.
+/// The item is the list's last child; it must still be open (no term item
+/// appended after it) when this runs.
+fn sealDef(doc: *document.Document, dlist: *DefListState, defs: *const AliasTable) ParseError!void {
+    if (dlist.lines.items.len == 0) return;
+    const span = source.Span{ .start = dlist.lines.items[0].content.start, .end = dlist.lines.items[dlist.lines.items.len - 1].content.end };
+    const def_item = dlist.list.children.items[dlist.list.children.items.len - 1];
+    def_item.span.end = span.end;
+    const para = try doc.createNode(.paragraph, span, .{ .paragraph = .{} });
+    try doc.appendChild(def_item, para);
+    for (dlist.lines.items, 0..) |ref, i| {
+        if (i > 0) {
+            const brk = try doc.createNode(.hard_break, dlist.lines.items[i - 1].terminator, .none);
+            try doc.appendChild(para, brk);
+        }
+        try parseInlines(doc, para, ref.content, defs);
+    }
+    dlist.lines.clearRetainingCapacity();
+}
+
+/// Closes the definition list: seals the open definition and drops the
+/// state (the nodes are already in the tree).
+fn closeDefList(doc: *document.Document, dlist: *?DefListState, defs: *const AliasTable) ParseError!void {
+    if (dlist.* == null) return;
+    if (dlist.*) |*active| try sealDef(doc, active, defs);
+    dlist.* = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -3682,6 +3868,94 @@ test "textile: ABC(def) acronyms carry the definition as the title" {
         var out = aw.toArrayList();
         defer out.deinit(std.testing.allocator);
         try std.testing.expectEqualStrings(want, out.items);
+    }
+}
+
+test "textile: dl. definition lists converge on the shared list model" {
+    const oliver = @import("oliver.zig");
+
+    // Textile 2 "Definition lists" example: the term sits at the line
+    // start (or right after the signature), immediately followed by a
+    // colon; the definition is the rest of the line and may continue on
+    // following lines. The shared `.list` model gains a `.definition`
+    // kind whose items carry their term/definition role.
+    {
+        var result = try oliver.parse(std.testing.allocator, "dl. textile:a cloth\nor knitting; a fabric\n", .textile, .{});
+        defer result.deinit();
+        const list = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.list, list.tag);
+        try std.testing.expectEqual(document.ListKind.definition, list.data.list.kind);
+        try std.testing.expectEqual(@as(usize, 2), list.children.items.len);
+        const term = list.children.items[0];
+        try std.testing.expectEqual(document.ListItemRole.term, term.data.list_item.role);
+        try std.testing.expectEqualStrings("textile", term.children.items[0].children.items[0].data.text);
+        const def = list.children.items[1];
+        try std.testing.expectEqual(document.ListItemRole.definition, def.data.list_item.role);
+        const para = def.children.items[0];
+        try std.testing.expectEqualStrings("a cloth", para.children.items[0].data.text);
+        try std.testing.expectEqual(document.Tag.hard_break, para.children.items[1].tag);
+        try std.testing.expectEqualStrings("or knitting; a fabric", para.children.items[2].data.text);
+    }
+    // Textile 2's full example renders byte-for-byte.
+    {
+        var result = try oliver.parse(std.testing.allocator, "dl. textile:a cloth, especially one manufactured by weaving\nor knitting; a fabric\nformat:the arrangement of data for storage or display.\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<dl>\n<dt>textile</dt>\n<dd>a cloth, especially one manufactured by weaving<br />\nor knitting; a fabric</dd>\n<dt>format</dt>\n<dd>the arrangement of data for storage or display.</dd>\n</dl>\n", out.items);
+    }
+    // A `dl<mods>.` signature's attributes land on the `<dl>` element.
+    {
+        var result = try oliver.parse(std.testing.allocator, "dl{color:red}. a:one\n", .textile, .{});
+        defer result.deinit();
+        const list = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), list.data.list.attrs.len);
+        try std.testing.expectEqualStrings("style", list.data.list.attrs[0].name);
+        try std.testing.expectEqualStrings("color:red;", list.data.list.attrs[0].value);
+    }
+}
+
+test "textile: dl. signature fallbacks stay literal" {
+    const oliver = @import("oliver.zig");
+
+    // A signature without a `term:` prefix, an empty definition, and an
+    // empty signature all stay ordinary text (the same conservatism as an
+    // empty `bq.`).
+    const cases = [_][]const u8{
+        "dl. plain text",
+        "dl. term:",
+        "dl. ",
+    };
+    const expected = [_][]const u8{
+        "<p>dl. plain text</p>\n",
+        "<p>dl. term:</p>\n",
+        "<p>dl. </p>\n",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(want, out.items);
+    }
+    // Inside an open list, a line whose "term" run contains a space is not
+    // a new pair (the term must sit at the line start) and continues the
+    // open definition; a blank line closes the list.
+    {
+        var result = try oliver.parse(std.testing.allocator, "dl. a:one\nsee also: not\nb:two\n\nplain\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<dl>\n<dt>a</dt>\n<dd>one<br />\nsee also: not</dd>\n<dt>b</dt>\n<dd>two</dd>\n</dl>\n<p>plain</p>\n", out.items);
     }
 }
 

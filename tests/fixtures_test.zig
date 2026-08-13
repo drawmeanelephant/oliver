@@ -2042,6 +2042,23 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/acronym-literal.textile"),
         .expected = @embedFile("fixtures/textile/acronym-literal.html"),
     },
+    // Definition lists `dl. term:definition` (Textile 2 "Definition
+    // lists"): Textile 2's example byte-for-byte with the multi-line
+    // definition and hard breaks, `dl<mods>.` attrs on the `<dl>`, term
+    // phrases and a colon inside the definition, and the literal
+    // fallbacks — a signature without a `term:` prefix, an empty term or
+    // definition, an empty signature, and the term-run rule that makes a
+    // spaced `see also:` line a continuation (docs/TEXTILE-PARITY.md §21).
+    .{
+        .name = "dl-basic",
+        .input = @embedFile("fixtures/textile/dl-basic.textile"),
+        .expected = @embedFile("fixtures/textile/dl-basic.html"),
+    },
+    .{
+        .name = "dl-literal",
+        .input = @embedFile("fixtures/textile/dl-literal.textile"),
+        .expected = @embedFile("fixtures/textile/dl-literal.html"),
+    },
     // Inline `==...==` escaping (Textile 2 "Escaping"): phrase delimiters
     // and the character replacements inside the region stay literal, while
     // formatting outside still applies — the current docs' quote example

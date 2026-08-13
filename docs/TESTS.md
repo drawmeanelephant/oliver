@@ -31,7 +31,7 @@ Tests are product contracts. `zig build test` runs three suites:
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 100 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 102 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -114,13 +114,17 @@ Tests are product contracts. `zig build test` runs three suites:
    (`??Cat's Cradle??` → `<cite>Cat’s Cradle</cite>` with the
    replacement, attrs + nesting, Hobix's example, the both-flag
    delimiter fix, and the family fallbacks;
-   docs/TEXTILE-PARITY.md §20), the acronym form
-   (`CSS(Cascading Style Sheets)` → `<acronym title="…">`, the
+   docs/TEXTILE-PARITY.md §20), the acronym form   (`CSS(Cascading Style Sheets)` → `<acronym title="…">`, the
    conservative shape contract, and opacity inside `@code@`/link
-   display; docs/TEXTILE-PARITY.md §20), and the
+   display; docs/TEXTILE-PARITY.md §20), definition lists
+   (`dl. term:definition` → `<dl>`/`<dt>`/`<dd>` with multi-line
+   definitions and hard breaks, `dl<mods>.` attrs, term phrases, the
+   term-run rule, and the literal signature fallbacks;
+   docs/TEXTILE-PARITY.md §21), and the
    `{...}` character macros (the documented table byte-for-byte with
    mirrored orders, inside link display text, the brace-edge rule
    that keeps `{*}`/`{-L}` whole, and the literal fallbacks;
+
    docs/TEXTILE-PARITY.md §18). It
    also verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
@@ -135,7 +139,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **197/197 tests passing** with Zig 0.16.0.
+The current complete result is **199/199 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 

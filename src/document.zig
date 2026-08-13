@@ -224,8 +224,12 @@ pub const Data = union(enum) {
     /// the ordered start number (1 for bullet lists; the first item's number
     /// for ordered), and the tight/loose flag (docs/BLOCKS-PARSING.md §4:
     /// loose iff any item pair is separated by a blank line or any item
-    /// directly contains two blocks separated by one).
+    /// directly contains two blocks separated by one). `.definition` is the
+    /// Textile `dl.` list.
     list: List,
+    /// `.list_item`: the term/definition role of a Textile definition-list
+    /// item (`dl.`, Textile 2); plain list items keep `.none`.
+    list_item: ListItem,
     /// `.table`: the per-column alignment, in order, one entry per column
     /// (GFM §4.10: from the delimiter row; Textile: from the header row),
     /// plus optional Textile table attributes.
@@ -325,11 +329,14 @@ pub const Autolink = struct {
 
 /// The payload of a `.list` node (Markdown §5.3). `bullet`/`delimiter`
 /// are what define "same type" for merging adjacent items: same bullet
-/// character, or same ordered delimiter (`.` vs `)`).
-pub const ListKind = enum { bullet, ordered };
+/// character, or same ordered delimiter (`.` vs `)`). `.definition` is
+/// the Textile `dl.` definition list (Textile 2 "Definition lists");
+/// its items carry their term/definition role in `data.list_item` and
+/// render `<dl>`/`<dt>`/`<dd>` (docs/TEXTILE-PARITY.md §21).
+pub const ListKind = enum { bullet, ordered, definition };
 
 pub const List = struct {
-    /// Bullet or ordered.
+    /// Bullet, ordered, or Textile definition list.
     kind: ListKind,
     /// For `.bullet`: the marker character (`-`, `+`, or `*`).
     bullet: u8 = 0,
@@ -341,6 +348,20 @@ pub const List = struct {
     /// Tight (false) vs loose (true). Paragraphs directly in a tight
     /// list's items render without `<p>`.
     loose: bool = false,
+    /// Textile block attributes from a `dl<mods>.` signature, on the
+    /// `<dl>` element; Markdown lists carry none.
+    attrs: []const Attribute = &.{},
+};
+
+/// The role of a Textile definition-list item: the term (`<dt>`) or its
+/// definition (`<dd>`).
+pub const ListItemRole = enum { term, definition };
+
+/// The payload of a `.list_item` node in a Textile definition list: the
+/// item's role, so the renderer writes `<dt>`/`<dd>` instead of `<li>`.
+/// Plain (Markdown and Textile bullet/ordered) list items keep `.none`.
+pub const ListItem = struct {
+    role: ListItemRole = .term,
 };
 
 /// Column alignment of a GFM table (§4.10), from the delimiter row:

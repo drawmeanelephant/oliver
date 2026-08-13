@@ -114,8 +114,8 @@ implemented (T18) — see §16.
   same phrase attributes on every operator are implemented (T21) — see
   §19 — and the citation and acronym forms are implemented (T22) — see
   §20.
-- **Definition lists** (`dl.`), **`clear`**, and **`notextile.`** (Textile
-  2-only) — deferred.
+- **Definition lists** (`dl.`) are implemented (T23) — see §21. **`clear`**
+  and **`notextile.`** (Textile 2-only) remain deferred.
 - **Textile raw HTML** — Textile keeps `<...>` as plain text (no `.raw_html`
   recognition); documented in the model convergence table.
 - **Bracket/brace forcing** (`c[*oo*]l`) — documented by Textile 2 as a way
@@ -967,4 +967,60 @@ unclosed (`CSS(open`) definition, and a run containing non-letters
 display text, and `==` escapes stay opaque. The acronym's uppercase
 run is skipped whole when it cannot form an acronym, keeping the
 single-pass scan linear.
+
+## 21. Definition lists (T23): pinned behaviors
+
+The audit's last block-level deferral, from Textile 2 "Definition
+lists": `dl. term:definition` lines compose a definition list.
+
+> dl. textile:a cloth, especially one manufactured by weaving\
+> or knitting; a fabric\
+> format:the arrangement of data for storage or display.\
+> Note that there is no space between the term and definition. The\
+> term must be at the start of the line (or following the "dl"\
+> signature as shown above).
+
+**The model convergence.** The definition list rides the shared `.list`
+machinery as a new `.definition` kind: the `.list` node renders
+`<dl>`, and its `.list_item` children carry a term/definition role in
+a new `data.list_item` payload that renders `<dt>`/`<dd>` (plain
+list items keep `.none` and render `<li>` unchanged — Markdown
+untouched). `dl<mods>.` block attributes land on the `<dl>` element.
+The list is tight, so the term and definition paragraphs render
+inline without `<p>` wrappers.
+
+**The term contract.** A term is a non-empty run of non-whitespace,
+non-colon bytes at the line start (or right after the signature),
+immediately followed by `:`; the definition is the rest of the line
+(leading whitespace after the colon is skipped — the lenient reading
+of "no space between the term and definition", which is enforced on
+*both* sides of the colon: `term : def` is not a pair). The definition
+must be non-empty; a definition may span multiple lines — any line
+without a `term:` prefix continues the open definition, with Textile
+hard breaks between lines. A colon inside a definition is fine
+(`url:http://example.com` — the pair splits on the term's first
+colon), and the term's own inlines are parsed (`*term*:def` →
+`<dt><strong>term</strong></dt>`).
+
+**The term-run rule.** Because the term cannot contain whitespace, a
+line like `see also: not a new term` is **not** a new pair — `see`
+stops at the space — so it continues the open definition. Pinned by
+`dl-literal`.
+
+**Termination.** The list closes at a blank line, a recognized block
+signature (including a fresh `dl.`, which starts a new list), a
+`[alias]url` def line, or end of input. Inside the list, an empty
+`dl.`/`term:`-less signature line stays literal — the same
+conservatism as an empty `bq.`: `dl. plain text`, `dl. term:` (empty
+definition), and `dl. ` (empty signature) are all ordinary text,
+and a failed signature line is a plain paragraph (pinned by
+`dl-literal`).
+
+**The current-docs conflict.** The current Textile Markup Language
+Documentation documents a **different** definition-list grammar —
+`- term := definition` lines with dash markers and multi-line
+definitions ending in `=:` (the php-textile form). The two
+references do not agree, so this slice implements the requested
+Textile 2 form and records the dash-marker form as the documented
+remainder (see CLEANROOM session 18).
 

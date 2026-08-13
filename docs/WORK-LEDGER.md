@@ -30,7 +30,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T19 big/small phrases | Textile 2's `++bigger++`/`--smaller--` → `<big>`/`<small>` slot into the phrase machinery as doubled `+`/`-` runs; a matched `--` pair is consumed (never em-dashed) while space-adjacent/intraword/numeric/unmatched `--` still em-dash; Tag gains big/small; Markdown untouched | after T18 | merged on main (PR #34) |
 | Textile worker | T20 span attrs + `{...}` macros | `%{style}(class#id)[lang]x%` phrase attributes compose onto `.span` attrs (Hobix "Phrase Attributes"; malformed runs literal, empty-content runs fall back to a plain span, a `%` inside a style cannot close the span); Textile 2's documented `{...}` macro table with mirrored orders; the brace-edge phrase rule keeps `{*}`/`{-L}` whole for the macro pass; Markdown untouched | after T19 | merged on main (PR #35) |
 | Textile worker | T21 phrase attributes on all operators | Hobix "Phrase Attributes" extended to the whole family: `*{color:red}x*` → `<strong style="color:red;">`, `_(big)x_` → `<em class="big">`, doubled/long operators included, via the shared `.phrase` payload + a combined renderer arm; same fallbacks as the span forms; a `{` after an opener is a style (macros only unattached); `--` em-dash interplay intact; Markdown untouched | after T20 | merged on main (PR #36) |
-| Textile worker | T22 citation + acronyms | Hobix's `??citation??` → `<cite>` (a doubled `?` joins the phrase family with attrs + nesting) and `ABC(def)` → `<acronym title="def">`; the both-flag delimiter fix (a run that is open and close tries close first, then opens); the acronym whole-run skip keeps the scan linear; Markdown untouched | after T21 | in flight (T22) |
+| Textile worker | T22 citation + acronyms | Hobix's `??citation??` → `<cite>` (a doubled `?` joins the phrase family with attrs + nesting) and `ABC(def)` → `<acronym title="def">`; the both-flag delimiter fix (a run that is open and close tries close first, then opens); the acronym whole-run skip keeps the scan linear; Markdown untouched | after T21 | merged on main (PR #37) |
+| Textile worker | T23 dl. definition lists | Textile 2's `dl. term:definition` → `<dl>`/`<dt>`/`<dd>`, converging on the shared list model (a `.definition` kind + role-bearing `.list_item` payload); multi-line definitions, `dl<mods>.` attrs, the term-run rule, literal signature fallbacks; Markdown untouched | after T22 | in flight (T23) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -810,7 +811,40 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   `citation-literal`, `acronym-basic`, `acronym-literal`).
 - **Parallelism:** yes; Textile-only, Markdown untouched.
 - **Integration:** after T21 (the 652/652 gate is re-verified).
-- **State:** in flight (T22). 197/197 tests green; canonical
+- **State:** integrated on main (PR #37). 197/197 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T23 — Definition lists (`dl.`)
+
+- **Objective:** close the audit's last block-level deferral — Textile
+  2's `dl. term:definition` definition list.
+- **Normative source:** Textile 2 "Definition lists" — `dl.
+  textile:a cloth, especially one manufactured by weaving` with the
+  multi-line continuation and the note "there is no space between the
+  term and definition. The term must be at the start of the line (or
+  following the 'dl' signature as shown above)". The current Textile
+  docs document a different dash-marker grammar (`- term :=
+  definition`) — recorded, not implemented (clean-room session 18).
+- **Dependencies:** the shared `.list`/`.list_item` model (Markdown
+  §5.2/§5.3), the block-signature machinery (T10), the inline pass.
+- **Seams:** `src/document.zig` + `src/html.zig` (`ListKind` gains
+  `.definition`, `Data.list_item` carries the term/definition role,
+  the `<dl>`/`<dt>`/`<dd>` rendering; Markdown list items keep
+  `.none`) and `src/textile.zig` (`tryDefListSignature` +
+  `tryDefItemAt`, the `DefListState` open/append/seal/close
+  lifecycle, parse-loop wiring, and `trySignature` coverage).
+- **Acceptance:** Textile 2's example byte-for-byte; multi-line
+  definitions with hard breaks; `dl<mods>.` attrs on the `<dl>`;
+  colon-in-def and term phrases; the term-run rule (a spaced `see
+  also:` line continues the definition); termination at blank
+  lines/signatures/`[alias]url`/EOF; `dl. plain text`, `dl. term:`,
+  and `dl. ` literal; the 652/652 gate is untouched.
+- **Tests:** 2 unit tests (model convergence + render, the literal
+  fallbacks + continuation rules), 2 new Textile fixture pairs
+  (`dl-basic`, `dl-literal`).
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T22 (the 652/652 gate is re-verified).
+- **State:** in flight (T23). 199/199 tests green; canonical
   scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations

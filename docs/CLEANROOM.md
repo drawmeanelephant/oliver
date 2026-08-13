@@ -428,4 +428,22 @@ delimiter fix (a run qualifying as both opener and closer tries to
 close first, then opens) is the standard delimiter-stack rule, not a
 reference-behavior inference.
 
+Session 18 (T23 definition lists) finding: Textile 2 "Definition
+lists" documents the `dl.` signature — "`dl. textile:a cloth,
+especially one manufactured by weaving` ... Note that there is no
+space between the term and definition. The term must be at the start
+of the line (or following the 'dl' signature as shown above)" — with
+multi-line definitions. The current Textile Markup Language
+Documentation documents a **different** grammar (php-textile's dash
+form: "Each term in a definition list starts with a dash. Put a :=
+between the term and the definition. If your definition spans
+multiple lines, end the definition with =:") — the two references do
+not agree, so this slice implements the requested Textile 2 form and
+records the dash-marker form as the documented remainder. The term
+contract (a non-whitespace, non-colon run immediately followed by
+`:`, leading definition whitespace skipped, empty definitions and
+signatures literal) is Oliver's conservative reading of "no space
+between the term and definition"; no Textile parser implementation
+source was consulted.
+
 No Markdown or Textile parser implementation source was consulted.
