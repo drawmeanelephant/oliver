@@ -191,4 +191,27 @@ the pinned behaviors in docs/TEXTILE-PARITY.md §9 are derived from the
 user-facing prose above (the shared `.code_block` payload and escaping
 policy come from the already-pinned Markdown fenced-code machinery).
 
+## Sources consulted (session 7 — extended blocks)
+
+- Movable Type "Textile 2 Syntax" "Extended Blocks"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html> —
+  "To cause a given block signature to stay active, use two periods in
+  your signature instead of one. This will tell Textile to keep
+  processing using that signature until it hits the next signature is
+  found", the `bq..` example (two lines, no blank, one quote; a `p.`
+  signature terminates), and the note that the form is "especially
+  useful for `bc` blocks where your code may have many blank lines
+  scattered through it".
+- Textile Markup Language Documentation
+  <https://textile-lang.com/> — "Extended blocks (with empty lines), are
+  marked by two periods, e.g. `bc..` or `bq..` and are terminated with
+  any other text block signature".
+
+No Textile parser implementation source was consulted for the T12
+work; the pinned behaviors in docs/TEXTILE-PARITY.md §10 are derived
+from the user-facing prose above (which signatures count as terminators
+follows the references' own "signature" list, and Oliver implements
+only the three forms — `bq..`, `bc..`, `pre..` — that the references
+discuss; `p..`/`h1..` are not extended signatures).
+
 No Markdown or Textile parser implementation source was consulted.

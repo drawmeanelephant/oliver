@@ -50,6 +50,8 @@ consulted.
 | block attributes on `bq.` | `.block_quote.attrs` (inner `.paragraph` unmarked) | `<blockquote style="…">` | implemented (T10) |
 | `bc.` block code | `.code_block` (escaped content, `escape` flag) | `<pre><code>` with `<`/`>` escaped | implemented (T11) |
 | `pre.` preformatted text | `.code_block` (verbatim, `escape = false`) | `<pre>` verbatim | implemented (T11) |
+| `bq..` extended quote | one `.block_quote` of blank-line-separated `.paragraph`s | `<blockquote><p>…</p><p>…</p></blockquote>` | implemented (T12) |
+| `bc..` / `pre..` extended code | `.code_block` (blank lines as content) | `<pre><code>` / `<pre>` with blank lines | implemented (T12) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -74,7 +76,7 @@ planned/deferred. The notable ones, so the record is honest:
   CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
   bodies literal (fixture `image-literal`).
-- **`bq..` extended blocks and citations**, **footnotes**,
+- **Block-quote citations (`bq.:URL`)**, **footnotes**,
   **line attributes**, **`==` escaping**, and the
   **character-replacement macros** (curly quotes, em/en dashes, ellipsis,
   `(c)`/`(r)`/`(tm)`). All planned/deferred in the feature matrix.
@@ -82,7 +84,8 @@ planned/deferred. The notable ones, so the record is honest:
 Tables were the last large *block* gap; they are now implemented (T8) —
 see §6. The largest remaining *inline* gap, link aliases, is now
 implemented too (T9) — see §7. Block attributes are implemented (T10) —
-see §8 — and `bc.`/`pre.` block code is implemented (T11) — see §9.
+see §8 — `bc.`/`pre.` block code is implemented (T11) — see §9 — and
+`bq..`/`bc..`/`pre..` extended blocks are implemented (T12) — see §10.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -407,8 +410,46 @@ that merely starts with the letters (`prelude.`) are all ordinary
 paragraph text.
 
 **Deferred.** The extended **`bc..`/`pre..`** double-period forms (blank
-lines inside the block, terminated by the next signature) are the
-separately documented extended-block mechanism and stay deferred with
-`bq..`.
+lines inside the block, terminated by the next signature) use the
+separately documented extended-block mechanism of §10 and are now
+implemented (T12).
+
+## 10. Extended blocks (T12): pinned behaviors
+
+Textile 2 "Extended Blocks" and the current Textile docs agree: two
+periods in a signature keep it active across blank lines, running
+"until the next signature is found" (current docs: terminated by any
+other text block signature, usually `p.`). Oliver implements the three
+forms the references discuss — `bq..`, `bc..`, `pre..` — with optional
+block modifiers before the double period (`bq{color:red}..`). Every
+choice below is pinned by the `extended-*` fixtures and the unit tests
+in `src/textile.zig`.
+
+**`bq..`** opens one `<blockquote>` whose inner paragraphs are the
+blank-line-separated chunks; unmarked lines continue the current
+paragraph with Textile hard breaks (the Textile 2 example — two lines,
+no blank — is one paragraph). The quote's attrs come from the
+signature's modifiers; inner paragraphs are unmarked, like a plain `bq.`.
+
+**`bc..`/`pre..`** keep every line, **blank lines included**, as verbatim
+content (the extended form exists precisely for "code blocks where your
+code may have many blank lines scattered through it"); `bc..` escapes
+inside `<pre><code>`, `pre..` is verbatim `<pre>`.
+
+**Termination.** A recognized block signature ends an extended block and
+opens its own block: a `table<mods>.` signature, an extended or
+single-period `bq.`/`bc.`/`pre.` signature, an `hN.` heading, or a `p.`
+marker. **List markers, table rows, and plain lines are not block
+signatures and remain content** inside an extended block — the literal
+reading of "until the next signature is found". Def lines still vanish
+inside a `bq..` (the T9 rule applies everywhere) and remain verbatim
+content inside `bc..`/`pre..`. A block ends at EOF with its content.
+
+**Literal fallbacks (pinned by `extended-literal`).** Empty extended
+signatures (`bq..`, `bc.. ` — behavior unspecified, same rule as the
+single-period forms), `p..`/`h1..` (not extended signatures — Oliver
+implements only the three forms the references discuss), and the
+near-miss `bq..x` all stay ordinary text. A single-period `bq.` still
+ends at the first blank line.
 
 

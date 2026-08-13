@@ -19,7 +19,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T8 Textile tables | Textile `|a|b|` block rows, cell/row/table modifiers, header-alignment propagation, flat-row rendering; Textile fixtures; no Markdown/core changes | after M7 (reuses the `.table` model family) | integrated on main (PR #20) |
 | Textile worker | T9 Textile link aliases | `[alias]url` definition lines + `"text":alias` references via a document-global alias table; Textile fixtures; no Markdown/core changes | after T8 | integrated on main (PR #21) |
 | Textile worker | T10 Textile block attributes | `{style}`/`(class#id)`/`[lang]`/alignment/padding on `p.`/`hN.`/`bq.` signatures; block attrs in model + renderer; Textile fixtures; Markdown untouched | after T9 | integrated on main (PR #22) |
-| Textile worker | T11 `bc.`/`pre.` block code | single-period code/preformatted leaf blocks owning verbatim lines until a blank line; `.code_block` verbatim `escape` flag + attrs; Textile fixtures; Markdown untouched | after T10 | implemented on main (uncommitted) |
+| Textile worker | T11 `bc.`/`pre.` block code | single-period code/preformatted leaf blocks owning verbatim lines until a blank line; `.code_block` verbatim `escape` flag + attrs; Textile fixtures; Markdown untouched | after T10 | integrated on main (PR #23) |
+| Textile worker | T12 extended blocks (`bq..`/`bc..`/`pre..`) | double-period signatures stay active across blank lines: `bq..` flushes blank-line-separated paragraphs into one blockquote, `bc..`/`pre..` keep blank lines as code content; both end at the next block signature | after T11 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -403,7 +404,41 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   (`bc.` ↔ fenced code, byte-identical).
 - **Parallelism:** yes; Textile + model/renderer, Markdown untouched.
 - **Integration:** after T10 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 169/169 tests green;
+- **State:** integrated on main (PR #23). 169/169 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T12 — Extended blocks (`bq..`/`bc..`/`pre..`)
+
+- **Objective:** implement the double-period extended signatures that
+  stay active across blank lines — the last documented block mechanism.
+- **Authoritative sources:** Movable Type Textile 2 Syntax "Extended
+  Blocks" ("To cause a given block signature to stay active, use two
+  periods in your signature instead of one... until it hits the next
+  signature is found", with the `bq..` example, and "especially useful
+  for `bc` blocks where your code may have many blank lines scattered
+  through it"); current Textile docs (extended blocks "are terminated
+  with any other text block signature"). Both clean-room allowed.
+- **Seams:** `src/textile.zig` (`ExtendedSig`/`tryExtendedMarker`,
+  `openExtendedQuote` + `flushQuoteParagraph`, the `extended` flag on
+  `ActiveBlock`/`CodeBlockState`/`CodeSignature`, `trySignature` as the
+  terminator predicate, parse-loop ownership), Textile fixtures/index,
+  feature matrix, parity (new §10), test/ledger docs, README. Model and
+  renderer untouched (reuses `.block_quote`/`.code_block`).
+- **Acceptance:** the Textile 2 `bq..` example byte-for-byte; blank-line
+  paragraphs inside one blockquote; `bc..`/`pre..` keep blank lines as
+  content; termination at any block signature (`p.`, `hN.`, `bq.`,
+  `bc.`, `pre.`, `table`); list markers/table rows remain content; def
+  lines vanish in `bq..` and stay code in `bc..`; empty `sig..`, `p..`,
+  and `h1..` stay literal; single-period forms unchanged; the 652/652
+  gate is untouched.
+- **Tests:** 3 unit tests (extended quote structure/termination,
+  extended code blank-line content, ownership/literal fallbacks), 4
+  Textile fixture pairs, 1 shared-model convergence pair (`bc..` with
+  blank lines ↔ fenced code), and the `bq-malformed`/`block-attr-literal`
+  pins updated for the new contract.
+- **Parallelism:** yes; Textile-local, Markdown untouched.
+- **Integration:** after T11 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 172/172 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations
