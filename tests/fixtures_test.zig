@@ -1632,6 +1632,11 @@ const textile_fixtures = [_]TextileFixture{
         .expected = @embedFile("fixtures/textile/phrase-boundaries.html"),
     },
     .{
+        .name = "phrase-big-small",
+        .input = @embedFile("fixtures/textile/phrase-big-small.textile"),
+        .expected = @embedFile("fixtures/textile/phrase-big-small.html"),
+    },
+    .{
         .name = "phrase-in-heading",
         .input = @embedFile("fixtures/textile/phrase-in-heading.textile"),
         .expected = @embedFile("fixtures/textile/phrase-in-heading.html"),
