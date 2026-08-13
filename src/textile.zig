@@ -69,8 +69,12 @@
 //! - `bc.` block code and `pre.` preformatted text open a leaf that owns
 //!   every following non-blank line verbatim until a blank line (Textile 2:
 //!   "a block ends with the first blank line"). `bc` escapes `<`/`>` and
-//!   renders `<pre><code>`; `pre` is verbatim `<pre>` (the extended
-//!   `bc..`/`pre..` forms are deferred).
+//!   renders `<pre><code>`; `pre` is verbatim `<pre>`.
+//! - Extended signatures (`bq..`, `bc..`, `pre..`, optional modifiers
+//!   before the double period) stay active across blank lines until the
+//!   next block signature (Textile 2 "Extended Blocks"): `bq..` becomes
+//!   one blockquote of blank-line-separated paragraphs, and `bc..`/`pre..`
+//!   keep blank lines as code content.
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -102,18 +106,36 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var code: ?CodeBlockState = null;
     while (lines.next()) |line| {
         if (isBlank(line.text)) {
+            // An extended `bq..` keeps blank lines: the current paragraph
+            // flushes and the blockquote stays open (docs/TEXTILE-PARITY.md
+            // §10). An extended `bc..`/`pre..` keeps blank lines as content.
+            if (block != null and block.?.extended) {
+                try flushQuoteParagraph(doc, &block, &defs);
+                continue;
+            }
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
             try closeTable(doc, &table, &defs);
-            try closeCode(doc, &code);
+            if (code != null and !code.?.extended) try closeCode(doc, &code);
+            if (code != null and code.?.extended) {
+                try code.?.lines.append(doc.allocator(), line.contentSpan());
+                continue;
+            }
             continue;
         }
         // An open single-period `bc.`/`pre.` block owns every following
         // non-blank line, signature-shaped or not (Textile 2: "a block ends
-        // with the first blank line encountered"; docs/TEXTILE-PARITY.md §8).
+        // with the first blank line encountered"; docs/TEXTILE-PARITY.md §9).
+        // An open extended `bc..`/`pre..` owns every line until the next
+        // block signature, blank lines included (handled above).
         if (code != null) {
-            try code.?.lines.append(doc.allocator(), line.contentSpan());
-            continue;
+            if (code.?.extended and try trySignature(doc, line)) {
+                try closeCode(doc, &code);
+                // Fall through: the signature line opens its own block.
+            } else {
+                try code.?.lines.append(doc.allocator(), line.contentSpan());
+                continue;
+            }
         }
         // An open table owns every row-shaped line (`|...|` or a
         // modifier-prefixed row); any other line closes it and is handled
@@ -125,7 +147,34 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             }
             try closeTable(doc, &table, &defs);
         }
-        if (tryParseDef(line) != null) continue; // def lines disappear
+        // Def lines disappear everywhere (an open code block claims them as
+        // verbatim content above; a def line between table rows closes the
+        // table first).
+        if (tryParseDef(line) != null) continue;
+        // An open extended `bq..` owns every non-signature line; a
+        // recognized block signature ends it and is processed below
+        // (Textile 2: extended signatures stay active "until the next
+        // signature is found").
+        if (block != null and block.?.extended) {
+            if (try trySignature(doc, line)) {
+                try closeBlock(doc, &block, &defs);
+                // Fall through: the signature line opens its own block.
+            } else {
+                try appendBlockContent(doc, &block, .block_quote, &.{}, line.contentSpan(), line.terminatorSpan());
+                continue;
+            }
+        }
+        if (try tryExtendedMarker(doc, line)) |esig| {
+            try closeBlock(doc, &block, &defs);
+            closeLists(&lists);
+            try closeTable(doc, &table, &defs);
+            try closeCode(doc, &code);
+            switch (esig) {
+                .quote => |sig| try openExtendedQuote(doc, &block, sig, line.terminatorSpan()),
+                .code => |sig| try openCode(doc, &code, sig),
+            }
+            continue;
+        }
         if (try tryCodeMarker(doc, line)) |sig| {
             try closeBlock(doc, &block, &defs);
             closeLists(&lists);
@@ -188,10 +237,18 @@ const BlockKind = enum { paragraph, block_quote };
 const ActiveBlock = struct {
     kind: BlockKind,
     start: u32,
+    /// Running end of the last content line (updated as lines append).
+    end: u32,
     /// Block attributes from the opening signature's modifiers (empty for
     /// unmarked paragraphs).
     attrs: []const document.Attribute = &.{},
     lines: std.ArrayList(LineRef) = .empty,
+    /// Extended `bq..`: blank lines separate paragraphs inside one
+    /// blockquote instead of ending the block (docs/TEXTILE-PARITY.md §10).
+    extended: bool = false,
+    /// The already-created blockquote node for an extended `bq..`; null
+    /// for single-period blocks, which create their nodes at close.
+    quote: ?*document.Node = null,
 
     const LineRef = struct {
         content: source.Span,
@@ -218,9 +275,10 @@ fn appendBlockContent(
     terminator: source.Span,
 ) ParseError!void {
     if (block.* == null) {
-        block.* = .{ .kind = kind, .start = content.start, .attrs = attrs };
+        block.* = .{ .kind = kind, .start = content.start, .end = content.end, .attrs = attrs };
     }
     std.debug.assert(block.*.?.kind == kind);
+    block.*.?.end = content.end;
     try block.*.?.lines.append(doc.allocator(), .{
         .content = content,
         .terminator = terminator,
@@ -229,12 +287,20 @@ fn appendBlockContent(
 
 fn closeBlock(doc: *document.Document, block: *?ActiveBlock, defs: *const AliasTable) ParseError!void {
     const active = block.* orelse return;
+    if (active.extended) {
+        // Extended `bq..`: the blockquote already exists; emit the final
+        // paragraph from any remaining lines (a block ending right after
+        // a blank line has none), then drop the state.
+        if (active.lines.items.len > 0) try flushQuoteParagraph(doc, block, defs);
+        block.* = null;
+        return;
+    }
     block.* = null;
 
     const lines = active.lines.items;
     const span = source.Span{
         .start = active.start,
-        .end = lines[lines.len - 1].content.end,
+        .end = active.end,
     };
     var parent = doc.root;
     var para_attrs: []const document.Attribute = active.attrs;
@@ -260,20 +326,45 @@ fn closeBlock(doc: *document.Document, block: *?ActiveBlock, defs: *const AliasT
     }
 }
 
+/// Emits one paragraph from the accumulated lines into the open extended
+/// `bq..` blockquote and clears the line buffer. Called on every blank
+/// line inside the extended block and once at close. The inner paragraphs
+/// are unmarked, like the single inner paragraph of a plain `bq.`.
+fn flushQuoteParagraph(doc: *document.Document, block: *?ActiveBlock, defs: *const AliasTable) ParseError!void {
+    const active = block.* orelse return;
+    const lines = active.lines.items;
+    if (lines.len == 0) return;
+    const span = source.Span{
+        .start = active.start,
+        .end = lines[lines.len - 1].content.end,
+    };
+    const paragraph = try doc.createNode(.paragraph, span, .{ .paragraph = .{} });
+    try doc.appendChild(active.quote.?, paragraph);
+    for (lines, 0..) |ref, i| {
+        if (i > 0) {
+            const brk = try doc.createNode(.hard_break, lines[i - 1].terminator, .none);
+            try doc.appendChild(paragraph, brk);
+        }
+        try parseInlines(doc, paragraph, ref.content, defs);
+    }
+    block.*.?.lines.clearRetainingCapacity();
+    block.*.?.quote.?.span.end = span.end;
+}
+
 // ---------------------------------------------------------------------------
 // Block code (`bc.`) and preformatted text (`pre.`).
 //
 // A single-period `bc.`/`pre.` signature opens a leaf that owns every
 // following non-blank line, verbatim — signature-shaped lines stay code
 // content (Textile 2: "a block ends with the first blank line
-// encountered"). `bc` is "block code": a preformatted section like `pre`
+// encountered"). The extended `bc..`/`pre..` forms keep blank lines as
+// content and run until the next block signature (see the extended-blocks
+// section below). `bc` is "block code": a preformatted section like `pre`
 // that also gets a `<code>` tag, with `<` and `>` translated to HTML
 // entities automatically (Textile 2). `pre` is "pre-formatted text"
 // (current Textile docs), rendered verbatim inside `<pre>`. Hobix
 // documents neither signature (raw HTML only), so both follow the Textile
-// 2 + current-docs majority. The extended `bc..`/`pre..` double-period
-// forms (blank lines inside the block, terminated by the next signature)
-// remain deferred.
+// 2 + current-docs majority.
 // ---------------------------------------------------------------------------
 
 /// The parsed result of a `bc.`/`pre.` signature line.
@@ -285,16 +376,21 @@ const CodeSignature = struct {
     attrs: []const document.Attribute,
     /// Content span after the marker and its separator whitespace.
     content: source.Span,
+    /// Extended (`bc..`/`pre..`): blank lines stay content and the block
+    /// runs until the next block signature.
+    extended: bool = false,
 };
 
-/// An open single-period code block: content lines are collected verbatim
-/// until a blank line (or EOF), then published as a `.code_block` leaf.
+/// An open code block: content lines are collected verbatim until a blank
+/// line (single-period) or the next block signature (extended), then
+/// published as a `.code_block` leaf.
 const CodeBlockState = struct {
     preformatted: bool,
     attrs: []const document.Attribute,
     /// The node span: first content line's start through the last line's
     /// content end.
     span: source.Span,
+    extended: bool = false,
     lines: std.ArrayList(source.Span) = .empty,
 };
 
@@ -342,6 +438,7 @@ fn openCode(doc: *document.Document, code: *?CodeBlockState, sig: CodeSignature)
         .preformatted = sig.preformatted,
         .attrs = sig.attrs,
         .span = .{ .start = sig.content.start, .end = sig.content.end },
+        .extended = sig.extended,
     };
     try code.*.?.lines.append(doc.allocator(), sig.content);
 }
@@ -370,6 +467,110 @@ fn closeCode(doc: *document.Document, code: *?CodeBlockState) ParseError!void {
         },
     });
     try doc.appendChild(doc.root, node);
+}
+
+// ---------------------------------------------------------------------------
+// Extended blocks (`sig..`).
+//
+// Two periods in a signature keep it active across blank lines (Textile 2
+// "Extended Blocks": "To cause a given block signature to stay active,
+// use two periods in your signature instead of one. This will tell Textile
+// to keep processing using that signature until it hits the next signature";
+// current Textile docs: extended blocks "are terminated with any other text
+// block signature"). Oliver implements the three that the references
+// discuss: `bq..` (a blockquote of multiple blank-line-separated
+// paragraphs), `bc..`, and `pre..` (code with blank lines inside). The
+// double period may follow block modifiers (`bq{color:red}..`). List
+// markers, table rows, and plain lines are not block signatures, so they
+// remain content inside an extended block (docs/TEXTILE-PARITY.md §10).
+// ---------------------------------------------------------------------------
+
+/// The parsed result of an extended (`sig..`) block marker.
+const ExtendedSig = union(enum) {
+    /// `bq..`: opens an extended block quote.
+    quote: BlockSignature,
+    /// `bc..`/`pre..`: opens an extended code block.
+    code: CodeSignature,
+};
+
+/// Recognizes an extended block marker: `bq..`, `bc..`, or `pre..`, with
+/// optional block modifiers before the double period. The double period
+/// must be followed by a space/tab and non-empty content (the same
+/// conservative rule the single-period forms use).
+fn tryExtendedMarker(doc: *document.Document, line: source.Line) ParseError!?ExtendedSig {
+    const t = line.text;
+    var is_quote = false;
+    var preformatted = false;
+    var mod_start: usize = 0;
+    if (t.len >= 3 and t[0] == 'b' and t[1] == 'q') {
+        is_quote = true;
+        mod_start = 2;
+    } else if (t.len >= 3 and t[0] == 'b' and t[1] == 'c') {
+        mod_start = 2;
+    } else if (t.len >= 4 and t[0] == 'p' and t[1] == 'r' and t[2] == 'e') {
+        preformatted = true;
+        mod_start = 3;
+    } else return null;
+
+    var mods = Mods{};
+    var dot: usize = 0;
+    if (t[mod_start] == '.') {
+        dot = mod_start;
+    } else {
+        const scan = scanMods(t, mod_start, .block) orelse return null;
+        if (!scan.dot_terminated) return null;
+        mods = scan.mods;
+        dot = scan.end;
+    }
+    if (dot + 2 >= t.len or t[dot + 1] != '.') return null; // need `..`
+    if (t[dot + 2] != ' ' and t[dot + 2] != '\t') return null;
+    var i = dot + 3;
+    while (i < t.len and (t[i] == ' ' or t[i] == '\t')) : (i += 1) {}
+    if (i == t.len) return null; // empty content stays literal
+    const content = source.Span{
+        .start = @intCast(line.start + i),
+        .end = @intCast(line.content_end),
+    };
+    const style = try composeStyle(doc, mods.user_style, mods.pad_left, mods.pad_right, halignFragment(mods.halign), mods.valign);
+    const attrs = try composeAttrs(doc, style, mods.class, mods.id, mods.lang);
+    if (is_quote) return .{ .quote = .{ .attrs = attrs, .content = content } };
+    return .{ .code = .{ .preformatted = preformatted, .attrs = attrs, .content = content, .extended = true } };
+}
+
+/// Opens an extended `bq..`: the blockquote node is created immediately so
+/// paragraphs can be flushed into it at every blank line.
+fn openExtendedQuote(doc: *document.Document, block: *?ActiveBlock, sig: BlockSignature, terminator: source.Span) ParseError!void {
+    const quote = try doc.createNode(.block_quote, sig.content, .{ .block_quote = .{ .attrs = sig.attrs } });
+    try doc.appendChild(doc.root, quote);
+    block.* = .{
+        .kind = .block_quote,
+        .start = sig.content.start,
+        .end = sig.content.end,
+        .attrs = sig.attrs,
+        .extended = true,
+        .quote = quote,
+    };
+    try block.*.?.lines.append(doc.allocator(), .{
+        .content = sig.content,
+        .terminator = terminator,
+    });
+}
+
+/// True when the line opens any recognized block-level construct that
+/// terminates an open extended block (Textile 2: extended signatures stay
+/// active "until the next signature is found"): a `table<mods>.`
+/// signature, an extended or single-period `bq.`/`bc.`/`pre.` signature,
+/// an `hN.` heading, or a `p.` paragraph marker. List markers and table
+/// rows are not block signatures and remain content inside an extended
+/// block.
+fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
+    if (try tryTableSignature(doc, line) != null) return true;
+    if (try tryExtendedMarker(doc, line) != null) return true;
+    if (try tryHeading(doc, line) != null) return true;
+    if (try tryParagraphMarker(doc, line) != null) return true;
+    if (try tryBlockQuoteMarker(doc, line) != null) return true;
+    if (try tryCodeMarker(doc, line) != null) return true;
+    return false;
 }
 
 /// One open list level of a Textile list tree. The stack is ordered by
@@ -1961,12 +2162,16 @@ test "textile: matched and near-miss at-sign storms stay deterministic" {
     try std.testing.expectEqualSlices(u8, first.items, second.items);
 }
 
-test "textile: empty extended and citation block-quote signatures stay literal" {
+test "textile: empty block-quote signatures and the citation form stay literal" {
     const oliver = @import("oliver.zig");
+    // Empty single- and extended-period signatures (behavior unspecified by
+    // the references) and the deferred `bq:` citation form stay literal;
+    // `bq..` with content is now the implemented extended quote.
     const cases = [_][]const u8{
         "bq.",
         "bq. \t",
-        "bq.. Extended",
+        "bq..",
+        "bq.. \t",
         "bq.:https://example.test/ Cited",
     };
     for (cases) |input| {
@@ -2943,10 +3148,12 @@ test "textile: blockquote attributes land on the quote, not the inner paragraph"
 test "textile: malformed block signatures stay literal" {
     const oliver = @import("oliver.zig");
     // Unterminated class, missing space after the period, doubled periods,
-    // and the deferred extended/citation quote forms are ordinary text.
+    // the deferred citation form, and a non-`hN` heading marker are
+    // ordinary text. (`bq..` with content is the implemented extended
+    // quote, covered by the extended-block tests.)
     var result = try oliver.parse(
         std.testing.allocator,
-        "p(foo not closed\n\np>.no-space\n\np.. double\n\nbq.. extended\n\nbq: citation\n\nh1x. not a heading\n",
+        "p(foo not closed\n\np>.no-space\n\np.. double\n\nbq: citation\n\nh1x. not a heading\n",
         .textile,
         .{},
     );
@@ -3039,4 +3246,127 @@ test "textile: bc./pre. marker edge cases and block interaction" {
         try std.testing.expectEqual(document.Tag.paragraph, root.children.items[0].tag);
         try std.testing.expectEqual(document.Tag.code_block, root.children.items[1].tag);
     }
+}
+
+test "textile: bq.. extended quote structure and termination" {
+    const oliver = @import("oliver.zig");
+
+    // The Textile 2 example: unmarked lines stay in the quote, a `p.`
+    // signature ends it.
+    {
+        var result = try oliver.parse(
+            std.testing.allocator,
+            "bq.. This is paragraph one of a block quote.\nThis is paragraph two of a block quote.\np. Now we are back to a regular paragraph.\n",
+            .textile,
+            .{},
+        );
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+        const quote = root.children.items[0];
+        try std.testing.expectEqual(document.Tag.block_quote, quote.tag);
+        try std.testing.expectEqual(@as(usize, 1), quote.children.items.len);
+        try std.testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+    }
+    // Blank lines separate paragraphs inside the one blockquote; the inner
+    // paragraphs are unmarked and the quote carries the signature's attrs.
+    {
+        var result = try oliver.parse(std.testing.allocator, "bq{color:red}.. first\n\nsecond\n\np. done\n", .textile, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+        const quote = root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), quote.data.block_quote.attrs.len);
+        try std.testing.expectEqualStrings("color:red;", quote.data.block_quote.attrs[0].value);
+        try std.testing.expectEqual(@as(usize, 2), quote.children.items.len);
+        for (quote.children.items) |para| {
+            try std.testing.expectEqual(document.Tag.paragraph, para.tag);
+            try std.testing.expectEqual(@as(usize, 0), para.data.paragraph.attrs.len);
+        }
+        try std.testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+    }
+    // A heading and another quote signature also terminate; an empty `bq..`
+    // stays literal; EOF closes cleanly.
+    {
+        var result = try oliver.parse(std.testing.allocator, "bq.. quote\n\nh2. Head\n", .textile, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(document.Tag.block_quote, root.children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.heading, root.children.items[1].tag);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "bq.. last line", .textile, .{});
+        defer result.deinit();
+        const quote = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.block_quote, quote.tag);
+        try std.testing.expectEqual(@as(usize, 1), quote.children.items.len);
+    }
+}
+
+test "textile: bc.. and pre.. extended code keep blank lines" {
+    const oliver = @import("oliver.zig");
+
+    // Blank lines are verbatim content; the block ends at the next block
+    // signature or EOF.
+    {
+        var result = try oliver.parse(std.testing.allocator, "bc.. line one\n\nline three\np. after\n", .textile, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+        const code = root.children.items[0];
+        try std.testing.expectEqual(document.Tag.code_block, code.tag);
+        try std.testing.expectEqualStrings("line one\n\nline three\n", code.data.code_block.content);
+        try std.testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "pre.. <b>x</b>\n\n& y", .textile, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try std.testing.expect(!code.data.code_block.escape);
+        try std.testing.expectEqualStrings("<b>x</b>\n\n& y\n", code.data.code_block.content);
+    }
+    // A table row stays code content; list markers and plain lines too.
+    {
+        var result = try oliver.parse(std.testing.allocator, "bc.. a\n|x|y|\n* not a list\n\np. after\n", .textile, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try std.testing.expectEqualStrings("a\n|x|y|\n* not a list\n\n", code.data.code_block.content);
+    }
+}
+
+test "textile: extended-block ownership and literal fallbacks" {
+    const oliver = @import("oliver.zig");
+
+    // A def line inside an extended quote vanishes; inside extended code it
+    // is verbatim content.
+    {
+        var result = try oliver.parse(std.testing.allocator, "bq.. quote\n[a]http://u\nmore\n\np. after\n", .textile, .{});
+        defer result.deinit();
+        const quote = result.document.root.children.items[0];
+        const para = quote.children.items[0];
+        try std.testing.expectEqual(@as(usize, 3), para.children.items.len); // text + break + text
+        try std.testing.expectEqualStrings("quote", para.children.items[0].data.text);
+        try std.testing.expectEqualStrings("more", para.children.items[2].data.text);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "bc.. a\n[x]http://u\nb\n", .textile, .{});
+        defer result.deinit();
+        const code = result.document.root.children.items[0];
+        try std.testing.expectEqualStrings("a\n[x]http://u\nb\n", code.data.code_block.content);
+    }
+    // Empty extended signatures and near misses stay literal; `p..` and
+    // `h1..` are not extended signatures.
+    var result = try oliver.parse(
+        std.testing.allocator,
+        "bq..\n\nbc.. \n\np.. not extended\n\nh1.. not extended\n\nbq. single still works\n",
+        .textile,
+        .{},
+    );
+    defer result.deinit();
+    const root = result.document.root;
+    try std.testing.expectEqual(document.Tag.paragraph, root.children.items[0].tag);
+    try std.testing.expectEqual(document.Tag.paragraph, root.children.items[1].tag);
+    try std.testing.expectEqual(document.Tag.paragraph, root.children.items[2].tag);
+    try std.testing.expectEqual(document.Tag.paragraph, root.children.items[3].tag);
+    try std.testing.expectEqual(document.Tag.block_quote, root.children.items[4].tag);
 }

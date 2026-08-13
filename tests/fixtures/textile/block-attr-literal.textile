@@ -4,7 +4,7 @@ p>.no-space
 
 p.. double
 
-bq.. extended stays literal
+bq.. 
 
 bq: citation stays literal
 

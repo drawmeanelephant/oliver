@@ -23,12 +23,15 @@ Tests are product contracts. `zig build test` runs three suites:
    padding, heading combinations, blockquote placement, and literal
    fallbacks), `bc.`/`pre.` code blocks (escaped vs verbatim content,
    multi-line collection, signature-shaped content lines, blank-line
-   termination, modifier attrs, and literal fallbacks), a 10,000-pair
-   phrase storm, and a 2,000-deep phrase-nesting workload.
+   termination, modifier attrs, and literal fallbacks), `bq..`/`bc..`/
+   `pre..` extended blocks (blank-line paragraph separation inside one
+   blockquote, blank lines as code content, signature termination,
+   modifiers, def-line interaction, and literal fallbacks), a
+   10,000-pair phrase storm, and a 2,000-deep phrase-nesting workload.
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 9 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 257 Markdown and 65 Textile fixture pairs.
+   The explicit index contains 257 Markdown and 69 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -63,7 +66,12 @@ Tests are product contracts. `zig build test` runs three suites:
    docs/TEXTILE-PARITY.md §8), and `bc.`/`pre.` code blocks
    (escaped `<pre><code>` with signature-shaped content lines kept
    verbatim, verbatim `<pre>` preserving HTML, modifier attrs on the
-   `<pre>`, and literal fallback shapes; docs/TEXTILE-PARITY.md §9). It
+   `<pre>`, and literal fallback shapes; docs/TEXTILE-PARITY.md §9), and
+   `bq..`/`bc..`/`pre..` extended blocks (the Textile 2 example
+   byte-for-byte, blank-line paragraph separation inside one
+   blockquote, blank lines as verbatim code content, signature
+   termination, and literal fallback shapes;
+   docs/TEXTILE-PARITY.md §10). It
    also verifies shared-model convergence,
    hostile-input completion and leak freedom, NUL policy, diagnostics, and
    deterministic repeat rendering (list stress: 2k nested items, 10k
@@ -77,7 +85,7 @@ Tests are product contracts. `zig build test` runs three suites:
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
 
-The current complete result is **169/169 tests passing** with Zig 0.16.0.
+The current complete result is **172/172 tests passing** with Zig 0.16.0.
 
 ## Fixture convention
 
