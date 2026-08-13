@@ -1478,6 +1478,11 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .input = @embedFile("fixtures/markdown/ext-heading-ids.md"),
         .expected = @embedFile("fixtures/markdown/ext-heading-ids.html"),
     },
+    .{
+        .name = "ext-strikethrough",
+        .input = @embedFile("fixtures/markdown/ext-strikethrough.md"),
+        .expected = @embedFile("fixtures/markdown/ext-strikethrough.html"),
+    },
 };
 
 const TextileFixture = struct {
@@ -2399,6 +2404,7 @@ fn renderExtHtml(input: []const u8) !std.ArrayList(u8) {
             .footnotes = true,
             .definition_lists = true,
             .heading_attributes = true,
+            .strikethrough = true,
         },
     });
     defer result.deinit();

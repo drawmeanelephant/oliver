@@ -71,10 +71,9 @@ pub const Dialect = enum {
 /// Markdown dialect extensions. All are **off by default**: the Markdown
 /// frontend is byte-exact CommonMark 0.31.2 unless a consumer opts in, so
 /// the CommonMark conformance corpus stays green. Each extension is a
-/// documented, principled addition with its own contract doc and tests.
-/// Markdown dialect extensions (footnotes, definition lists, heading
-/// attribute lists). All are off by default; see `markdown.Options` and
-/// docs/MARKDOWN-EXTENSIONS.md.
+/// documented, principled addition with its own contract doc and tests
+/// (footnotes, definition lists, heading attribute lists, GFM
+/// strikethrough; see `markdown.Options` and docs/MARKDOWN-EXTENSIONS.md).
 pub const MarkdownOptions = markdown.Options;
 
 /// Parse options. Markdown extensions are off by default.

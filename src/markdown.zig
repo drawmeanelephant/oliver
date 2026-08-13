@@ -120,6 +120,11 @@ pub const Options = struct {
     /// `{#id .class}` on ATX and Setext headings, consumed as the heading's
     /// explicit `id`/`class`.
     heading_attributes: bool = false,
+    /// GFM strikethrough: a run of exactly two tildes (`~~text~~`) renders
+    /// as `<del>text</del>`; runs of one or three-plus tildes stay literal.
+    /// Flanking follows the CommonMark emphasis rules (GFM spec §6.5
+    /// "Strikethrough (extension)").
+    strikethrough: bool = false,
 };
 
 const tab_stop: u32 = 4;
@@ -2487,7 +2492,7 @@ fn parseMultilineBlockInlines(
         const has_following_content_line = i + 1 < lines.len;
         const end = analyzeLineEnd(doc.src.bytes, ref.content, has_following_content_line);
         const start = skipLeadingWhitespace(doc.src.bytes, ref.content);
-        try scanLine(doc, &items, ref.content, .{ .start = start, .end = end.content_end }, constructs.items, &exclude);
+        try scanLine(doc, &items, ref.content, .{ .start = start, .end = end.content_end }, constructs.items, &exclude, options);
         if (has_following_content_line) {
             // A line ending inside a construct (code span content — §6.1
             // "line endings are converted to spaces" — or a raw HTML tag)
@@ -2689,7 +2694,7 @@ fn parseTableCellInlines(
     defer constructs.deinit(doc.allocator());
     try mergeConstructs(doc, spans.items, tags.items, &constructs);
     var exclude: u32 = 0;
-    try scanLine(doc, &items, content, content, constructs.items, &exclude);
+    try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
     try matchInlines(doc, node, items.items);
     try fixCellCodeSpans(doc, node);
@@ -2762,7 +2767,7 @@ fn parseHeadingInlines(
     defer constructs.deinit(doc.allocator());
     try mergeConstructs(doc, spans.items, tags.items, &constructs);
     var exclude: u32 = 0;
-    try scanLine(doc, &items, content, content, constructs.items, &exclude);
+    try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
     try matchInlines(doc, node, items.items);
 }
@@ -3988,6 +3993,7 @@ fn scanLine(
     emit: source.Span,
     constructs: []const Construct,
     exclude: *u32,
+    options: Options,
 ) ParseError!void {
     const bytes = doc.src.bytes;
     var i = raw.start;
@@ -4060,6 +4066,25 @@ fn scanLine(
             });
             i = e - 1; // loop increments past the run
             run_start = e;
+        } else if (b == '~' and options.strikethrough) {
+            if (isEscaped(bytes, i)) continue; // literal text, not a delimiter
+            // GFM strikethrough: only a run of exactly two tildes is a
+            // delimiter (GFM spec §6.5); runs of one or three-plus tildes
+            // stay literal text. A non-delimiter run is consumed whole so
+            // its middle cannot re-scan as a two-tilde delimiter.
+            var e = i + 1;
+            while (e < raw.end and bytes[e] == '~' and !isEscaped(bytes, e)) : (e += 1) {}
+            if (e - i != 2) {
+                i = e - 1; // loop increments past the whole run
+                continue;
+            }
+            try appendTextItem(doc, items, .{ .start = run_start, .end = i }, emit);
+            const span = source.Span{ .start = @intCast(i), .end = @intCast(e) };
+            try items.append(doc.allocator(), .{
+                .delimiter = classifyRun(bytes, span, raw),
+            });
+            i = e - 1; // loop increments past the run
+            run_start = e;
         } else if (b == '<' and !isEscaped(bytes, i)) {
             // §6.8 autolink: `<scheme:...>` or `<user@host>`. The scan is
             // per-line and the content excludes line endings, so scanning
@@ -4120,14 +4145,14 @@ fn classifyRun(bytes: []const u8, span: source.Span, line: source.Span) Delimite
     const left_flanking = !next_ws and (!next_punct or (next_punct and (prev_ws or prev_punct)));
     const right_flanking = !prev_ws and (!prev_punct or (prev_punct and (next_ws or next_punct)));
 
-    // Rules 1–8. For `*`, opening/closing needs only the corresponding
-    // flanking; for `_`, the stricter intraword rules with the
-    // punctuation-adjacent (b) clauses.
+    // Rules 1–8. For `*` (and GFM strikethrough `~`), opening/closing needs
+    // only the corresponding flanking; for `_`, the stricter intraword
+    // rules with the punctuation-adjacent (b) clauses.
     const ch = bytes[span.start];
     const can_open = left_flanking and
-        (ch == '*' or !right_flanking or (right_flanking and prev_punct));
+        (ch != '_' or !right_flanking or (right_flanking and prev_punct));
     const can_close = right_flanking and
-        (ch == '*' or !left_flanking or (left_flanking and next_punct));
+        (ch != '_' or !left_flanking or (left_flanking and next_punct));
 
     return .{
         .ch = ch,
@@ -4152,7 +4177,7 @@ const Match = struct {
     opener_seg: source.Span,
     closer_seg: source.Span,
 
-    const Kind = enum { em, strong };
+    const Kind = enum { em, strong, strikethrough };
 };
 
 /// `openers_bottom` table: for each (delimiter character, closer length
@@ -4166,10 +4191,10 @@ const Match = struct {
 /// the reference behavior on inputs like `*****Hello*world****` (see
 /// docs/FEATURE-MATRIX.md, "emphasis" row) and every verified spec example.
 const Bottoms = struct {
-    inner: [2][3]usize = .{ .{ 0, 0, 0 }, .{ 0, 0, 0 } },
+    inner: [3][3]usize = .{ .{ 0, 0, 0 }, .{ 0, 0, 0 }, .{ 0, 0, 0 } },
 
     fn idx(ch: u8) usize {
-        return if (ch == '*') 0 else 1;
+        return if (ch == '*') 0 else if (ch == '~') 2 else 1;
     }
 
     fn get(self: *const Bottoms, ch: u8, m: usize) usize {
@@ -4222,13 +4247,14 @@ fn processDelimiter(
             const o_idx = stack.items[j];
             const o = &items[o_idx].delimiter;
             if (o.ch != c.ch) continue;
-            if (!o.can_open or !mod3Allowed(o, c)) continue;
+            if (!o.can_open or (o.ch != '~' and !mod3Allowed(o, c))) continue;
 
             // Consume from the opener's back and the closer's front (the
-            // ends adjacent to the matched content); strong if both have at
-            // least 2 delimiters left.
-            const kind: Match.Kind = if (o.len() >= 2 and c.len() >= 2) .strong else .em;
-            const take: u32 = if (kind == .strong) 2 else 1;
+            // ends adjacent to the matched content). Strong pairs take two
+            // delimiters from each side; GFM strikethrough pairs take the
+            // whole two-tilde run from each side.
+            const kind: Match.Kind = if (o.ch == '~') .strikethrough else if (o.len() >= 2 and c.len() >= 2) .strong else .em;
+            const take: u32 = if (kind == .strikethrough) 2 else if (kind == .strong) 2 else 1;
             const o_seg = source.Span{
                 .start = o.span.end - o.back_used - take,
                 .end = o.span.end - o.back_used,
@@ -4499,7 +4525,11 @@ fn emitInlines(
                     for (obucket) |k| {
                         const m = matches[k];
                         const node = try doc.createNode(
-                            if (m.kind == .strong) .strong else .emphasis,
+                            switch (m.kind) {
+                                .em => .emphasis,
+                                .strong => .strong,
+                                .strikethrough => .deleted,
+                            },
                             .{ .start = m.opener_seg.start, .end = m.closer_seg.end },
                             .none,
                         );
@@ -7040,4 +7070,64 @@ test "markdown: definition lists are literal text when disabled" {
     defer result.deinit();
     // One ordinary paragraph containing both lines.
     try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+}
+
+test "markdown: GFM strikethrough renders as deleted (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "~~Hi~~ Hello, world!",
+        .markdown,
+        ext_parse(.{ .strikethrough = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p.tag);
+    try testing.expectEqual(@as(usize, 2), p.children.items.len);
+    try testing.expectEqual(document.Tag.deleted, p.children.items[0].tag);
+    try testing.expectEqualStrings("Hi", p.children.items[0].children.items[0].data.text);
+    try testing.expectEqualStrings(" Hello, world!", p.children.items[1].data.text);
+}
+
+test "markdown: strikethrough delimiters are exactly two tildes (extension)" {
+    const oliver = @import("oliver.zig");
+    // Single and triple tildes stay literal; two-tilde pairs strike.
+    var result = try oliver.parse(
+        testing.allocator,
+        "~single~ ~~two~~ ~~~three~~~",
+        .markdown,
+        ext_parse(.{ .strikethrough = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(@as(usize, 3), p.children.items.len);
+    try testing.expectEqualStrings("~single~ ", p.children.items[0].data.text);
+    try testing.expectEqual(document.Tag.deleted, p.children.items[1].tag);
+    try testing.expectEqualStrings(" ~~~three~~~", p.children.items[2].data.text);
+}
+
+test "markdown: strikethrough does not span paragraphs (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "This ~~has a\n\nnew paragraph~~.",
+        .markdown,
+        ext_parse(.{ .strikethrough = true }),
+    );
+    defer result.deinit();
+    try testing.expectEqual(@as(usize, 2), result.document.root.children.items.len);
+    const p1 = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p1.tag);
+    try testing.expectEqualStrings("This ~~has a", p1.children.items[0].data.text);
+    const p2 = result.document.root.children.items[1];
+    try testing.expectEqualStrings("new paragraph~~.", p2.children.items[0].data.text);
+}
+
+test "markdown: strikethrough is literal text when disabled" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "~~Hi~~", .markdown, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p.tag);
+    try testing.expectEqualStrings("~~Hi~~", p.children.items[0].data.text);
 }

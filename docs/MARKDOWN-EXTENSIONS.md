@@ -1,4 +1,4 @@
-# Markdown extensions (footnotes, definition lists, heading attributes)
+# Markdown extensions (footnotes, definition lists, heading attributes, strikethrough)
 
 **Status:** implemented — opt-in Markdown dialect extensions  \
 **Modules:** `src/markdown.zig` (parse), `src/html.zig` (render), `src/document.zig` (model)  \
@@ -121,7 +121,31 @@ headings:
   the heading model. See the `heading_ids` render option for how the
   explicit id interacts with auto-generated ids.
 
-## 4. GFM-style heading ids (`render: heading_ids`)
+## 4. GFM strikethrough (`parse: strikethrough`)
+
+Wraps text in `<del>` when it is surrounded by a matching pair of exactly
+**two** tildes, per GFM spec §6.5 "Strikethrough (extension)".
+
+- Only runs of exactly two tildes are delimiters; a single `~` and runs of
+  three or more tildes stay literal text (consumed whole, so a three-tilde
+  run cannot re-scan as a two-tilde delimiter).
+- Flanking follows the CommonMark emphasis rules (`*`-style: opening needs
+  left-flanking, closing needs right-flanking), and strikethrough cannot
+  span paragraph boundaries. Within a paragraph it may span soft-wrapped
+  lines, and it composes with emphasis, links, code spans, and tables.
+- `~~` delimiters never interact with `*`/`_` emphasis runs, and the
+  block-level definition-list `~` marker is unaffected (definitions require
+  a `~` at line start; a two-tilde run never matches).
+- Rendered as the document-model `deleted` node (the same node Textile's
+  `-x-` produces), so both dialects emit `<del>`.
+- Examples: `~~Hi~~ Hello, world!` → `<del>Hi</del> Hello, world!`;
+  `~x~` and `~~~x~~~` render literally.
+- Fixtures: `tests/fixtures/markdown/ext-strikethrough.md`; unit tests in
+  `src/markdown.zig`.
+
+---
+
+## 5. GFM-style heading ids (`render: heading_ids`)
 
 Auto-generated `id` attributes on every heading that has no explicit IAL
 id, following GFM §5.3 applied byte-wise:
@@ -159,7 +183,8 @@ suffixes), matching the GFM reference implementation.
   `heading_ids` is on; footnotes may appear inside definition bodies; link
   reference definitions and footnote definitions can lead the same
   paragraph (footnote definitions are tried first).
-- Fenced code, code spans, HTML blocks, and raw HTML are opaque to all four
-  extensions (a `[^x]:` line inside a fence is code, not a definition).
+- Fenced code, code spans, HTML blocks, and raw HTML are opaque to all five
+  extensions (a `[^x]:` line inside a fence is code, not a definition; a
+  `~~` pair inside a code span or fence is literal).
 - Fixtures: `tests/fixtures/markdown/ext-*.md` (parsed with all extensions
   enabled) plus unit tests in `src/markdown.zig` and `src/html.zig`.
