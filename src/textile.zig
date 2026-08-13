@@ -98,6 +98,11 @@
 //!   block-modifier run between pipes, then a period, a space, and
 //!   content — applies the modifier set to the paragraph, converging with
 //!   the `p<mods>.` marker machinery (docs/TEXTILE-PARITY.md §15).
+//! - Image modifiers: an alignment/style/class/padding run right after
+//!   `!` (`!<x!`, `!{style}x!`, `!(class)x!`, `!()x!`), and a size token
+//!   after the src (`10x20`, `10w 20h`, `20%`) — composed into the
+//!   `.image` width/height and attribute list through the block-attribute
+//!   machinery (docs/TEXTILE-PARITY.md §16).
 
 const std = @import("std");
 const source = @import("source.zig");
@@ -1762,6 +1767,33 @@ const ImageData = struct {
     src: Range,
     alt: ?Range,
     link_href: ?Range,
+    /// Modifier source ranges (relative offsets into the line); null when
+    /// the modifier is absent.
+    style: ?Range = null,
+    class: ?Range = null,
+    id: ?Range = null,
+    pad_left: u8 = 0,
+    pad_right: u8 = 0,
+    /// The composed alignment CSS fragment (`float:left` for `<`, …),
+    /// folded into the style by the emit pass; null when unaligned.
+    align_frag: ?[]const u8 = null,
+    /// The width/height size-token ranges (`10`, `20%`); null when the
+    /// image has no sizing.
+    width: ?Range = null,
+    height: ?Range = null,
+};
+
+/// The parsed image modifier run: raw source ranges for style/class/id,
+/// padding counts, the composed alignment CSS fragment, and the offset
+/// just past the last modifier (where the src begins).
+const ImageMods = struct {
+    style: ?Range = null,
+    class: ?Range = null,
+    id: ?Range = null,
+    pad_left: u8 = 0,
+    pad_right: u8 = 0,
+    align_frag: ?[]const u8 = null,
+    end: usize,
 };
 
 /// A `[N]` footnote reference (Textile 2 "Footnotes").
@@ -2050,37 +2082,194 @@ fn scanEscape(bytes: []const u8, i: usize) ?Range {
     return null; // no closer: the `==` stays literal text
 }
 
+/// Scans the image modifier run after the opening `!`: alignment (`<` left,
+/// `>` right, `=` centered, `-` middle, `^` top, `~` bottom), `{style}`,
+/// `(class)`/`(#id)`/`(class#id)`, and `(`/`)` padding (Textile 2 "Images"
+/// plus the current docs' `=` and style/class forms). The style and class
+/// delimiters are bounded by the construct's closing `!`, so a `)` or `}`
+/// beyond it never leaks in. Multiple alignment modifiers: the last wins
+/// (the same rule the block-modifier scanner uses). Returns null on a
+/// malformed token (the whole construct stays literal). `close` is the
+/// image's closing `!`.
+fn scanImageMods(bytes: []const u8, i: usize, close: usize) ?ImageMods {
+    var m = ImageMods{ .end = i };
+    var j = i;
+    while (j < close) {
+        switch (bytes[j]) {
+            '<' => {
+                m.align_frag = "float:left";
+                j += 1;
+            },
+            '>' => {
+                m.align_frag = "float:right";
+                j += 1;
+            },
+            '=' => {
+                m.align_frag = "display:block;margin-left:auto;margin-right:auto";
+                j += 1;
+            },
+            '-' => {
+                m.align_frag = "vertical-align:middle";
+                j += 1;
+            },
+            '^' => {
+                m.align_frag = "vertical-align:top";
+                j += 1;
+            },
+            '~' => {
+                m.align_frag = "vertical-align:bottom";
+                j += 1;
+            },
+            '{' => {
+                const sclose = std.mem.indexOfScalarPos(u8, bytes, j + 1, '}') orelse return null;
+                if (sclose == j + 1 or sclose >= close) return null;
+                m.style = .{ .start = j + 1, .end = sclose };
+                j = sclose + 1;
+            },
+            '(' => {
+                // A `(` directly before `(`/`)` is padding (Textile 2: each
+                // `(` pads 1em on the left); otherwise it opens a
+                // `(class)`/`(#id)`/`(class#id)` spec terminated by `)`
+                // (the current docs' class form, spaces allowed inside).
+                if (j + 1 >= close or bytes[j + 1] == '(' or bytes[j + 1] == ')') {
+                    m.pad_left += 1;
+                    j += 1;
+                } else {
+                    const cclose = std.mem.indexOfScalarPos(u8, bytes, j + 1, ')') orelse return null;
+                    if (cclose == j + 1 or cclose >= close) return null;
+                    if (std.mem.indexOfScalar(u8, bytes[j + 1 .. cclose], '#')) |h| {
+                        m.class = .{ .start = j + 1, .end = j + 1 + h };
+                        m.id = .{ .start = j + 1 + h + 1, .end = cclose };
+                    } else {
+                        m.class = .{ .start = j + 1, .end = cclose };
+                    }
+                    j = cclose + 1;
+                }
+            },
+            ')' => {
+                m.pad_right += 1;
+                j += 1;
+            },
+            else => {
+                m.end = j;
+                return m;
+            },
+        }
+    }
+    return null; // ran into the closing `!` with no src
+}
+
+/// Parses a Textile 2 image-size token after the src: `NxM`, `N%xM%` (each
+/// side digits or digits-percent), a single proportional `N%`, or the
+/// `Nw Nh` pair (digits only, whitespace-separated). Returns the width and
+/// height token ranges (the `w`/`h` suffixes are consumed). Every other
+/// shape — a bare `N`, `x20`, `10x`, a `10w20h` run without the separating
+/// space, extra tokens — returns null, so the whole image stays literal
+/// (docs/TEXTILE-PARITY.md §16).
+fn scanImageSize(bytes: []const u8, start: usize, end: usize) ?struct { width: Range, height: Range } {
+    var i = start;
+    while (i < end and isWhitespaceByte(bytes[i])) i += 1;
+    var j = end;
+    while (j > i and isWhitespaceByte(bytes[j - 1])) j -= 1;
+    if (i >= j) return null;
+
+    var k = i;
+    while (k < j and bytes[k] >= '0' and bytes[k] <= '9') : (k += 1) {}
+    if (k == i) return null; // must start with digits
+    var w_pct = false;
+    if (k < j and bytes[k] == '%') {
+        w_pct = true;
+        k += 1;
+    }
+    const w_end = k;
+    if (k == j) {
+        // A single dim must be a percentage (proportional sizing); a bare
+        // `10` is not a documented form.
+        if (!w_pct) return null;
+        return .{ .width = .{ .start = i, .end = w_end }, .height = .{ .start = i, .end = w_end } };
+    }
+    if (bytes[k] == 'x' or bytes[k] == 'X') {
+        var m = k + 1;
+        while (m < j and bytes[m] >= '0' and bytes[m] <= '9') : (m += 1) {}
+        if (m == k + 1) return null;
+        if (m < j and bytes[m] == '%') m += 1;
+        if (m != j) return null;
+        return .{ .width = .{ .start = i, .end = w_end }, .height = .{ .start = w_end + 1, .end = m } };
+    }
+    if (bytes[k] == 'w' and !w_pct) {
+        var m = k + 1;
+        var saw_ws = false;
+        while (m < j and isWhitespaceByte(bytes[m])) : (m += 1) saw_ws = true;
+        if (!saw_ws) return null;
+        const h_start = m;
+        while (m < j and bytes[m] >= '0' and bytes[m] <= '9') : (m += 1) {}
+        if (m == h_start or m >= j or bytes[m] != 'h') return null;
+        if (m + 1 != j) return null;
+        return .{ .width = .{ .start = i, .end = k }, .height = .{ .start = h_start, .end = m } };
+    }
+    return null;
+}
+
 /// Recognizes `!url!`, `!url(alt)!` (Hobix) / `!url (alt)!` (Textile 2), and
-/// the `!url!:href` link attachment. The src must be non-empty, contain no
-/// whitespace, and not begin with a documented image modifier (`<`, `>`, `-`,
-/// `^`, `~`, `{`, `(`, `)`) — modifier/sizing forms stay literal until their
-/// milestone (docs/FEATURE-MATRIX.md). A parenthesized suffix before the
-/// closing `!` is the alt, which doubles as the title (Hobix example). The
-/// `!` closer requires a whitespace/punctuation boundary after, so `!a.png!b`
-/// stays literal. See docs/TEXTILE-PARITY.md §5.
+/// the `!url!:href` link attachment, plus the documented image modifiers:
+/// an optional alignment/style/class/padding run right after `!`, and a
+/// size (`10x20`, `10w 20h`, `20%`) or alt token after the src. The src
+/// must be non-empty and contain no whitespace; a parenthesized suffix is
+/// the alt (which doubles as the title, Hobix example). Every malformed
+/// shape — a junk post-src token, a malformed modifier, an unclosed
+/// construct, or a `!` closer without a whitespace/punctuation boundary
+/// after — stays literal (docs/TEXTILE-PARITY.md §16).
 fn scanImage(bytes: []const u8, i: usize) ?ImageData {
     if (!isInlineBoundaryBefore(bytes, i)) return null;
     const close = std.mem.indexOfScalarPos(u8, bytes, i + 1, '!') orelse return null;
     if (close == i + 1) return null;
 
-    var src_end = close;
+    // The modifier run (alignment, style, class/id, padding) sits between
+    // the opening `!` and the src.
+    var mods = ImageMods{ .end = i + 1 };
+    if (isImageModifierStart(bytes[i + 1])) {
+        mods = scanImageMods(bytes, i + 1, close) orelse return null;
+    }
+    const body_begin = mods.end;
+    if (body_begin >= close) return null;
+
+    var s = body_begin;
+    while (s < close and isWhitespaceByte(bytes[s])) s += 1;
+    if (s >= close) return null;
+
+    var src_end = s;
+    while (src_end < close and !isWhitespaceByte(bytes[src_end])) : (src_end += 1) {}
     var alt: ?Range = null;
     if (bytes[close - 1] == ')') {
-        if (lastIndexOfByte(bytes[i + 1 .. close], '(')) |p| {
-            const open = i + 1 + p;
+        if (lastIndexOfByte(bytes[s..close], '(')) |p| {
+            const open = s + p;
             // The alt is the parenthesized suffix; the `)` at `close - 1`
             // is its closing paren, so the range ends before it.
-            if (open > i + 1 and open + 1 < close - 1) {
+            if (open + 1 < close - 1) {
                 alt = .{ .start = open + 1, .end = close - 1 };
                 src_end = open;
-                while (src_end > i + 1 and isWhitespaceByte(bytes[src_end - 1])) src_end -= 1;
+                while (src_end > s and isWhitespaceByte(bytes[src_end - 1])) src_end -= 1;
             }
         }
     }
-    if (src_end == i + 1 or isDeferredImageModifier(bytes[i + 1])) return null;
-    var k = i + 1;
+    if (src_end == s) return null;
+    var k = s;
     while (k < src_end) : (k += 1) {
         if (isWhitespaceByte(bytes[k])) return null;
+    }
+
+    // The post-src token is either the alt (consumed above) or a size
+    // (`10x20`, `10w 20h`, `20%`); size and alt never combine.
+    var width: ?Range = null;
+    var height: ?Range = null;
+    if (alt == null) {
+        var t = src_end;
+        while (t < close and isWhitespaceByte(bytes[t])) t += 1;
+        if (t < close) {
+            const size = scanImageSize(bytes, t, close) orelse return null;
+            width = size.width;
+            height = size.height;
+        }
     }
 
     var link_href: ?Range = null;
@@ -2098,9 +2287,17 @@ fn scanImage(bytes: []const u8, i: usize) ?ImageData {
 
     return .{
         .span = .{ .start = i, .end = span_end },
-        .src = .{ .start = i + 1, .end = src_end },
+        .src = .{ .start = s, .end = src_end },
         .alt = alt,
         .link_href = link_href,
+        .style = mods.style,
+        .class = mods.class,
+        .id = mods.id,
+        .pad_left = mods.pad_left,
+        .pad_right = mods.pad_right,
+        .align_frag = mods.align_frag,
+        .width = width,
+        .height = height,
     };
 }
 
@@ -2147,11 +2344,11 @@ fn isUrlStop(b: u8) bool {
     return isWhitespaceByte(b) or b == ')' or b == ']' or b == '}';
 }
 
-/// Documented Textile image modifiers that begin the content after `!`;
-/// Oliver defers them, so such images stay literal.
-fn isDeferredImageModifier(b: u8) bool {
+/// The first byte of an image modifier run (Textile 2 "Images"; the
+/// current docs add `=` for centered). Anything else starts the src.
+fn isImageModifierStart(b: u8) bool {
     return switch (b) {
-        '<', '>', '-', '^', '~', '{', '(', ')' => true,
+        '<', '>', '=', '-', '^', '~', '{', '(', ')' => true,
         else => false,
     };
 }
@@ -2272,11 +2469,21 @@ fn emitItems(doc: *document.Document, parent: *document.Node, content: source.Sp
                     i += 1;
                 },
                 .image => |im| {
+                    // The modifier run composes through the same machinery
+                    // as block attributes: user `{style}`, padding, then the
+                    // alignment fragment fold into the style in the pinned
+                    // order, and style/class/id land as the attribute list
+                    // (docs/TEXTILE-PARITY.md §16).
+                    const style = try composeStyle(doc, if (im.style) |r| bytesOf(doc, content, r) else null, im.pad_left, im.pad_right, im.align_frag, null);
+                    const attrs = try composeAttrs(doc, style, if (im.class) |r| bytesOf(doc, content, r) else null, if (im.id) |r| bytesOf(doc, content, r) else null, null);
                     const image = try doc.createNode(.image, subSpan(content, im.span.start, im.span.end), .{
                         .image = .{
                             .src = try doc.allocator().dupe(u8, bytesOf(doc, content, im.src)),
                             .alt = if (im.alt) |a| try doc.allocator().dupe(u8, bytesOf(doc, content, a)) else "",
                             .title = if (im.alt) |a| try doc.allocator().dupe(u8, bytesOf(doc, content, a)) else null,
+                            .width = if (im.width) |w| try doc.allocator().dupe(u8, bytesOf(doc, content, w)) else null,
+                            .height = if (im.height) |h| try doc.allocator().dupe(u8, bytesOf(doc, content, h)) else null,
+                            .attrs = attrs,
                         },
                     });
                     if (im.link_href) |href| {
@@ -3065,11 +3272,14 @@ test "textile: images have exact spans, alts, titles, links, and fallbacks" {
         try std.testing.expectEqual(document.Tag.image, link.children.items[0].tag);
         try std.testing.expectEqualStrings("openwindow1.gif", link.children.items[0].data.image.src);
     }
-    // Deferred modifier/sizing forms and malformed shapes stay literal.
+    // Malformed modifier/sizing forms and malformed shapes stay literal.
     const literal_cases = [_][]const u8{
-        "!>obake.gif!", // alignment modifier (deferred)
-        "!-(middle).gif!", // middle-alignment modifier (deferred)
-        "!a b.png!", // whitespace in src (sizing form, deferred)
+        "!a b.png!", // the post-src token `b.png` is not a size or alt
+        "!x 10x20 30x40!", // two size tokens never combine
+        "!x 10w!", // the `w` size form needs its `h` partner
+        "!x 10x!", // the `x` form needs a height
+        "!{bad x!", // unclosed style modifier
+        "!(x!", // unclosed class modifier
         "!img.png", // no closer
         "!img.png!word", // no boundary after the closer
     };
@@ -3083,6 +3293,52 @@ test "textile: images have exact spans, alts, titles, links, and fallbacks" {
         }
         try std.testing.expect(!has_image);
     }
+}
+
+test "textile: image modifiers compose width/height/attrs" {
+    const oliver = @import("oliver.zig");
+    // Sizing: the Textile 2 forms all land on width/height, and the
+    // `10w 20h` suffixes are consumed.
+    const sizes = [_][]const u8{ "!x 10x20!", "!x 10w 20h!", "!x 20%x40%!", "!x 20%!" };
+    const wants = [_]struct { w: []const u8, h: []const u8 }{
+        .{ .w = "10", .h = "20" },
+        .{ .w = "10", .h = "20" },
+        .{ .w = "20%", .h = "40%" },
+        .{ .w = "20%", .h = "20%" },
+    };
+    for (sizes, wants) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        const img = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqual(document.Tag.image, img.tag);
+        try std.testing.expectEqualStrings(want.w, img.data.image.width.?);
+        try std.testing.expectEqualStrings(want.h, img.data.image.height.?);
+    }
+    // Alignment folds into the style fragment in the pinned order after
+    // the user style and padding (docs/TEXTILE-PARITY.md §16).
+    var aligned = try oliver.parse(std.testing.allocator, "!{color:red}(pic#one)>x.png!", .textile, .{});
+    defer aligned.deinit();
+    const ai = aligned.document.root.children.items[0].children.items[0];
+    try std.testing.expectEqualStrings("color:red; float:right;", ai.data.image.attrs[0].value);
+    try std.testing.expectEqualStrings("pic", ai.data.image.attrs[1].value);
+    try std.testing.expectEqualStrings("one", ai.data.image.attrs[2].value);
+    // A middle-aligned, padded image with a linked attachment.
+    var linked = try oliver.parse(std.testing.allocator, "!()<x.png!:https://hobix.com/", .textile, .{});
+    defer linked.deinit();
+    const link = linked.document.root.children.items[0].children.items[0];
+    try std.testing.expectEqual(document.Tag.link, link.tag);
+    const li = link.children.items[0];
+    try std.testing.expectEqualStrings("padding-left:1em; padding-right:1em; float:left;", li.data.image.attrs[0].value);
+    // `!((x!` stays literal: the second `(` would be an unclosed class
+    // spec (the pinned conservative rule).
+    var dbl = try oliver.parse(std.testing.allocator, "!((x.png!", .textile, .{});
+    defer dbl.deinit();
+    const dp = dbl.document.root.children.items[0];
+    var has_image = false;
+    for (dp.children.items) |child| {
+        if (child.tag == .image) has_image = true;
+    }
+    try std.testing.expect(!has_image);
 }
 
 test "textile: lists structure, nesting, and spans" {

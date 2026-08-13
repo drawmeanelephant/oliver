@@ -194,7 +194,8 @@ pub const Data = union(enum) {
     /// plus the flattened plain-string alt. All arena-owned copies; the
     /// alt is the description's inlines flattened per §6.4 (see
     /// docs/IMAGES-PARSING.md §3), so it cannot be a source slice. The
-    /// title is null when absent, not an empty string.
+    /// title is null when absent, not an empty string. Textile image
+    /// modifiers (width/height/attrs) are arena-owned too.
     image: Image,
     /// `.autolink`: the href and label, both arena-owned copies of the
     /// raw autolink content. Unlike `link`, backslash escapes are inert
@@ -367,6 +368,15 @@ pub const Image = struct {
     src: []const u8,
     alt: []const u8,
     title: ?[]const u8,
+    /// Textile image modifiers (T18): optional width/height, each a
+    /// dimension (`10`) or percentage (`20%`) string, and the
+    /// block-attribute-style modifier list (style/class/id, the composed
+    /// alignment/padding folded into the style) — from the Textile 2
+    /// sizing forms and the `!<x!`/`!{style}x!`/`!(class)x!` modifier
+    /// run. Markdown never sets them (both stay null/empty).
+    width: ?[]const u8 = null,
+    height: ?[]const u8 = null,
+    attrs: []const Attribute = &.{},
 };
 
 /// The payload of a `.link` node: the resolved href and optional title.

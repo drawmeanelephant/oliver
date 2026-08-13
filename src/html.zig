@@ -420,7 +420,9 @@ fn writeOpen(
             // Void element: the whole tag is written on enter and no exit
             // frame is pushed (leaf tag, no children). `src` follows the
             // href policy; `alt` is always emitted (possibly empty) and
-            // HTML-escaped like text; `title` only when present.
+            // HTML-escaped like text; `title`, the Textile `width`/`height`
+            // (dimensions or percentages), and the Textile attribute list
+            // (style/class/id) only when present, in that fixed order.
             try writer.writeAll("<img src=\"");
             try writeEscapedHref(writer, node.data.image.src);
             try writer.writeAll("\" alt=\"");
@@ -431,6 +433,17 @@ fn writeOpen(
                 try writeEscaped(writer, title);
                 try writer.writeByte('\"');
             }
+            if (node.data.image.width) |width| {
+                try writer.writeAll(" width=\"");
+                try writeEscaped(writer, width);
+                try writer.writeByte('\"');
+            }
+            if (node.data.image.height) |height| {
+                try writer.writeAll(" height=\"");
+                try writeEscaped(writer, height);
+                try writer.writeByte('\"');
+            }
+            try writeAttrs(writer, node.data.image.attrs);
             try writer.writeAll(if (options.void_trailing_slash) " />" else ">");
         },
         .text => try writeEscapedText(writer, node.data.text),
