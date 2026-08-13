@@ -12,8 +12,10 @@ architecture is designed up front so both fit the same seam.
 
 The container milestones are verified with the sectioned scorecard. After the
 thematic-break/Setext rung, the canonical 0.31.2 corpus scores 21/25 for block
-quotes, 32/48 for List items, and 21/27 for Lists; remaining failures require
-the not-yet-implemented code or HTML block families.
+quotes, 32/48 for List items, and 21/27 for Lists; remaining failures required
+the not-yet-implemented code or HTML block families, which have since landed
+(docs/FENCED-CODE.md, docs/ENTITIES.md, docs/HTML-BLOCKS.md). Block quotes are
+now 25/25 and List items 48/48.
 
 ---
 
@@ -202,7 +204,8 @@ never act through a lazy/missing container marker (docs/LEAF-BLOCKS.md).
 | thematic break | yes |
 | list item | yes, with §5.2 exceptions |
 | fenced code | yes |
-| indented code | no (pending) |
+| indented code | no |
+| HTML block (all seven types) | types 1–6 yes; type 7 no (§4.6) |
 | setext underline | transforms the open paragraph at matched depth |
 | link reference definition | no (§4.7, landed) |
 
@@ -234,18 +237,21 @@ uses.)
    lazy-container interaction (docs/LEAF-BLOCKS.md).
 4. **Code leaves** — fenced code (§4.5) is implemented as an open leaf that
    ends at its closer or containing-block boundary (docs/FENCED-CODE.md).
-   Indented code (§4.4) follows together with the tab/virtual-column design it
-   requires. HTML blocks
-   (§4.6) follow an explicit block-HTML policy decision.
+   Indented code (§4.4) followed with the tab/virtual-column design it
+   requires (docs/ENTITIES.md's sibling M3). HTML blocks (§4.6) — all seven
+   types, per docs/HTML-BLOCKS.md — are implemented as an open leaf: types
+   1–5 end at their matching terminator on the line, types 6/7 at a blank
+   line, following the already-decided verbatim raw-HTML policy.
 
 ## 7. Chosen behaviors and divergences
 
-- **Tabs in markers are deferred.** A tab in the leading indentation or
-  immediately after `>` is not consumed as a marker character (space
-  only), matching the existing policy for link-reference definitions and
-  ATX closing sequences. The spec (§2.4) would expand tabs to spaces;
-  Oliver records this as a pending tab-handling milestone and the
-  conformance scorecard's `Tabs` section tracks it.
+- **Tabs expand to four-column tab stops for block structure.** A tab in
+  leading indentation or after a marker is consumed by columns (§2.1),
+  and a partially consumed tab stays as the view's first byte with a
+  mid-tab column, so subsequent whitespace arithmetic measures from the
+  same absolute tab stop. Content bytes are never expanded; a partial tab's
+  leftover columns become spaces in indented-code content. The full Tabs
+  section and the indented-code/quote/list interactions conform.
 - **Block quotes are containers, not leaves.** The model adds
   `block_quote` as a container tag (children: blocks); DOCUMENT-MODEL
   invariants are updated accordingly.

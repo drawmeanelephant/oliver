@@ -22,13 +22,16 @@ does not study or imitate existing parser implementations. See
 
 Implemented so far: paragraphs, ATX and Setext headings, thematic breaks,
 fenced code blocks (§4.5, backtick/tilde fences, literal normalized content,
-info strings and container composition), backslash escapes, hard and soft
-line breaks, emphasis and strong emphasis (full CommonMark §6.2 rule set,
-including the mod-3 rule and `openers_bottom` pruning), code spans (§6.1,
-run-length matching with delimiter opacity), inline links (§6.3, bracket
-opacity, destination/title syntax, href percent-encoding), inline images
-(§6.4, `![alt](src "title")` with alt flattening and `<img>` rendering),
-reference links and reference-style images (§4.7 link reference
+info strings and container composition), indented code blocks (§4.4,
+chunks separated by blank lines, trailing blanks dropped, list/quote
+composition), tab-stop indentation (§2.1, four-column tab stops for block
+structure with literal tab bytes preserved in content), backslash escapes,
+hard and soft line breaks, emphasis and strong emphasis (full CommonMark
+§6.2 rule set, including the mod-3 rule and `openers_bottom` pruning), code
+spans (§6.1, run-length matching with delimiter opacity), inline links
+(§6.3, bracket opacity, destination/title syntax, href percent-encoding),
+inline images (§6.4, `![alt](src "title")` with alt flattening and `<img>`
+rendering), reference links and reference-style images (§4.7 link reference
 definitions collected in the block pass; full, collapsed, and shortcut
 forms resolved against a Unicode case-folded label map — for `[text]`
 links and `![alt]` images alike), block quotes (§5.1) and list items/lists
@@ -36,7 +39,15 @@ links and `![alt]` images alike), block quotes (§5.1) and list items/lists
 same-type merging, tight/loose tracking, and deterministic `<ul>`/`<ol>`
 rendering, autolinks (§6.5, URI and email forms with `mailto:` hrefs,
 escapes inert, linear recognition), raw HTML (§6.6,
-tags/comments/instructions/declarations/CDATA rendered verbatim), plain
+tags/comments/instructions/declarations/CDATA rendered verbatim), HTML
+blocks (§4.6, all seven types: script/pre/style/textarea element blocks,
+comments, processing instructions, declarations, and CDATA ending at
+their matching terminator, plus block-tag lines and whole-line tags
+ending at a blank line — all verbatim), entity and numeric character
+references (§2.5,
+named via the WHATWG entities table, decoded in text, link
+destinations/titles, info strings, and autolinks but never in code
+spans/blocks or as structural syntax), plain
 inline text, a shared document model, a deterministic HTML renderer,
 Markdown (ATX) and Textile (`hN.`)
 frontends, structured diagnostics, and a provisional CLI.
@@ -66,11 +77,11 @@ and prints a per-section scorecard. Every example is classified in a
 reviewed manifest (docs/COMMONMARK-EXPECTATIONS.md) as supported,
 not-yet, or a named divergence; `--gate` fails on any supported regression,
 unexpected pass, or changed divergence, so the full corpus is a regression
-wall (see docs/TESTS.md for the current 546/652 scorecard and how to fetch
+wall (see docs/TESTS.md for the current 652/652 scorecard and how to fetch
 the spec).
 
 ```bash
-zig build test    # run all tests (130 tests)
+zig build test    # run all tests (140 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 

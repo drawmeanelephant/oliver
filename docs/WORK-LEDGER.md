@@ -12,6 +12,9 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | lead | M2 fenced code blocks | Markdown open-leaf state; shared code-block model; HTML rendering | stacked after M1 | integrated on main (PR #13) |
 | conformance worker | Q1 list conformance wall | list fixture pairs and list-only hostile tests; no parser files | independent; merge after M1 only to minimize fixture-index conflict | integrated on main (PR #11) |
 | Textile worker | T1 `p.`/break-span repairs + `bq.` | Textile frontend, Textile fixtures/provenance; no Markdown/core model | independent | integrated on main (PR #12) |
+| lead | M4 §2.5 entities + HTML blocks types 6/7 | entity table + decode seams; `.html_block` leaf; info/dest/title normalization | after M3 | implemented on main (uncommitted) |
+| lead | M5 HTML blocks types 1–5 | per-type terminator end conditions; type 1–6 paragraph interruption | after M4 | implemented on main (uncommitted) |
+| lead | M6 full conformance | §4.7 angle-destination separator rule; manifest/pins to 652/652 | after M5 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -110,8 +113,94 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   lists/quotes, long whitespace/tabs.
 - **Parallelism:** no until the virtual-column seam is designed by the lead.
 - **Integration:** after M2.
-- **State:** M2 dependency cleared; the virtual-column/tab design is the next
-  lead-owned architectural decision.
+- **State:** implemented on main. A `View` wraps each line with a
+  tab-expanded column (the reference implementation's partially-consumed-tab
+  model): container markers and block starts measure indentation in columns,
+  partially consumed tabs stay as the view's first byte, and indented-code
+  content strips four columns with the leftover of a straddled tab becoming
+  spaces. Canonical scorecard 592/652; Tabs 11/11, Indented code 12/12,
+  List items 48/48, Block quotes 25/25, Thematic/ATX/Setext/Fenced 100%.
+
+## M4 — Entity references (§2.5) and HTML blocks types 6/7
+
+- **Objective:** implement CommonMark §2.5 named + numeric character
+  references everywhere the spec recognizes them, and the two HTML-block
+  start kinds (§4.6 types 6/7) that the entity milestone's example #31 needs.
+- **Normative source:** CommonMark 0.31.2 §2.5 examples 25–42, §4.6 examples
+  155–178, and the WHATWG entities.json data source the spec names as
+  authoritative (an HTML-specification data source, clean-room allowed).
+- **Dependencies:** M3 tab/column work (HTML-block indentation ≤3 columns);
+  the raw-HTML pass-through policy (docs/RAW-HTML.md); `.code_block` info
+  payload (M2) for info-string normalization.
+- **Expected seams:** new generated `src/entities.zig` (+ `tools/gen-entities.py`),
+  entity-aware text writer in `src/html.zig`, `resolveEntities` in
+  `src/markdown.zig`, `.html_block` leaf in `src/document.zig` + renderer,
+  manifest/docs.
+- **Acceptance:** named/numeric/hex decode with the §2.5 range rules; `;`
+  required; recognized in text, destinations/titles, info strings, autolinks,
+  and alt flattening but never in code spans/blocks and never as structural
+  characters; backslash-escaped `&` never decodes; types 6/7 with blank-line
+  end conditions and type-7 paragraph non-interruption.
+- **Tests:** entity unit tests (generated with the table), text/rendering
+  fixtures, HTML-block fixtures, updated escape/link fixtures, full suite.
+- **Parallelism:** no (lead-owned seams: generated data, text writer, block pass).
+- **Integration:** after M3.
+- **State:** implemented on main (uncommitted). Canonical scorecard
+  636/652, 0 regressions: Entities 17/17, HTML blocks 31/44 (types 6/7
+  conform; the 13 not-yet examples need types 1–5), backslash escapes and
+  links gain the incidental normalization passes. 138/138 tests green.
+
+## M5 — HTML blocks types 1–5
+
+- **Objective:** implement the remaining §4.6 HTML-block start kinds —
+  type 1 (`<script|pre|style|textarea`, case-insensitive), type 2 (`<!--`),
+  type 3 (`<?`), type 4 (`<!` + ASCII letter), type 5 (`<![CDATA[`) — with
+  their per-type matching-terminator end conditions, closing the last
+  HTML-block conformance gap.
+- **Normative source:** CommonMark 0.31.2 §4.6 examples 155–178 (spec prose
+  only; the terminator rules are fully specified there).
+- **Dependencies:** M4's `.html_block` open-leaf machinery (start detection,
+  container-stripped verbatim accumulation, blank-line end); the §4.6
+  interruption rule, which types 1–6 satisfy (type 7 alone cannot interrupt).
+- **Expected seams:** `HtmlBlock.block_type` + per-type end-condition scan in
+  `src/markdown.zig`, type 1–5 start scanners, paragraph-laziness awareness
+  (`isParagraphContinuationText`), manifest/docs.
+- **Acceptance:** types 1–5 end at the first line containing their
+  terminator (including a terminator on the start line itself, closing the
+  block after one line) or a blank line; types 1–6 interrupt paragraphs,
+  type 7 does not; content stays verbatim (no entity decode, no emphasis).
+- **Tests:** unit tests for each start kind + end condition; fixture pairs
+  `html-block-type1`…`type5`, `type1-raw`, `interrupt-types`; full suite.
+- **Parallelism:** no (lead-owned seams).
+- **Integration:** after M4.
+- **State:** implemented on main (uncommitted). Canonical scorecard
+  651/652, 0 regressions: HTML blocks 44/44, Lists 26/26 (the two
+  `<!-- -->`-in-list examples, spec #308/#309, flip with type-2 support),
+  and the sole remaining not-yet example is the §4.7 link-reference-
+  definition edge case #201. 139/139 tests green.
+
+## M6 — Full conformance (closing example 201)
+
+- **Objective:** close the last not-yet example — §4.7 example 201,
+  `[foo]: <bar>(baz)`. An angle-bracketed destination must be followed by
+  spaces/tabs or the end of the line: with `(baz)` directly adjacent, the
+  title has no separating whitespace, so the line is not a definition
+  ("No further character may occur" after the destination, §4.7).
+- **Normative source:** CommonMark 0.31.2 §4.7 example 201 and the
+  definition grammar's whitespace-separator rule.
+- **Dependencies:** M5's all-seven-HTML-block-types manifest.
+- **Expected seams:** the angle-destination branch of
+  `tryParseDefinition` (`src/markdown.zig`), manifest/pins, docs.
+- **Acceptance:** `[foo]: <bar>(baz)` renders as literal text (`<p>[foo]:
+  <bar>(baz)</p>`), not a definition; the bare-destination form (`[foo]:
+  /url "title"`) is unaffected; gate reaches 652/652.
+- **Tests:** the manifest partition test pins 652 supported / 0 not-yet;
+  the whole corpus is the regression wall.
+- **Parallelism:** no (lead-owned seams).
+- **Integration:** after M5.
+- **State:** implemented on main (uncommitted). Canonical scorecard
+  **652/652 — full conformance**, 0 not-yet, 0 divergences, 0 regressions.
+  140/140 tests green.
 
 ## C1 — Classified conformance expectations
 
@@ -129,17 +218,20 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes, tooling-only ownership.
 - **Integration:** any time after current PR stack; avoid simultaneous edits to
   global test-count prose.
-- **State:** integrated on main (PR #15); the manifest is 546 supported, 106
-  not-yet, and 0 named divergences (the former ATX trailing-backslash
-  divergence now conforms).
+- **State:** integrated on main (PR #15); the manifest was 592 supported, 60
+  not-yet, and 0 named divergences after the tab-stop/indented-code milestone
+  (the former ATX trailing-backslash divergence now conforms). The manifest is
+  a living artifact — M4 moved it to 636 supported / 16 not-yet / 0 divergences,
+  M5 to 651 supported / 1 not-yet / 0 divergences, and M6 to 652 supported /
+  0 not-yet / 0 divergences (full conformance)
+  (see the M4/M5/M6 cards below).
 
 ## Deferred architectural cards
 
-- **E1 entities (§2.5):** blocked on a normalized owned-text decision. Current
-  `Data.text` must borrow a contiguous source slice; decoded entities cannot
-  satisfy that invariant, and renderer-side Markdown parsing is forbidden.
-- **B1 HTML blocks (§4.6):** blocked on an explicit block raw-HTML policy and
-  profile contract; seven start/end kinds then become implementable.
+- **B1 HTML blocks (§4.6) types 1–5:** landed as M5 — comments, PIs,
+  declarations, CDATA, and the `<script|pre|style|textarea` element set now
+  end at their matching terminators; the §4.6 family is 44/44
+  (docs/HTML-BLOCKS.md).
 - **T2 Textile `@code@`:** integrated on main (PR #14); Textile-local inline
   scanner using the existing `.code_span` IR, with opacity and delimiter-storm
   tests (docs/TEXTILE-INLINE-CODE.md).

@@ -23,11 +23,12 @@ Node {
 ```
 
 `Tag` in the slice: `document`, `paragraph`, `heading`, `thematic_break`,
-`code_block`, `block_quote`, `list`, `list_item`, `text`, `emphasis`, `strong`, `code_span`, `link`, `image`,
+`code_block`, `html_block`, `block_quote`, `list`, `list_item`, `text`, `emphasis`, `strong`, `code_span`, `link`, `image`,
 `autolink`, `raw_html`, `soft_break`, `hard_break`. Blocks and inlines are
 distinguished by `Tag.isBlock` / `Tag.isInline`. `Data` carries `heading`
 level (1..6), list kind/marker metadata/start/looseness, the borrowed `text`
 slice, arena-owned `code_span` content, arena-owned `code_block` content/info,
+the arena-owned `html_block` verbatim content,
 the arena-owned `link` href/title,
 the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
 `raw_html` has no data payload; its source bytes are read from `Node.span`.
@@ -116,8 +117,9 @@ the arena-owned `image` src/alt/title, or the arena-owned `autolink` href/label.
 Blocks: `table` (+ `table_row`, `table_cell`
 with header flag).
 
-`.code_block` is implemented for fenced Markdown blocks and is shared by the
-planned indented-code frontend path.
+`.code_block` is implemented for fenced and indented Markdown blocks.
+`.html_block` is implemented for Markdown §4.6 HTML blocks (all seven
+types) with its arena-owned verbatim content.
 `emphasis`/`strong`/`link`/`image`/`autolink` are implemented;
 `raw_html` is implemented for Markdown inline tags; Textile keeps `<...>` as
 plain text until a dialect-specific raw-HTML decision is made.
@@ -160,6 +162,7 @@ emit them in a fixed documented order.
 | ATX/Setext heading | `hN.` heading | `.heading` (level) |
 | thematic break | (planned) | `.thematic_break` |
 | fenced code block | `bc.` / `pre.` (planned) | `.code_block` (owned content/info) |
+| HTML block (Markdown §4.6 types 6/7) | (Textile has no HTML blocks; literal) | `.html_block` (owned verbatim content) |
 | `emphasis` / `strong` | (Textile inline markers: later) | `.emphasis` / `.strong` |
 | `` `code span` `` | `@code@` | `.code_span` (arena-owned payload: Markdown §6.1-normalized vs Textile-verbatim) |
 | `[x](url "title")` | (Textile `"text":url`: later) | `.link` (arena-owned href/title) |

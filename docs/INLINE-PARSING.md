@@ -552,11 +552,11 @@ only reading consistent with the spec text; it is pinned with a fixture.
 ## 12. Future interactions (recorded, not implemented)
 
 - **Entity references (§2.5):** `&#42;` is *not* a delimiter (spec example
-  37: `&#42;foo&#42;` → literal `*foo*`). When entity decoding lands, the
-  scan must keep delimiters strictly byte-based: only a literal source `*`
-  or `_` can begin a run. The current slice treats all `&...;` as literal
-  text, so this is vacuously safe today; the constraint is recorded so the
-  entity milestone does not regress it.
+  37: `&#42;foo&#42;` → literal `*foo*`). Entity decoding (docs/ENTITIES.md)
+  is render/emit-time only — the scan keeps delimiters strictly byte-based,
+  so only a literal source `*` or `_` can begin a run. Same for structural
+  positions: `&#42;` cannot be a list marker, thematic-break byte, or
+  fence/info marker. Verified by the §2.5 examples (11/11).
 - **Autolinks and raw HTML:** per the spec's inline precedence (§3.1 and
   the appendix), code spans, autolinks, raw HTML, and links are identified
   *before* emphasis matching; delimiters inside them are inert (e.g.

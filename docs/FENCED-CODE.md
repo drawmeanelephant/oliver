@@ -71,9 +71,8 @@ The node span covers the full marker-stripped construct: opening fence,
 content, and closing fence when present, excluding only the closing line's
 terminator as other block spans do. The payload contains no syntax markers.
 Keeping the complete info string, rather than only a language token, preserves
-semantic information for future renderers. Backslash escapes are resolved in
-the arena-owned payload as §2.4 requires. Entity normalization of info strings
-remains coupled to the deferred §2.5 entity milestone.
+semantic information for future renderers. Backslash escapes and §2.5 entity
+references are resolved in the arena-owned payload as the spec requires.
 
 ## HTML rendering
 

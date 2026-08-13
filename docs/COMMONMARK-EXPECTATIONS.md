@@ -30,16 +30,27 @@ partition of official example numbers:
   a name, repository rationale, and exact pinned Oliver output. Conforming or
   changing to some third output both require review.
 
-At the integrated thematic-break/Setext, fenced-code, and list milestones
-(merge `561c810`), the partition is **546 supported, 106 not-yet, and 0
-named divergences**. The former divergence — example 646, the recorded ATX
-trailing-backslash choice in `docs/FEATURE-MATRIX.md` ambiguity 10 — was
-resolved to the normative output by the thematic-break/Setext milestone:
-both example 644 and example 646 now render the literal trailing backslash
-and were moved to `supported`. The `divergences` table is empty by design;
-a future deliberate divergence must add a named record with its rationale
-and exact pinned Oliver output, and the expectation tests pin the current
-partition.
+The partition is now **652 supported, 0 not-yet, and 0 named
+divergences** — full conformance with the 0.31.2 corpus. The §2.5 entity
+and numeric character references section is complete (named entities via
+the WHATWG entities table, numeric references per §2.5's digit/code-point
+rules), which also moved the entity-dependent link destination/title,
+backslash-escape, and link examples to `supported`. HTML blocks §4.6 is
+44/44: types 1–5 (script/pre/style/textarea element blocks, comments,
+PIs, declarations, and CDATA, ending at their matching terminators)
+joined types 6 and 7, which also flipped the two Lists examples that
+embed `<!-- -->` comments in list items (spec examples 308–309). The
+last not-yet example — the §4.7 link-reference-definition edge case 201,
+`[foo]: <bar>(baz)` (an angle destination directly followed by a
+would-be title is not a definition) — was closed by the
+full-conformance milestone. The former
+divergence — example 646, the recorded ATX trailing-backslash choice in
+`docs/FEATURE-MATRIX.md` ambiguity 10 — was resolved to the normative
+output by the thematic-break/Setext milestone: both example 644 and
+example 646 now render the literal trailing backslash and were moved to
+`supported`. The `divergences` table is empty by design; a future
+deliberate divergence must add a named record with its rationale and exact
+pinned Oliver output, and the expectation tests pin the current partition.
 
 The classified `--gate` fails on any supported regression, unexpected not-yet
 pass, or changed divergence. Report mode prints the same mismatches but exits

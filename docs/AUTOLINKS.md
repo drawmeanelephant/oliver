@@ -126,8 +126,7 @@ content").
    autolink rules apply only when the raw-HTML scan fails. The
    `[foo <bar attr="](baz)">` shape therefore keeps the tag's brackets and
    parentheses opaque rather than accidentally forming a link.
-4. **`&...;` entities stay literal** inside autolinks (entities
-   deferred) — consistent with links/images.
+4. **Entities are decoded inside autolinks.** The spec §2.5 recognizes entity and character references anywhere except code blocks, code spans, and HTML tags, so `&amp;` inside an autolink decodes in both the href and the label (cmark parity); the escaped `&` then percent-encodes to `%26` in the href and re-escapes to `&amp;` in the label. Structural characters from entities still cannot substitute for syntax — `&#42;` never opens emphasis or a list item, because parsing happens on source bytes.
 5. **`<`/`>` inside an autolink's content** are impossible by
    construction (the scan stops at the first `>` and rejects `<`), so no
    escaping of them is needed.

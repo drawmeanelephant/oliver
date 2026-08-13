@@ -81,7 +81,11 @@ Explicit, documented policies:
 - Text escaping: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`, `"` → `&quot;`;
   NUL (U+0000) → U+FFFD. The CommonMark reference output escapes the same
   set. (CommonMark replaces NUL during parsing; Oliver defers replacement to
-  rendering and documents the divergence.)
+  rendering and documents the divergence.) Text written through
+  `writeEscapedText` first decodes §2.5 entity/numeric references, then
+  escapes the decoded bytes like any other text — so `&lt;` → `&lt;` and
+  `&ouml;` → `ö` (docs/ENTITIES.md). Code spans and code blocks use plain
+  `writeEscaped` and keep references literal.
 - Link `href` percent-encoding: a deliberate renderer policy derived from
   the spec examples (the spec leaves URL rendering policy open). Safe
   characters are alphanumerics plus `-_.~!*'(),;:&=+$#@/%?`; everything
@@ -91,8 +95,9 @@ Explicit, documented policies:
   Titles are HTML-escaped without percent-encoding.
 - Raw HTML: Markdown raw-HTML leaves are allowed and written verbatim from
   their source spans; they are not reparsed or escaped. This is the chosen
-  policy for the inline §6.6 slice. HTML blocks (§4.6) and a configurable
-  escaped/rejected mode remain future work.
+  policy for the inline §6.6 slice and the §4.6 HTML blocks (all seven
+  types, `.html_block` leaves). A configurable escaped/rejected mode
+  remains future work.
 - Headings: `<h1>`..`<h6>`; levels outside 1..6 are clamped (defensive for
   hand-built documents; frontends never produce them).
 - Thematic breaks: semantic `.thematic_break` leaves render as `<hr />` by

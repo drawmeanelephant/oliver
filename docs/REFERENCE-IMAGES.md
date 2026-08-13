@@ -85,8 +85,9 @@ different labels (§6.3).
    are all inherited** from the reference-links slice; nothing new is
    invented here. Matching is on normalized strings: Unicode case fold
    (full, including multi-codepoint expansions) + whitespace collapse.
-2. **Entities stay literal** in labels/destinations/titles (entities
-   deferred) — the same recorded divergence as links and inline images.
+2. **Entities decode in reference-image destinations/titles/alt** — the
+   shared §2.5 machinery (docs/ENTITIES.md), same as links and inline
+   images; the recorded "entities stay literal" divergence is gone.
 3. **A failed full reference is not retried as a shortcut** for images,
    exactly as for links (the appendix's ordering, pinned by the
    `[foo][ref[]`-style shape).
