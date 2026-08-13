@@ -178,7 +178,7 @@ emit them in a fixed documented order.
 | `![alt](url "title")` | Textile `!url!`, `!url(alt)!`, `!url!:href` | `.image` (arena-owned src/alt/title) |
 | `<scheme:...>` / `<a@b.c>` | (Textile has no autolink; literal) | `.autolink` (arena-owned href/label) |
 | raw HTML tag (`<tag>`, comment, PI, declaration, CDATA) | literal text | `.raw_html` in Markdown; `.text` in Textile |
-| GFM pipe table (GFM §4.10) | Textile `|a|b|` tables (planned) | `.table` → `.table_row` → `.table_cell` (alignment on the table, header/alignment on the cell) |
+| GFM pipe table (GFM §4.10) | Textile `|a|b|` tables (`|_. header|`, `table<mods>.`, colspan/rowspan, alignment propagation) | `.table` → `.table_row` → `.table_cell` (alignment on the table, header/colspan/rowspan/attrs on the cell). Deliberate render differences (docs/TEXTILE-PARITY.md §6): GFM emits `<thead>`/`<tbody>` sections and `align` attributes and trims cell whitespace; Textile emits flat rows with `style` attributes and preserves cell whitespace verbatim |
 | plain text | plain text | `.text` |
 | newline in paragraph | newline in paragraph | `.soft_break` (MD) / `.hard_break` (Textile) |
 | `*x*` / `**x**` | `_x_` / `*x*` (Textile, planned) | `.emphasis` / `.strong` |

@@ -55,7 +55,9 @@ inline text, a shared document model, a deterministic HTML renderer,
 Markdown (ATX) and Textile
 frontends (`hN.` headings, `p.`/`bq.`, `*`/`#` lists, `@code@`, the
 phrase-modifier family `_x_`/`*x*`/`__x__`/`**x**`/`-x-`/`+x+`/`^x^`/`~x~`/`%x%`,
-`"text":url` links, and `!url!` images — see docs/TEXTILE-PARITY.md),
+`"text":url` links, `!url!` images, and `|a|b|` tables with `|_. header|`
+cells, `table<mods>.` signatures, colspan/rowspan, and header-alignment
+propagation — see docs/TEXTILE-PARITY.md),
 structured diagnostics, and a provisional CLI.
 See [docs/SESSION-1-REPORT.md](docs/SESSION-1-REPORT.md) for the founding
 handoff and [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md) for what is
@@ -71,7 +73,7 @@ The thematic-break/Setext precedence contract is
 The fenced-code open-leaf/model/rendering contract is
 [docs/FENCED-CODE.md](docs/FENCED-CODE.md).
 The Textile fixture audit — inventory, gaps vs. Textile 2 semantics, and
-chosen behaviors for phrase modifiers, links, images, and lists — is
+chosen behaviors for phrase modifiers, links, images, lists, and tables — is
 [docs/TEXTILE-PARITY.md](docs/TEXTILE-PARITY.md).
 The GFM tables extension contract is
 [docs/TABLES.md](docs/TABLES.md).
@@ -130,7 +132,7 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (151 tests)
+zig build test    # run all tests (159 tests)
 zig build         # build the static library and CLI into zig-out/
 ```
 

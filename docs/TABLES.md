@@ -1,9 +1,11 @@
 # Tables (GFM extension)
 
 Oliver implements the GFM §4.10 tables extension in the **Markdown**
-frontend (`oliver render --from markdown`). Textile has its own planned
-table syntax (`|a|b|` rows with `|_. header|` cells — see the feature
-matrix); this extension is GFM-shaped only, per recorded ambiguity 21.
+frontend (`oliver render --from markdown`). Textile has its own table
+syntax (`|a|b|` rows with `|_. header|` cells, `table<mods>.` signatures,
+colspan/rowspan, and header-alignment propagation — implemented, pinned
+in docs/TEXTILE-PARITY.md §6); this extension is GFM-shaped only, per
+recorded ambiguity 21.
 
 The GFM spec
 (<https://github.github.com/gfm/#tables-extension->, version 0.29-gfm) is

@@ -107,4 +107,26 @@ allowed; source code of parsers is not.**
   contract ("3+ hyphens per column") as a chosen minimum, recorded in
   docs/TABLES.md §3.
 
+## Sources consulted (session 3 — Textile tables)
+
+- Hobix "Textile Reference" "Tables" section
+  <https://hobix.com/textile> — re-consulted for T8: the rendered HTML of
+  simple rows, header cells, cell attributes (alignment/valign styles),
+  colspan/rowspan, cell styles, the `table{...}.` signature on its own
+  line, and row attributes — the byte-level target for the Textile table
+  fixtures.
+- Movable Type "Textile 2 Syntax" "Tables" section
+  <https://movabletype.org/documentation/author/textile-2-syntax.html> —
+  the modifier list (including `<>` cells-only and `\n`/`/n` spans), the
+  `table(fig). {color:red}_|Top|Row|` complex example, the row/cell
+  `. `-termination rule, the header-alignment propagation rule, and
+  table-level `<`/`>`/`=` float/margin semantics.
+- Textile Markup Language Documentation <https://textile-lang.com/> —
+  the modifier list and table-level alignment semantics.
+
+No Textile parser implementation source was consulted for either the
+session-1 Textile work or T8; the pinned behaviors in
+docs/TEXTILE-PARITY.md §6 are derived from the user-facing prose and
+examples above.
+
 No Markdown or Textile parser implementation source was consulted.
