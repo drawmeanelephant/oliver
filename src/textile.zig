@@ -38,6 +38,10 @@
 //!   are recognized within one line; phrase content is scanned for nested
 //!   phrases, while link display text and image src/alt are opaque plain
 //!   text (docs/TEXTILE-PARITY.md §4).
+//! - `[alias]url` lines anywhere in the document define link aliases; a
+//!   `"text":alias` link resolves to the defined URL even when the
+//!   definition comes later (both references document the lookup table).
+//!   Definition lines never render (docs/TEXTILE-PARITY.md §7).
 //! - Paragraph content is preserved verbatim (only the marker's separator
 //!   whitespace is consumed).
 //! - `h0.` and `h7.`+ are not headings; they remain paragraph text.
@@ -71,6 +75,15 @@ pub const ParseError = error{OutOfMemory};
 pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnostic)) ParseError!void {
     _ = diags;
 
+    // Pass 1: collect `[alias]url` definition lines from anywhere in the
+    // document (both references allow definitions after their uses). A def
+    // line is its own block-level unit and never renders (Hobix: "Place the
+    // URL anywhere in your document, beginning with its alias in square
+    // brackets"; docs/TEXTILE-PARITY.md §7).
+    var defs = AliasTable.init(doc.allocator());
+    defer defs.deinit();
+    try collectAliases(doc, &defs);
+
     var lines = source.Lines.init(doc.src.bytes);
     var block: ?ActiveBlock = null;
     var lists = std.ArrayList(ListEntry).empty;
@@ -78,68 +91,69 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     var table: ?TableState = null;
     while (lines.next()) |line| {
         if (isBlank(line.text)) {
-            try closeBlock(doc, &block);
+            try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try closeTable(doc, &table);
+            try closeTable(doc, &table, &defs);
             continue;
         }
         // An open table owns every row-shaped line (`|...|` or a
         // modifier-prefixed row); any other line closes it and is handled
-        // below as its own block (docs/TEXTILE-PARITY.md §7).
+        // below as its own block (docs/TEXTILE-PARITY.md §6).
         if (table != null) {
             if (try parseTableRow(doc, line, 0)) |row| {
                 try appendTableRow(doc, &table.?, row);
                 continue;
             }
-            try closeTable(doc, &table);
+            try closeTable(doc, &table, &defs);
         }
+        if (tryParseDef(line) != null) continue; // def lines disappear
         if (try tryTableSignature(doc, line)) |sig| {
-            try closeBlock(doc, &block);
+            try closeBlock(doc, &block, &defs);
             closeLists(&lists);
             try openTable(doc, &table, sig.attrs);
             if (sig.row) |row| try appendTableRow(doc, &table.?, row);
             continue;
         }
         if (try parseTableRow(doc, line, 0)) |row| {
-            try closeBlock(doc, &block);
+            try closeBlock(doc, &block, &defs);
             closeLists(&lists);
             try openTable(doc, &table, &.{});
             try appendTableRow(doc, &table.?, row);
             continue;
         }
         if (tryHeading(line)) |heading| {
-            try closeBlock(doc, &block);
+            try closeBlock(doc, &block, &defs);
             closeLists(&lists);
-            try emitHeading(doc, line, heading);
+            try emitHeading(doc, line, heading, &defs);
             continue;
         }
         if (tryParagraphMarker(line)) |content| {
-            try closeBlock(doc, &block);
+            try closeBlock(doc, &block, &defs);
             closeLists(&lists);
             try appendBlockContent(doc, &block, .paragraph, content, line.terminatorSpan());
             continue;
         }
         if (tryBlockQuoteMarker(line)) |content| {
-            try closeBlock(doc, &block);
+            try closeBlock(doc, &block, &defs);
             closeLists(&lists);
             try appendBlockContent(doc, &block, .block_quote, content, line.terminatorSpan());
             continue;
         }
         if (tryListMarker(line)) |lm| {
-            try closeBlock(doc, &block);
-            try appendListItem(doc, &lists, lm);
+            try closeBlock(doc, &block, &defs);
+            try appendListItem(doc, &lists, lm, &defs);
             continue;
         }
         // A non-marker text line closes the list tree: list items are single
         // lines, so an unmarked line is a fresh paragraph (docs/TEXTILE-PARITY.md
-        // §6, chosen behavior).
+        // §5, chosen behavior).
         if (lists.items.len > 0) closeLists(&lists);
         const kind: BlockKind = if (block) |active| active.kind else .paragraph;
         try appendBlockContent(doc, &block, kind, line.contentSpan(), line.terminatorSpan());
     }
-    try closeBlock(doc, &block);
+    try closeBlock(doc, &block, &defs);
     closeLists(&lists);
-    try closeTable(doc, &table);
+    try closeTable(doc, &table, &defs);
 }
 
 const BlockKind = enum { paragraph, block_quote };
@@ -182,7 +196,7 @@ fn appendBlockContent(
     });
 }
 
-fn closeBlock(doc: *document.Document, block: *?ActiveBlock) ParseError!void {
+fn closeBlock(doc: *document.Document, block: *?ActiveBlock, defs: *const AliasTable) ParseError!void {
     const active = block.* orelse return;
     block.* = null;
 
@@ -207,7 +221,7 @@ fn closeBlock(doc: *document.Document, block: *?ActiveBlock) ParseError!void {
             const brk = try doc.createNode(.hard_break, lines[i - 1].terminator, .none);
             try doc.appendChild(paragraph, brk);
         }
-        try parseInlines(doc, paragraph, ref.content);
+        try parseInlines(doc, paragraph, ref.content, defs);
     }
 }
 
@@ -255,14 +269,14 @@ fn tryListMarker(line: source.Line) ?ListMarker {
 /// than `lm.depth` close; a same-depth list with a different marker closes
 /// and a sibling list opens; missing intermediate depths open empty items.
 /// The item's content lives in the deepest new item's paragraph.
-fn appendListItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), lm: ListMarker) ParseError!void {
+fn appendListItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), lm: ListMarker, defs: *const AliasTable) ParseError!void {
     while (lists.items.len > 0 and lists.items[lists.items.len - 1].depth > lm.depth) {
         _ = lists.pop();
     }
     if (lists.items.len > 0 and lists.items[lists.items.len - 1].depth == lm.depth) {
         const top = &lists.items[lists.items.len - 1];
         if (top.marker == lm.marker) {
-            try appendSiblingItem(doc, lists, lm);
+            try appendSiblingItem(doc, lists, lm, defs);
             return;
         }
         _ = lists.pop();
@@ -288,21 +302,21 @@ fn appendListItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), lm:
         try doc.appendChild(item, para);
         // Only the deepest item carries this line's content; intermediate
         // levels created by a depth jump get an empty item.
-        if (depth == lm.depth) try parseInlines(doc, para, lm.content);
+        if (depth == lm.depth) try parseInlines(doc, para, lm.content, defs);
         try lists.append(doc.allocator(), .{ .depth = depth, .marker = lm.marker, .list = list, .item = item });
     }
 }
 
 /// Adds a sibling item to the open list at `lm.depth` (same marker char) and
 /// extends the list span to cover the new item's content.
-fn appendSiblingItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), lm: ListMarker) ParseError!void {
+fn appendSiblingItem(doc: *document.Document, lists: *std.ArrayList(ListEntry), lm: ListMarker, defs: *const AliasTable) ParseError!void {
     const top = &lists.items[lists.items.len - 1];
     top.list.span.end = lm.content.end;
     const item = try doc.createNode(.list_item, lm.content, .none);
     try doc.appendChild(top.list, item);
     const para = try doc.createNode(.paragraph, lm.content, .none);
     try doc.appendChild(item, para);
-    try parseInlines(doc, para, lm.content);
+    try parseInlines(doc, para, lm.content, defs);
     top.item = item;
 }
 
@@ -663,7 +677,7 @@ fn appendTableRow(doc: *document.Document, table: *TableState, row: TableRow) Pa
 /// header-propagation rule), then emits the table, rows, and cells into the
 /// model. A signature that never received a row produces no table (tables
 /// must be in their own block; docs/TEXTILE-PARITY.md §7).
-fn closeTable(doc: *document.Document, table: *?TableState) ParseError!void {
+fn closeTable(doc: *document.Document, table: *?TableState, defs: *const AliasTable) ParseError!void {
     var state = table.* orelse return;
     table.* = null;
     defer deinitTableState(doc.allocator(), &state);
@@ -721,7 +735,7 @@ fn closeTable(doc: *document.Document, table: *?TableState) ParseError!void {
                 },
             });
             try doc.appendChild(row_node, cell_node);
-            try parseInlines(doc, cell_node, cell.content);
+            try parseInlines(doc, cell_node, cell.content, defs);
             col += cell.colspan;
         }
     }
@@ -877,12 +891,79 @@ fn tryBlockQuoteMarker(line: source.Line) ?source.Span {
     };
 }
 
-fn emitHeading(doc: *document.Document, line: source.Line, heading: Heading) ParseError!void {
+fn emitHeading(doc: *document.Document, line: source.Line, heading: Heading, defs: *const AliasTable) ParseError!void {
     const node = try doc.createNode(.heading, line.contentSpan(), .{
         .heading = heading.level,
     });
     try doc.appendChild(doc.root, node);
-    try parseInlines(doc, node, heading.content);
+    try parseInlines(doc, node, heading.content, defs);
+}
+
+// ---------------------------------------------------------------------------
+// Link aliases.
+//
+// Both references document `[alias]url` definition blocks (Textile 2: "place
+// one or more links in a block of it's own, anywhere within your document")
+// and `"text":alias` references. Definitions are collected in a first pass
+// so a use may precede its definition (Hobix's example defines `hobix` after
+// using it), and a def line disappears from output. An alias is the shortest
+// run up to the first `]`; the URL is the whole rest of the line, verbatim,
+// with no whitespace. The first definition of an alias wins; matching is
+// exact and case-sensitive (the references are silent on folding, so the
+// conservative choice is pinned in docs/TEXTILE-PARITY.md §7).
+// ---------------------------------------------------------------------------
+
+/// `[alias]url` definitions: alias name → absolute source span of its URL.
+/// Keys are source slices (valid for the whole parse); lookups are O(1).
+const AliasTable = std.StringHashMap(source.Span);
+
+/// One recognized `[alias]url` definition line.
+const DefLine = struct {
+    /// The alias bytes (between the brackets), a source slice.
+    alias: []const u8,
+    /// Absolute span of the URL (the whole rest of the line).
+    url: source.Span,
+};
+
+/// Recognizes a definition line: `[` + non-empty alias without `[` + `]` +
+/// a non-whitespace URL to end of line. Any other shape — `[1] See this`,
+/// `[]http://x`, `[x]`, `[a[b]url` — is ordinary text. A def line needs no
+/// blank-line separation (Hobix's definition directly follows the
+/// paragraph): the line vanishes from output without changing the
+/// surrounding block — an open paragraph or list continues across it, per
+/// "place the URL anywhere in your document".
+fn tryParseDef(line: source.Line) ?DefLine {
+    const t = line.text;
+    if (t.len < 4 or t[0] != '[') return null;
+    const close = std.mem.indexOfScalarPos(u8, t, 1, ']') orelse return null;
+    if (close == 1) return null; // empty alias
+    const alias = t[1..close];
+    if (std.mem.indexOfScalar(u8, alias, '[') != null) return null;
+    if (close + 1 >= t.len or isWhitespaceByte(t[close + 1])) return null;
+    const url = t[close + 1 ..];
+    for (url) |b| {
+        if (isWhitespaceByte(b)) return null;
+    }
+    return .{
+        .alias = alias,
+        .url = .{
+            .start = @intCast(line.start + close + 1),
+            .end = @intCast(line.content_end),
+        },
+    };
+}
+
+/// Pass 1: walks every line and records `[alias]url` definitions. The first
+/// definition of an alias wins (deterministic, mirroring the Markdown §4.7
+/// first-definition-wins machinery).
+fn collectAliases(doc: *document.Document, defs: *AliasTable) ParseError!void {
+    var lines = source.Lines.init(doc.src.bytes);
+    while (lines.next()) |line| {
+        const def = tryParseDef(line) orelse continue;
+        if (!defs.contains(def.alias)) {
+            try defs.put(def.alias, def.url);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -906,7 +987,12 @@ const LinkData = struct {
     span: Range,
     /// Display text inside the quotes (plain text, not re-scanned).
     display: Range,
+    /// The URL token after the colon (a direct URL, or the alias name when
+    /// `alias_href` is set).
     href: Range,
+    /// Absolute source span of the alias's defined URL when `href` names a
+    /// `[alias]url` definition; null for a direct URL.
+    alias_href: ?source.Span = null,
     title: ?Range,
 };
 
@@ -972,8 +1058,9 @@ fn phraseOpFor(bytes: []const u8, i: usize) ?PhraseOp {
 /// §2. Links, images, and phrase delimiters are discovered in the same pass.
 /// Lookaheads for links/images only reach the next `"`/`!` (or a URL's
 /// whitespace), so segments scanned by failing lookaheads are disjoint and
-/// the pass stays linear.
-fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), content: source.Span) ParseError!void {
+/// the pass stays linear. `defs` resolves `"text":alias` references; each
+/// lookup is O(1), so the pass stays linear.
+fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), content: source.Span, defs: *const AliasTable) ParseError!void {
     const bytes = doc.text(content);
     var run_start: usize = 0;
     var code_opener: ?usize = null;
@@ -1009,7 +1096,7 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
         // opaque (docs/TEXTILE-INLINE-CODE.md §3, "opaque leaf").
         if (code_opener == null) {
             if (b == '"') {
-                if (scanLink(bytes, i)) |link| {
+                if (scanLink(doc, bytes, i, defs)) |link| {
                     try appendTextItem(doc.allocator(), items, run_start, i);
                     try items.append(doc.allocator(), .{ .link = link });
                     run_start = link.span.end;
@@ -1079,9 +1166,13 @@ fn appendTextItem(allocator: std.mem.Allocator, items: *std.ArrayList(InlineItem
 /// URL runs to the first whitespace, with common trailing sentence
 /// punctuation excluded (Hobix: "the link won't include any trailing
 /// punctuation"). A title is the parenthesized suffix of the display text
-/// when preceded by a space. Returns null (the `"` stays literal text) for
-/// any shape the references do not define; see docs/TEXTILE-PARITY.md §5.
-fn scanLink(bytes: []const u8, i: usize) ?LinkData {
+/// when preceded by a space. When the URL token names a defined alias, the
+/// link resolves through `defs` (Hobix "Link Aliases"; Textile 2) — the
+/// token's own bytes become metadata only and the defined URL is the href.
+/// Returns null (the `"` stays literal text) for any shape the references
+/// do not define; see docs/TEXTILE-PARITY.md §5.
+fn scanLink(doc: *const document.Document, bytes: []const u8, i: usize, defs: *const AliasTable) ?LinkData {
+    _ = doc;
     if (!isInlineBoundaryBefore(bytes, i)) return null;
     const close = std.mem.indexOfScalarPos(u8, bytes, i + 1, '"') orelse return null;
     if (close == i + 1) return null;
@@ -1111,6 +1202,7 @@ fn scanLink(bytes: []const u8, i: usize) ?LinkData {
         .span = .{ .start = i, .end = url_end },
         .display = .{ .start = i + 1, .end = display_end },
         .href = .{ .start = url_start, .end = url_end },
+        .alias_href = defs.get(bytes[url_start..url_end]),
         .title = title,
     };
 }
@@ -1299,9 +1391,12 @@ fn emitItems(doc: *document.Document, parent: *document.Node, content: source.Sp
                     }
                 },
                 .link => |l| {
+                    // An alias-resolved link's href lives at the definition's
+                    // URL span elsewhere in the document, not in this line.
+                    const href_slice = if (l.alias_href) |abs| doc.text(abs) else bytesOf(doc, content, l.href);
                     const link = try doc.createNode(.link, subSpan(content, l.span.start, l.span.end), .{
                         .link = .{
-                            .href = try doc.allocator().dupe(u8, bytesOf(doc, content, l.href)),
+                            .href = try doc.allocator().dupe(u8, href_slice),
                             .title = if (l.title) |t| try doc.allocator().dupe(u8, bytesOf(doc, content, t)) else null,
                         },
                     });
@@ -1340,12 +1435,13 @@ fn bytesOf(doc: *const document.Document, content: source.Span, range: Range) []
     return doc.text(subSpan(content, range.start, range.end));
 }
 
-/// Parses one line's content into inline nodes under `parent`.
-fn parseInlines(doc: *document.Document, parent: *document.Node, content: source.Span) ParseError!void {
+/// Parses one line's content into inline nodes under `parent`. `defs` is
+/// the document's `[alias]url` table, resolved by link scanning.
+fn parseInlines(doc: *document.Document, parent: *document.Node, content: source.Span, defs: *const AliasTable) ParseError!void {
     if (content.isEmpty()) return;
     var items = std.ArrayList(InlineItem).empty;
     defer items.deinit(doc.allocator());
-    try scanLineItems(doc, &items, content);
+    try scanLineItems(doc, &items, content, defs);
     try matchPhrases(doc, &items);
     try emitItems(doc, parent, content, items.items);
 }
@@ -2352,4 +2448,155 @@ test "textile: tables converge with the markdown GFM model" {
             try std.testing.expectEqual(md_cell.data.table_cell.rowspan, tx_cell.data.table_cell.rowspan);
         }
     }
+}
+
+test "textile: link aliases resolve through document definitions" {
+    const oliver = @import("oliver.zig");
+    // The Hobix "Link Aliases" example: the definition follows the uses.
+    var result = try oliver.parse(
+        std.testing.allocator,
+        "I am crazy about \"Hobix\":hobix\nand \"it's\":hobix \"all\":hobix I ever\n\"link to\":hobix!\n[hobix]https://hobix.com\n",
+        .textile,
+        .{},
+    );
+    defer result.deinit();
+
+    const root = result.document.root;
+    try std.testing.expectEqual(@as(usize, 1), root.children.items.len);
+    const p = root.children.items[0];
+    var link_count: usize = 0;
+    for (p.children.items) |child| {
+        if (child.tag != .link) continue;
+        link_count += 1;
+        try std.testing.expectEqualStrings("https://hobix.com", child.data.link.href);
+        try std.testing.expectEqual(document.Tag.text, child.children.items[0].tag);
+    }
+    try std.testing.expectEqual(@as(usize, 4), link_count);
+
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(std.testing.allocator);
+    // The definition line never renders; the paragraph keeps its hard
+    // breaks; the `!` after `hobix` is excluded trailing punctuation.
+    try std.testing.expectEqualStrings(
+        "<p>I am crazy about <a href=\"https://hobix.com\">Hobix</a><br />\nand <a href=\"https://hobix.com\">it's</a> <a href=\"https://hobix.com\">all</a> I ever<br />\n<a href=\"https://hobix.com\">link to</a>!</p>\n",
+        out.items,
+    );
+}
+
+test "textile: link alias shapes, precedence, and literal fallbacks" {
+    const oliver = @import("oliver.zig");
+
+    // First definition wins.
+    {
+        var result = try oliver.parse(std.testing.allocator, "[a]http://one\n[a]http://two\n\n\"x\":a\n", .textile, .{});
+        defer result.deinit();
+        const link = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqualStrings("http://one", link.data.link.href);
+    }
+    // Matching is case-sensitive: an undefined alias stays a relative URL.
+    {
+        var result = try oliver.parse(std.testing.allocator, "[a]http://u\n\n\"x\":A\n", .textile, .{});
+        defer result.deinit();
+        const link = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqualStrings("A", link.data.link.href);
+    }
+    // An undefined alias is an ordinary relative URL, not an error.
+    {
+        var result = try oliver.parse(std.testing.allocator, "\"x\":foo\n", .textile, .{});
+        defer result.deinit();
+        const link = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqualStrings("foo", link.data.link.href);
+    }
+    // A definition line vanishes mid-paragraph without splitting it.
+    {
+        var result = try oliver.parse(std.testing.allocator, "line one\n[a]http://u\nline two\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.paragraph, p.tag);
+        try std.testing.expectEqual(@as(usize, 3), p.children.items.len); // text + hard_break + text
+    }
+    // A bare definition block renders nothing.
+    {
+        var result = try oliver.parse(std.testing.allocator, "para\n\n[a]http://u\n\n[b]http://v\n\npara2\n", .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(@as(usize, 2), result.document.root.children.items.len);
+    }
+    // Non-definition shapes stay ordinary text (no links anywhere).
+    {
+        var result = try oliver.parse(std.testing.allocator, "[1] See footnote\n[]http://x\n[x]\n[x] url with space\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.paragraph, p.tag);
+        var it = try document.Document.Iterator.init(std.testing.allocator, result.document.root);
+        defer it.deinit();
+        var text_found = false;
+        while (try it.next()) |n| {
+            if (n.tag == .link) return error.unexpected_link;
+            if (n.tag == .text and std.mem.indexOf(u8, n.data.text, "[1]") != null) text_found = true;
+        }
+        try std.testing.expect(text_found);
+    }
+}
+
+test "textile: link aliases resolve in every inline context" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        std.testing.allocator,
+        "h2. \"T\":a\n\n* \"one\":a\n* \"two\":a\n\n| \"cell\":a |\n\n[a]http://u\n",
+        .textile,
+        .{},
+    );
+    defer result.deinit();
+    var it = try document.Document.Iterator.init(std.testing.allocator, result.document.root);
+    defer it.deinit();
+    var link_count: usize = 0;
+    while (try it.next()) |n| {
+        if (n.tag == .link) {
+            link_count += 1;
+            try std.testing.expectEqualStrings("http://u", n.data.link.href);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 4), link_count);
+}
+
+test "textile: link alias storm stays linear and deterministic" {
+    const oliver = @import("oliver.zig");
+    const count = 2_000;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(std.testing.allocator);
+    var buf: [48]u8 = undefined;
+    for (0..count) |i| {
+        const line = try std.fmt.bufPrint(&buf, "[a{d}]http://u{d}\n", .{ i, i });
+        try input.appendSlice(std.testing.allocator, line);
+    }
+    for (0..count) |i| {
+        const line = try std.fmt.bufPrint(&buf, "\"x\":a{d} ", .{i});
+        try input.appendSlice(std.testing.allocator, line);
+    }
+    try input.append(std.testing.allocator, '\n');
+
+    var result = try oliver.parse(std.testing.allocator, input.items, .textile, .{});
+    defer result.deinit();
+    var link_count: usize = 0;
+    var it = try document.Document.Iterator.init(std.testing.allocator, result.document.root);
+    defer it.deinit();
+    while (try it.next()) |n| {
+        if (n.tag == .link) link_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, count), link_count);
+
+    var first_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer first_writer.deinit();
+    try oliver.html.render(std.testing.allocator, &first_writer.writer, &result.document, .{});
+    var first = first_writer.toArrayList();
+    defer first.deinit(std.testing.allocator);
+    var second_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer second_writer.deinit();
+    try oliver.html.render(std.testing.allocator, &second_writer.writer, &result.document, .{});
+    var second = second_writer.toArrayList();
+    defer second.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u8, first.items, second.items);
 }
