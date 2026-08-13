@@ -274,4 +274,26 @@ Oliver's deterministic local rules pinned by fixtures; Textile 2's
 `{...}` macro table is deferred because only the paren forms are
 documented by the other two references).
 
+Session 11 (T16 `==` escaping) consulted:
+
+- Movable Type "Textile 2 Syntax" "Escaping"
+  <https://movabletype.org/documentation/author/textile-2-syntax.html>
+  — the lone-`==` block region ("let you put some regular HTML markup
+  in your document", "will not be formatted by Textile at all") and
+  the inline span (`p. This is ==*a test*== of escaping.`), with the
+  full example.
+- Textile Markup Language Documentation "Character conversions"
+  <https://textile-lang.com/doc/special-characters> — "When automatic
+  character conversion is not wanted, the Textile formatting can be
+  temporarily suspended by wrapping the text passage into ==.
+  Straight quotation marks are =="left alone"== in this example."
+
+Hobix does not document `==` (its only escape mechanism is raw HTML),
+so the T16 behaviors follow the Textile 2 + current-docs majority
+(block region → raw passthrough via the shared `.html_block` leaf;
+inline span → literal text, HTML-escaped at render like any text). No
+Textile parser implementation source was consulted; the boundary and
+fallback pins in docs/TEXTILE-PARITY.md §14 are Oliver's conservative
+deterministic rules, derived from the user-facing prose above.
+
 No Markdown or Textile parser implementation source was consulted.

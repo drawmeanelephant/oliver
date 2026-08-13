@@ -56,6 +56,8 @@ consulted.
 | `fnN.` footnote block | `.paragraph` (attrs `class="footnote" id="fnN"`, leading `.superscript`) | `<p class="footnote" id="fnN"><sup>N</sup> body</p>` | implemented (T13) |
 | `bq.:URL` citation | `.block_quote` (`cite` URL + attrs) | `<blockquote cite="URL" style="…">` | implemented (T14) |
 | character replacements (`"`/`'` → curly, `--`/` - `, `...`, digit-adjacent `x`, `(c)`/`(r)`/`(tm)`, `(1/4)`/`(1/2)`/`(3/4)`, `(o)`, `(+/-)`) | `.text` (arena-owned replaced payload) | `“ ” ‘ ’ — – … × © ® ™ ¼ ½ ¾ ° ±` | implemented (T15) |
+| inline `==...==` escaping | `.text` (borrowed literal payload, no replacements) | literal text, HTML-escaped | implemented (T16) |
+| block-level `==` escaping (lone `==` lines) | `.html_block` (verbatim payload) | raw passthrough, no `<p>` wrapper | implemented (T16) |
 
 T1/T2/T4 refer to the ledger cards in docs/WORK-LEDGER.md. "T4" is the
 phrase/link/image/list milestone this audit drove; every new row is pinned
@@ -80,7 +82,7 @@ planned/deferred. The notable ones, so the record is honest:
   CSS class/id/style, padding, and sizing (`10x20`, `10w 20h`, `20%`) from
   Textile 2. Oliver keeps modifier-prefixed and whitespace-containing image
   bodies literal (fixture `image-literal`).
-- **Line attributes** and **`==` escaping** remain planned/deferred.
+- **Line attributes** remain planned/deferred.
 
 The character-replacement macros — curly quotes, em/en dashes, ellipsis,
 `x` dimension sign, `(c)`/`(r)`/`(tm)`, and the fraction/degree/plus-minus
@@ -95,8 +97,9 @@ implemented too (T9) — see §7. Block attributes are implemented (T10) —
 see §8 — `bc.`/`pre.` block code is implemented (T11) — see §9 —
 `bq..`/`bc..`/`pre..` extended blocks are implemented (T12) — see §10 —
 footnotes (`fnN.`/`[N]`) are implemented (T13) — see §11 —
-block-quote citations (`bq.:URL`) are implemented (T14) — see §12 — and
-the character-replacement macros are implemented (T15) — see §13.
+block-quote citations (`bq.:URL`) are implemented (T14) — see §12 —
+the character-replacement macros are implemented (T15) — see §13 — and
+`==` escaping (inline and block) is implemented (T16) — see §14.
 - **Textile 2's `++bigger++` / `--smaller--`** (`<big>`/`<small>`): only in
   Textile 2, not Hobix; Oliver defers per the "implement once from the
   majority" rule. Runs of 2+ for the single-length operators stay literal.
@@ -595,6 +598,65 @@ path — text with none of the trigger bytes (`"`, `'`, `-`, `.`, `(`,
 
 **Deferred.** Textile 2's `{...}` character-macro table (cent, pound,
 yen, ...) is not documented by Hobix or the current docs and stays
-literal; the `==` escaping mechanism is a separate milestone.
+literal. The `==` escaping mechanism is implemented (T16) — see §14.
+
+## 14. `==` escaping (T16): pinned behaviors
+
+Textile 2 "Escaping" documents both forms: a lone `==` line opens a
+block-escape region whose content is "not formatted by Textile at all"
+(for "put[ting] some regular HTML markup in your document"), and an
+inline `==...==` "temporarily disabl[es] the inline formatting
+functions" — `p. This is ==*a test*== of escaping.` renders the phrase
+delimiters literally. The current docs' special-characters page pins the
+inline form as the way to suspend the character conversions too:
+`Straight quotation marks are =="left alone"== in this example.`
+Hobix does not document `==` at all (its only escape is raw HTML); the
+other two references agree on the shape, so Oliver implements the
+majority (see docs/CLEANROOM.md session 11).
+
+**Block form.** A line whose text is exactly `==`, optionally followed
+by trailing spaces/tabs, toggles the region: every line until the next
+lone `==` line — blank lines included — is collected verbatim and
+published as a raw `.html_block` (the same leaf Markdown §4.6 uses,
+rendered with no escaping and no `<p>` wrapper). The content lines are
+contiguous in the source, so the arena-owned payload is one exact
+source slice. An unterminated region closes at end of input and still
+renders its content; an empty region (`==` immediately followed by
+`==`) renders nothing. `===` and an indented `==` are not delimiters —
+they stay content.
+
+**The delimiter interrupts.** The lone-`==` check runs before every
+other block rule, so the escape can be dropped in anywhere: it closes
+an open paragraph, the list tree, an open table, and single-period or
+extended `bc.`/`pre.`/`bq..` blocks alike (a block signature would do
+the same). This is a choice — Textile 2's extended blocks run "until
+the next signature is found" and `==` is not a signature — pinned by
+the `escape-block-*` fixtures.
+
+**Inline form.** `==` opens at line start or after a Unicode
+whitespace/punctuation boundary, must be exactly two equals (a `=` run
+of three or more cannot open, and the byte before must not be `=`),
+and the content must be non-empty. The content runs to the *first
+following* `==`; if that `==` is not itself at an inline boundary
+(whitespace, punctuation, or line end), the whole construct stays
+literal — the same first-following rule `@code@` uses, so `==x==y` is
+plain text. An unmatched `==` is plain text. The delimited span emits
+as a `.text` node with the raw borrowed payload: no phrase
+formatting, no links/images/footnotes, and no character replacements
+(so `2x4`, `--`, and `(tm)` inside stay literal — the current docs'
+example is exactly this).
+
+**Rendering and model notes.** The escaped node is still a `.text`
+node, so it renders through the shared text path: HTML-escaped
+(`"` → `&quot;`), and entity references decode like any text (`&amp;`
+renders as `&amp;` — the renderer's entity decoding is a text policy,
+not a Textile replacement, and applies uniformly). The node's span is
+the inner content only; the `==` delimiters occupy the gap to its
+neighbors, so consecutive text children never have contiguous spans
+(model invariant 11) and the literal payload is never re-derived by
+the merge rule. Inside `@code@`, link display text, and image
+src/alt/title the `==` bytes are opaque. The escaped span cannot be
+re-entered: content is scanned for the closer in one pass, so nested
+escapes do not occur.
 
 

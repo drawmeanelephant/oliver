@@ -23,7 +23,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T12 extended blocks (`bq..`/`bc..`/`pre..`) | double-period signatures stay active across blank lines: `bq..` flushes blank-line-separated paragraphs into one blockquote, `bc..`/`pre..` keep blank lines as code content; both end at the next block signature | after T11 | integrated on main (PR #24) |
 | Textile worker | T13 Textile footnotes | `[N]` references → `.footnote_ref` sup links + `fnN.` blocks (paragraph attrs + leading sup); Textile fixtures; Markdown untouched | after T12 | integrated on main (PR #25) |
 | Textile worker | T14 `bq.:URL` citations | citation URL after the block-quote period → the blockquote's `cite` attribute; block attrs combine; Textile fixtures; Markdown untouched | after T13 | integrated on main (PR #27) |
-| Textile worker | T15 character replacements | curly quotes, em/en dashes, ellipsis, dimension sign, `(c)`/`(r)`/`(tm)`, fractions/degree/plus-minus applied to plain text in the inline pass; arena-owned replaced payloads; Textile fixtures; Markdown untouched | after T14 | implemented on main (uncommitted) |
+| Textile worker | T15 character replacements | curly quotes, em/en dashes, ellipsis, dimension sign, `(c)`/`(r)`/`(tm)`, fractions/degree/plus-minus applied to plain text in the inline pass; arena-owned replaced payloads; Textile fixtures; Markdown untouched | after T14 | integrated on main (PR #28) |
+| Textile worker | T16 `==` escaping | lone `==` lines open a block-escape region emitted as a raw `.html_block`; inline `==...==` suspends formatting and replacements, emitting a literal `.text` node; Textile fixtures; Markdown untouched | after T15 | implemented on main (uncommitted) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -553,7 +554,42 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   em-dashed text since `<small>` stays deferred).
 - **Parallelism:** yes; Textile-only, Markdown untouched.
 - **Integration:** after T14 (the 652/652 gate is re-verified).
-- **State:** implemented on main (uncommitted). 183/183 tests green;
+- **State:** integrated on main (PR #28). 183/183 tests green;
+  canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T16 — Textile `==` escaping
+
+- **Objective:** implement Textile 2's `==` escaping — the last
+  documented inline/block mechanism — for both the block region and the
+  inline span.
+- **Normative source:** Textile 2 "Escaping" (a lone `==` line opens a
+  region whose content is "not formatted by Textile at all", for
+  dropping regular HTML into the document; inline `==...==` "temporarily
+  disabl[es] the inline formatting functions"); the current Textile
+  docs' special-characters page (the inline form suspends the character
+  conversions: `Straight quotation marks are =="left alone"== in this
+  example.`). Hobix does not document `==`; the other two references
+  agree on the shape. Clean-room record in docs/CLEANROOM.md session 11.
+- **Dependencies:** the `.html_block` leaf (M4/M5) and the character-
+  replacement pass (T15) — the escape is exempt from it.
+- **Seams:** `src/textile.zig` only; the shared model and renderer are
+  untouched (block escape reuses `.html_block`, inline escape emits a
+  plain `.text` node).
+- **Acceptance:** the Textile 2 block example byte-for-byte; the current
+  docs' quote example byte-for-byte; raw HTML passthrough with blank
+  lines inside; the delimiter interrupts paragraphs, lists, tables, and
+  open `bc.`/`bc..`/`bq..` blocks; unterminated and empty regions;
+  literal fallbacks (`a==x==b`, `==x==y`, `===x==`, unmatched `==`);
+  opacity inside `@code@`, link display text, and image src/alt;
+  escaped spans never merge with neighbors (invariant 11); the 652/652
+  gate is untouched.
+- **Tests:** 3 unit tests (inline suspension + span/merge exactness,
+  literal fallbacks + two escapes on one line, block regions),
+  4 Textile fixture pairs (`escape-inline`, `escape-block`,
+  `escape-block-html`, `escape-literal`).
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T15 (the 652/652 gate is re-verified).
+- **State:** implemented on main (uncommitted). 186/186 tests green;
   canonical scorecard still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations
