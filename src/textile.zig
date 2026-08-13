@@ -41,7 +41,10 @@
 //!   text (docs/TEXTILE-PARITY.md §4). The family includes Textile 2's
 //!   `++bigger++` → `<big>` and `--smaller--` → `<small>` (the `--` pair is
 //!   a phrase delimiter; a `--` that cannot form a pair still becomes an
-//!   em dash, docs/TEXTILE-PARITY.md §17).
+//!   em dash, docs/TEXTILE-PARITY.md §17). The `%x%` span carries the
+//!   documented phrase attributes just inside its opener (`%{style}
+//!   (class#id)[lang]x%`, Hobix "Phrase Attributes"), composing through
+//!   the block-attribute machinery (docs/TEXTILE-PARITY.md §18).
 //! - `[alias]url` lines anywhere in the document define link aliases; a
 //!   `"text":alias` link resolves to the defined URL even when the
 //!   definition comes later (both references document the lookup table).
@@ -53,10 +56,14 @@
 //!   (direction by the surrounding source bytes), `--` → em dash, ` - ` →
 //!   en dash, `...` → ellipsis, digit-adjacent `x` → dimension sign, and
 //!   `(c)`/`(r)`/`(tm)` (case-insensitive) + `(1/4)`/`(1/2)`/`(3/4)`/
-//!   `(o)`/`(+/-)` → their Unicode equivalents. HTML-looking `<...>`
-//!   regions and verbatim payloads (`@code@`, code blocks, link/image
-//!   src/alt/title) are exempt; replaced text is an arena-owned payload
-//!   (docs/TEXTILE-PARITY.md §13).
+//!   `(o)`/`(+/-)` → their Unicode equivalents, and Textile 2's `{...}`
+//!   character-macro table (`{c|}`/`{|c}` → ¢, `{L-}`/`{-L}` → £,
+//!   `{Y=}`/`{=Y}` → ¥, `{A'}`/`{'A}` → Á, `{a"}`/`{"a}` → ä, `{1/4}` →
+//!   ¼, `{*}` → •, `{:)}` → ☺, `{:(}` → ☹ — operators at a brace edge
+//!   are not phrase delimiters, so the brace region stays whole).
+//!   HTML-looking `<...>` regions and verbatim payloads (`@code@`, code
+//!   blocks, link/image src/alt/title) are exempt; replaced text is an
+//!   arena-owned payload (docs/TEXTILE-PARITY.md §13/§18).
 //! - A list item is a single line: `*` (bullet) or `#` (ordered) markers,
 //!   one per nesting level, followed by a space or tab. Consecutive marker
 //!   lines compose a tree of tight lists; a blank line, a block signature,
@@ -1806,6 +1813,19 @@ const FootnoteRefData = struct {
     number: u16,
 };
 
+/// A `%x%` span's phrase-attribute run (Hobix "Phrase Attributes": "all
+/// block attributes can be applied to phrases as well by placing them just
+/// inside the opening modifier"; Textile 2 "Inline formatting operators
+/// accept the following modifiers"): the style/class/id/lang source ranges
+/// and the offset where the content begins.
+const SpanMods = struct {
+    style: ?Range = null,
+    class: ?Range = null,
+    id: ?Range = null,
+    lang: ?Range = null,
+    content_start: usize,
+};
+
 const InlineItem = union(enum) {
     /// Maximal text run between constructs (relative offsets into the line).
     text: Range,
@@ -1814,15 +1834,7 @@ const InlineItem = union(enum) {
     /// A phrase delimiter run. `pair` is the item index of the matching
     /// closer (on the opener side) or opener (on the closer side); an
     /// unmatched run stays literal text.
-    phrase: struct {
-        pos: usize,
-        len: u8,
-        char: u8,
-        tag: document.Tag,
-        is_open: bool,
-        is_close: bool,
-        pair: ?usize,
-    },
+    phrase: InlineItemPhrase,
     link: LinkData,
     image: ImageData,
     footnote: FootnoteRefData,
@@ -1830,6 +1842,21 @@ const InlineItem = union(enum) {
     /// is the inner content range only, delimiters excluded; the content
     /// emits as literal text with no formatting and no replacements.
     escape: Range,
+};
+
+const InlineItemPhrase = struct {
+    pos: usize,
+    len: u8,
+    char: u8,
+    tag: document.Tag,
+    is_open: bool,
+    is_close: bool,
+    pair: ?usize,
+    /// For `%` spans: the parsed phrase-attribute run right after the
+    /// opener (`%{style}(class#id)[lang]x%`); null for plain spans and
+    /// the other operators. The run is skipped opaquely by the scan and
+    /// emits only if the span never matches.
+    span_mods: ?SpanMods = null,
 };
 
 const PhraseOp = struct {
@@ -1952,8 +1979,37 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                 continue;
             }
             if (phraseOpFor(bytes, i)) |op| {
-                const open_ok = canOpenPhrase(bytes, i, op.len);
+                // A phrase operator directly adjacent to a brace is not
+                // recognized: `{*}` and `{-L}` are character macros (Textile
+                // 2's `{...}` table), and brace content is never phrase
+                // content — the whole run stays text so the macro pass sees
+                // it whole (docs/TEXTILE-PARITY.md §18).
+                const at_brace_edge = (i > 0 and bytes[i - 1] == '{') or (i + op.len < bytes.len and bytes[i + op.len] == '}');
+                if (at_brace_edge) {
+                    i += op.len;
+                    continue;
+                }
+                var open_ok = canOpenPhrase(bytes, i, op.len);
                 const close_ok = canClosePhrase(bytes, i, op.len);
+                // `%` spans can carry a phrase-attribute run right after the
+                // opener (`%{style}(class#id)[lang]x%`, Hobix "Phrase
+                // Attributes"; Textile 2 "Inline formatting operators
+                // accept the following modifiers"). The run must parse and
+                // be followed by non-whitespace content, or the `%` is not
+                // an opener — a malformed run makes the construct literal,
+                // like a malformed block modifier.
+                var span_mods: ?SpanMods = null;
+                if (op.char == '%' and open_ok and i + op.len < bytes.len and isSpanModStart(bytes[i + op.len])) {
+                    if (scanSpanMods(bytes, i + op.len)) |m| {
+                        if (m.content_start < bytes.len and !isWhitespaceByte(bytes[m.content_start])) {
+                            span_mods = m;
+                        } else {
+                            open_ok = false;
+                        }
+                    } else {
+                        open_ok = false;
+                    }
+                }
                 if (open_ok or close_ok) {
                     try appendTextItem(doc.allocator(), items, run_start, i);
                     try items.append(doc.allocator(), .{ .phrase = .{
@@ -1964,8 +2020,23 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                         .is_open = open_ok,
                         .is_close = close_ok,
                         .pair = null,
+                        .span_mods = span_mods,
                     } });
-                    i += op.len;
+                    if (op.char == '%') {
+                        if (span_mods) |m| {
+                            // The modifier run is opaque to the scan: jump
+                            // past it so a `%` inside a style value cannot
+                            // close the span, and keep a text item over the
+                            // run so an unmatched span still renders it
+                            // literally.
+                            try appendTextItem(doc.allocator(), items, i + op.len, m.content_start);
+                            i = m.content_start;
+                        } else {
+                            i += op.len;
+                        }
+                    } else {
+                        i += op.len;
+                    }
                     run_start = i;
                     continue;
                 }
@@ -2215,6 +2286,58 @@ fn scanImageSize(bytes: []const u8, start: usize, end: usize) ?struct { width: R
     return null;
 }
 
+/// True when the byte after a `%` opener can start a phrase-attribute run:
+/// `{style}`, `(class#id)`, or `[lang]` (Textile 2's documented inline
+/// modifier set; padding and alignment are blocks-only and end the run).
+fn isSpanModStart(b: u8) bool {
+    return b == '{' or b == '(' or b == '[';
+}
+
+/// Parses a `%x%` span's phrase-attribute run starting at `i` (the byte
+/// after the `%`): `{style}`, `(class#id)`, and `[lang]` tokens in any
+/// order, each closed and non-empty. Returns the parsed ranges plus the
+/// offset where the content begins, or null on a malformed token (an
+/// unclosed or empty spec — the whole construct stays literal, the same
+/// conservatism as a malformed block modifier). Any other byte ends the
+/// run.
+fn scanSpanMods(bytes: []const u8, i: usize) ?SpanMods {
+    var m = SpanMods{ .content_start = i };
+    var j = i;
+    while (j < bytes.len) {
+        switch (bytes[j]) {
+            '{' => {
+                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, '}') orelse return null;
+                if (close == j + 1) return null;
+                m.style = .{ .start = j + 1, .end = close };
+                j = close + 1;
+            },
+            '(' => {
+                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ')') orelse return null;
+                if (close == j + 1) return null;
+                if (std.mem.indexOfScalar(u8, bytes[j + 1 .. close], '#')) |h| {
+                    m.class = .{ .start = j + 1, .end = j + 1 + h };
+                    m.id = .{ .start = j + 1 + h + 1, .end = close };
+                } else {
+                    m.class = .{ .start = j + 1, .end = close };
+                }
+                j = close + 1;
+            },
+            '[' => {
+                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ']') orelse return null;
+                if (close == j + 1) return null;
+                m.lang = .{ .start = j + 1, .end = close };
+                j = close + 1;
+            },
+            else => {
+                m.content_start = j;
+                return m;
+            },
+        }
+    }
+    // The run consumed the whole line: no content can follow.
+    return null;
+}
+
 /// Recognizes `!url!`, `!url(alt)!` (Hobix) / `!url (alt)!` (Textile 2), and
 /// the `!url!:href` link attachment, plus the documented image modifiers:
 /// an optional alignment/style/class/padding run right after `!`, and a
@@ -2426,9 +2549,36 @@ fn emitItems(doc: *document.Document, parent: *document.Node, content: source.Sp
                 .phrase => |p| {
                     if (p.pair) |j| {
                         const closer = scope.items[j].phrase;
-                        const node = try doc.createNode(p.tag, subSpan(content, p.pos, closer.pos + closer.len), .none);
+                        // `%` spans with a phrase-attribute run compose the
+                        // attrs (Hobix "Phrase Attributes") and skip the run
+                        // — which the scan kept as an opaque text item at
+                        // i+1 — when the content is non-empty. A run with no
+                        // content after it falls back to a plain span whose
+                        // content includes the run bytes.
+                        var payload: document.Data = .none;
+                        // The content starts after the opener — and after the
+                        // scan's opaque text item over the modifier run when
+                        // a span carries one with non-empty content. A run
+                        // with no content after it falls back to a plain
+                        // span whose content includes the run bytes.
+                        var inner_from = i + 1;
+                        if (p.tag == .span) {
+                            // Every span node carries the payload (empty
+                            // attrs for a plain `%x%`) so the renderer can
+                            // always read `data.span`.
+                            var attrs: []const document.Attribute = &.{};
+                            if (p.span_mods) |m| {
+                                if (m.content_start < closer.pos) {
+                                    const style = try composeStyle(doc, if (m.style) |r| bytesOf(doc, content, r) else null, 0, 0, null, null);
+                                    attrs = try composeAttrs(doc, style, if (m.class) |r| bytesOf(doc, content, r) else null, if (m.id) |r| bytesOf(doc, content, r) else null, if (m.lang) |r| bytesOf(doc, content, r) else null);
+                                    inner_from = i + 2;
+                                }
+                            }
+                            payload = .{ .span = .{ .attrs = attrs } };
+                        }
+                        const node = try doc.createNode(p.tag, subSpan(content, p.pos, closer.pos + closer.len), payload);
                         try doc.appendChild(scope.parent, node);
-                        try work.append(doc.allocator(), .{ .items = items, .from = i + 1, .to = j, .parent = node });
+                        try work.append(doc.allocator(), .{ .items = items, .from = inner_from, .to = j, .parent = node });
                         i = j + 1;
                     } else {
                         try emitText(doc, scope.parent, subSpan(content, p.pos, p.pos + p.len));
@@ -2525,15 +2675,15 @@ fn parseInlines(doc: *document.Document, parent: *document.Node, content: source
 
 /// True when a text run needs the character-replacement pass: it contains
 /// a straight quote, a hyphen, a period run, an opening paren, an
-/// HTML-looking `<`, or a digit-adjacent `x` (the dimension-sign rule).
-/// The `x` check is cheap (one digit next to it, possibly through a single
-/// space) so plain words like "example" do not force the slow path; the
-/// slow path's `changed` flag discards the copy when nothing actually
-/// replaces.
+/// HTML-looking `<`, a `{` (the character-macro table), or a digit-adjacent
+/// `x` (the dimension-sign rule). The `x` check is cheap (one digit next to
+/// it, possibly through a single space) so plain words like "example" do
+/// not force the slow path; the slow path's `changed` flag discards the
+/// copy when nothing actually replaces.
 fn hasCharMacroTrigger(bytes: []const u8) bool {
     for (bytes, 0..) |b, i| {
         switch (b) {
-            '"', '\'', '-', '.', '(', '<' => return true,
+            '"', '\'', '-', '.', '(', '<', '{' => return true,
             'x' => {
                 const left_ok = (i >= 2 and bytes[i - 1] == ' ' and bytes[i - 2] >= '0' and bytes[i - 2] <= '9') or
                     (i >= 1 and bytes[i - 1] >= '0' and bytes[i - 1] <= '9');
@@ -2705,6 +2855,54 @@ fn replaceChars(doc: *document.Document, span: source.Span) ParseError![]const u
                     i += 5;
                 } else {
                     try out.append(doc.allocator(), '(');
+                    i += 1;
+                }
+            },
+            '{' => {
+                // Textile 2 "Character Replacements": the default `{...}`
+                // macro table — the documented forms, each with its mirrored
+                // order where shown, map to a single character. Every other
+                // `{...}` shape stays literal (the general letter+accent
+                // pattern beyond the documented examples is deferred;
+                // docs/TEXTILE-PARITY.md §18). The phrase scanner keeps the
+                // brace region whole (operators at a brace edge are not
+                // recognized), so the full `{...}` reaches this pass.
+                var macro_len: usize = 0;
+                var macro_out: []const u8 = "";
+                if (std.mem.startsWith(u8, text[i..], "{c|}") or std.mem.startsWith(u8, text[i..], "{|c}")) {
+                    macro_len = 4;
+                    macro_out = "\u{00A2}"; // cent
+                } else if (std.mem.startsWith(u8, text[i..], "{L-}") or std.mem.startsWith(u8, text[i..], "{-L}")) {
+                    macro_len = 4;
+                    macro_out = "\u{00A3}"; // pound
+                } else if (std.mem.startsWith(u8, text[i..], "{Y=}") or std.mem.startsWith(u8, text[i..], "{=Y}")) {
+                    macro_len = 4;
+                    macro_out = "\u{00A5}"; // yen
+                } else if (std.mem.startsWith(u8, text[i..], "{A'}") or std.mem.startsWith(u8, text[i..], "{'A}")) {
+                    macro_len = 4;
+                    macro_out = "\u{00C1}"; // A acute
+                } else if (std.mem.startsWith(u8, text[i..], "{a\"}") or std.mem.startsWith(u8, text[i..], "{\"a}")) {
+                    macro_len = 4;
+                    macro_out = "\u{00E4}"; // a diaeresis
+                } else if (std.mem.startsWith(u8, text[i..], "{1/4}")) {
+                    macro_len = 5;
+                    macro_out = "\u{00BC}"; // one quarter
+                } else if (std.mem.startsWith(u8, text[i..], "{*}")) {
+                    macro_len = 3;
+                    macro_out = "\u{2022}"; // bullet
+                } else if (std.mem.startsWith(u8, text[i..], "{:)}")) {
+                    macro_len = 4;
+                    macro_out = "\u{263A}"; // smiley
+                } else if (std.mem.startsWith(u8, text[i..], "{:(}")) {
+                    macro_len = 4;
+                    macro_out = "\u{2639}"; // frowny
+                }
+                if (macro_len > 0) {
+                    try out.appendSlice(doc.allocator(), macro_out);
+                    changed = true;
+                    i += macro_len;
+                } else {
+                    try out.append(doc.allocator(), '{');
                     i += 1;
                 }
             },
@@ -3117,6 +3315,145 @@ test "textile: phrase modifier family tags, spans, and rendering" {
         "<p>a <strong>strong</strong> <em>em</em> <b>bold</b> <i>italic</i> <del>del</del> <ins>ins</ins> <sup>sup</sup> <sub>sub</sub> <span>span</span></p>\n",
         out.items,
     );
+}
+
+test "textile: span phrase attributes compose and render" {
+    const oliver = @import("oliver.zig");
+
+    // Hobix "Phrase Attributes": all block attributes apply just inside
+    // the opening modifier — `%[es]cabeza%` → `<span lang="es">`.
+    {
+        var result = try oliver.parse(std.testing.allocator, "%[es]cabeza%\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        const span = p.children.items[0];
+        try std.testing.expectEqual(document.Tag.span, span.tag);
+        try std.testing.expectEqual(source.Span{ .start = 0, .end = 12 }, span.span);
+        try std.testing.expectEqual(@as(usize, 1), span.data.span.attrs.len);
+        try std.testing.expectEqualStrings("lang", span.data.span.attrs[0].name);
+        try std.testing.expectEqualStrings("es", span.data.span.attrs[0].value);
+        try std.testing.expectEqualStrings("cabeza", span.children.items[0].data.text);
+        try std.testing.expectEqual(source.Span{ .start = 5, .end = 11 }, span.children.items[0].span);
+    }
+    // Style and class#id, plus the fixed render order style/class/id/lang
+    // for a combined run.
+    {
+        var result = try oliver.parse(std.testing.allocator, "%{color:red}(note#one)[fr]x%\n", .textile, .{});
+        defer result.deinit();
+        const span = result.document.root.children.items[0].children.items[0];
+        const attrs = span.data.span.attrs;
+        try std.testing.expectEqual(@as(usize, 4), attrs.len);
+        try std.testing.expectEqualStrings("style", attrs[0].name);
+        try std.testing.expectEqualStrings("color:red;", attrs[0].value);
+        try std.testing.expectEqualStrings("class", attrs[1].name);
+        try std.testing.expectEqualStrings("note", attrs[1].value);
+        try std.testing.expectEqualStrings("id", attrs[2].name);
+        try std.testing.expectEqualStrings("one", attrs[2].value);
+        try std.testing.expectEqualStrings("lang", attrs[3].name);
+        try std.testing.expectEqualStrings("fr", attrs[3].value);
+    }
+    // A plain `%x%` span carries an empty attribute list; the modifier run
+    // is never emitted as content, and nested phrases still work inside.
+    {
+        var result = try oliver.parse(std.testing.allocator, "%{color:red}*b*%\n", .textile, .{});
+        defer result.deinit();
+        const span = result.document.root.children.items[0].children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), span.data.span.attrs.len);
+        try std.testing.expectEqual(document.Tag.strong, span.children.items[0].tag);
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<p><span style=\"color:red;\"><strong>b</strong></span></p>\n", out.items);
+    }
+}
+
+test "textile: span phrase-attribute fallbacks stay literal or plain" {
+    const oliver = @import("oliver.zig");
+
+    // A malformed modifier run (unclosed `{`) makes the `%` a non-opener:
+    // the whole construct stays literal text. A `%` inside a style value
+    // cannot close the span. A run with no content after it (`%(x)%`) falls
+    // back to a plain span whose content includes the run bytes, and a
+    // run followed by whitespace (`%{x} y%`) is not an opener at all.
+    const cases = [_][]const u8{
+        "%{bad x%",
+        "a %{x} y%",
+        "%{width:50%}x%",
+        "%(x)%",
+        "%{color:red}%",
+    };
+    const expected = [_][]const u8{
+        "<p>%{bad x%</p>\n",
+        "<p>a %{x} y%</p>\n",
+        "<p><span style=\"width:50%;\">x</span></p>\n",
+        "<p><span>(x)</span></p>\n",
+        "<p><span>{color:red}</span></p>\n",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(want, out.items);
+    }
+}
+
+test "textile: the {...} character-macro table renders the documented forms" {
+    const oliver = @import("oliver.zig");
+    // Textile 2 "Character Replacements": the default `{...}` macro table,
+    // with the mirrored order where documented — cent, pound, yen, A acute,
+    // a diaeresis, one quarter, bullet, smiley, frowny.
+    const cases = [_][]const u8{
+        "{c|} {|c}",
+        "{L-} {-L}",
+        "{Y=} {=Y}",
+        "{A'} {'A}",
+        "{a\"} {\"a}",
+        "{1/4}",
+        "{*}",
+        "{:)}",
+        "{:(}",
+    };
+    const expected = [_][]const u8{
+        "\u{00A2} \u{00A2}",
+        "\u{00A3} \u{00A3}",
+        "\u{00A5} \u{00A5}",
+        "\u{00C1} \u{00C1}",
+        "\u{00E4} \u{00E4}",
+        "\u{00BC}",
+        "\u{2022}",
+        "\u{263A}",
+        "\u{2639}",
+    };
+    for (cases, expected) |input, want| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), p.children.items.len);
+        try std.testing.expectEqualStrings(want, p.children.items[0].data.text);
+    }
+    // The brace region stays whole: phrase operators at a brace edge are
+    // not recognized, so `{*}` and `{-L}` reach the macro pass intact, and
+    // an unmatched macro shape stays literal.
+    var mixed = try oliver.parse(std.testing.allocator, "x{*}y {-L} {C|} {a'} {notamacro} {c|", .textile, .{});
+    defer mixed.deinit();
+    const mp = mixed.document.root.children.items[0];
+    try std.testing.expectEqualStrings("x\u{2022}y \u{00A3} {C|} {a\u{2019}} {notamacro} {c|", mp.children.items[0].data.text);
+    // Macros apply inside link display text like the other replacements...
+    var link = try oliver.parse(std.testing.allocator, "\"{c|} & {*}\":url", .textile, .{});
+    defer link.deinit();
+    try std.testing.expectEqualStrings("\u{00A2} & \u{2022}", link.document.root.children.items[0].children.items[0].children.items[0].data.text);
+    // ...but never inside `@code@` or `==` escapes.
+    var code = try oliver.parse(std.testing.allocator, "@a {c|} b@ and ==x {c|} y==\n", .textile, .{});
+    defer code.deinit();
+    const cp = code.document.root.children.items[0];
+    try std.testing.expectEqualStrings("a {c|} b", cp.children.items[0].data.code_span);
+    try std.testing.expectEqualStrings("x {c|} y", cp.children.items[2].data.text);
 }
 
 test "textile: phrase modifiers nest and close in order" {

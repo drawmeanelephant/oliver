@@ -222,6 +222,16 @@ pub const Data = union(enum) {
     /// Textile colspan/rowspan, and the cell's Textile attributes,
     /// resolved at parse time so the renderer never indexes across nodes.
     table_cell: TableCell,
+    /// `.span`: the Textile phrase attributes (`%{style}(class#id)[lang]x%`,
+    /// Hobix "Phrase Attributes"), empty for a plain span. Markdown never
+    /// produces span nodes.
+    span: Span,
+};
+
+/// The payload of a `.span` node: the Textile phrase attributes in the
+/// fixed render order (style/class/id/lang; docs/TEXTILE-PARITY.md §18).
+pub const Span = struct {
+    attrs: []const Attribute = &.{},
 };
 
 /// The payload of a `.paragraph` node: the Textile block attributes in the
