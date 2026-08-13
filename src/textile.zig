@@ -38,7 +38,10 @@
 //! - Phrase modifiers, links, and images use the same boundary contract and
 //!   are recognized within one line; phrase content is scanned for nested
 //!   phrases, while link display text and image src/alt are opaque plain
-//!   text (docs/TEXTILE-PARITY.md §4).
+//!   text (docs/TEXTILE-PARITY.md §4). The family includes Textile 2's
+//!   `++bigger++` → `<big>` and `--smaller--` → `<small>` (the `--` pair is
+//!   a phrase delimiter; a `--` that cannot form a pair still becomes an
+//!   em dash, docs/TEXTILE-PARITY.md §17).
 //! - `[alias]url` lines anywhere in the document define link aliases; a
 //!   `"text":alias` link resolves to the defined URL even when the
 //!   definition comes later (both references document the lookup table).
@@ -1835,11 +1838,12 @@ const PhraseOp = struct {
     tag: document.Tag,
 };
 
-/// The phrase-modifier family both references document: single `*`/`_` are
+/// The phrase-modifier family the references document: single `*`/`_` are
 /// strong/emphasis, doubled `**`/`__` are bold/italic, and `-`, `+`, `^`,
-/// `~`, `%` are del/ins/sup/sub/span. Textile 2's `++`/`--` (big/small) are
-/// deliberately deferred (docs/FEATURE-MATRIX.md). Runs longer than the
-/// recognized lengths stay literal.
+/// `~`, `%` are del/ins/sup/sub/span. Textile 2's `++`/`--` (big/small)
+/// complete the family — implemented per the user's request, with the
+/// em-dash interaction pinned in docs/TEXTILE-PARITY.md §13/§17. Runs
+/// longer than the recognized lengths stay entirely literal.
 fn phraseOpFor(bytes: []const u8, i: usize) ?PhraseOp {
     const c = bytes[i];
     if (c != '*' and c != '_' and c != '-' and c != '+' and c != '^' and c != '~' and c != '%') return null;
@@ -1849,8 +1853,8 @@ fn phraseOpFor(bytes: []const u8, i: usize) ?PhraseOp {
     return switch (c) {
         '*' => if (run == 1) .{ .char = '*', .len = 1, .tag = .strong } else if (run == 2) .{ .char = '*', .len = 2, .tag = .bold } else null,
         '_' => if (run == 1) .{ .char = '_', .len = 1, .tag = .emphasis } else if (run == 2) .{ .char = '_', .len = 2, .tag = .italic } else null,
-        '-' => if (run == 1) .{ .char = '-', .len = 1, .tag = .deleted } else null,
-        '+' => if (run == 1) .{ .char = '+', .len = 1, .tag = .inserted } else null,
+        '-' => if (run == 1) .{ .char = '-', .len = 1, .tag = .deleted } else if (run == 2) .{ .char = '-', .len = 2, .tag = .small } else null,
+        '+' => if (run == 1) .{ .char = '+', .len = 1, .tag = .inserted } else if (run == 2) .{ .char = '+', .len = 2, .tag = .big } else null,
         '^' => if (run == 1) .{ .char = '^', .len = 1, .tag = .superscript } else null,
         '~' => if (run == 1) .{ .char = '~', .len = 1, .tag = .subscript } else null,
         '%' => if (run == 1) .{ .char = '%', .len = 1, .tag = .span } else null,
@@ -1972,9 +1976,10 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                 i += op.len;
                 continue;
             } else if (b == '*' or b == '_' or b == '-' or b == '+' or b == '^' or b == '~' or b == '%') {
-                // Long runs (3+ for `*`/`_`, 2+ for the rest) stay entirely
-                // literal; skip the whole run so it cannot reseed a shorter
-                // operator from inside itself.
+                // Long runs (3+ for `*`/`_`/`-`/`+` — the operators with a
+                // doubled form — 2+ for the rest) stay entirely literal;
+                // skip the whole run so it cannot reseed a shorter operator
+                // from inside itself.
                 var j = i + 1;
                 while (j < bytes.len and bytes[j] == b) : (j += 1) {}
                 i = j;
@@ -3155,10 +3160,9 @@ test "textile: phrase modifier boundary fallbacks stay literal" {
         try std.testing.expectEqual(document.Tag.text, p.children.items[0].tag);
         try std.testing.expectEqualStrings(input, p.children.items[0].data.text);
     }
-    // Textile 2's `++bigger++`/`--smaller--` are deferred: the run is not a
-    // `<small>` phrase. The double hyphens still hit the character-replacement
-    // pass (all three references: `--` → em dash), so the text renders as
-    // plain em-dashed text, never a `<small>` element.
+    // Textile 2's `++bigger++`/`--smaller--` (big/small) complete the phrase
+    // family: a doubled run forms the phrase, so the delimiters are consumed
+    // and never reach the em-dash replacement (docs/TEXTILE-PARITY.md §17).
     var small = try oliver.parse(std.testing.allocator, "--smaller--\n", .textile, .{});
     defer small.deinit();
     var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -3166,7 +3170,61 @@ test "textile: phrase modifier boundary fallbacks stay literal" {
     try oliver.html.render(std.testing.allocator, &aw.writer, &small.document, .{});
     var out = aw.toArrayList();
     defer out.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("<p>—smaller—</p>\n", out.items);
+    try std.testing.expectEqualStrings("<p><small>smaller</small></p>\n", out.items);
+}
+
+test "textile: ++bigger++ / --smaller-- phrases, nesting, and em-dash interplay" {
+    const oliver = @import("oliver.zig");
+
+    // The Textile 2 examples verbatim: `++bigger++` → `<big>bigger</big>`
+    // and `--smaller--` → `<small>smaller</small>`, with the exact span
+    // covering the delimiters.
+    {
+        var result = try oliver.parse(std.testing.allocator, "++bigger++ and --smaller--\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 3), p.children.items.len);
+        try std.testing.expectEqual(document.Tag.big, p.children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.small, p.children.items[2].tag);
+        try std.testing.expectEqualStrings("bigger", p.children.items[0].children.items[0].data.text);
+        try std.testing.expectEqual(source.Span{ .start = 0, .end = 10 }, p.children.items[0].span);
+        try std.testing.expectEqual(source.Span{ .start = 15, .end = 26 }, p.children.items[2].span);
+    }
+    // Phrases nest like the rest of the family (`++*x*++`, `--_y_--`).
+    {
+        var result = try oliver.parse(std.testing.allocator, "++*big*++ and --_small_--\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(document.Tag.big, p.children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.strong, p.children.items[0].children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.small, p.children.items[2].tag);
+        try std.testing.expectEqual(document.Tag.emphasis, p.children.items[2].children.items[0].tag);
+    }
+    // Single-length del/ins still work: `-x-`/`+x+` are unchanged by the
+    // doubled operators, and a run longer than two stays entirely literal
+    // (the whole run is skipped, never reseeding a shorter operator; the
+    // literal text still gets the em-dash replacement, so `---` → `—` + `-`).
+    {
+        var result = try oliver.parse(std.testing.allocator, "-x- +y+ ---z--- +++w+++\n", .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 4), p.children.items.len);
+        try std.testing.expectEqual(document.Tag.deleted, p.children.items[0].tag);
+        try std.testing.expectEqual(document.Tag.inserted, p.children.items[2].tag);
+        try std.testing.expectEqual(document.Tag.text, p.children.items[3].tag);
+        try std.testing.expectEqualStrings(" \u{2014}-z\u{2014}- +++w+++", p.children.items[3].data.text);
+    }
+    // The em-dash interplay: a `--` that cannot form a pair still becomes
+    // an em dash — space-adjacent (`a -- b`), intraword (`foo--bar`), and
+    // numeric (`2--4`) shapes never open a phrase.
+    const dash_cases = [_][]const u8{ "a -- b", "foo--bar", "2--4", "-- x" };
+    for (dash_cases) |input| {
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        const p = result.document.root.children.items[0];
+        try std.testing.expectEqual(@as(usize, 1), p.children.items.len);
+        try std.testing.expectEqual(document.Tag.text, p.children.items[0].tag);
+    }
 }
 
 test "textile: links have exact spans, hrefs, titles, and literal fallbacks" {
