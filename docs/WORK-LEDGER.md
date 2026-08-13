@@ -31,7 +31,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Textile worker | T20 span attrs + `{...}` macros | `%{style}(class#id)[lang]x%` phrase attributes compose onto `.span` attrs (Hobix "Phrase Attributes"; malformed runs literal, empty-content runs fall back to a plain span, a `%` inside a style cannot close the span); Textile 2's documented `{...}` macro table with mirrored orders; the brace-edge phrase rule keeps `{*}`/`{-L}` whole for the macro pass; Markdown untouched | after T19 | merged on main (PR #35) |
 | Textile worker | T21 phrase attributes on all operators | Hobix "Phrase Attributes" extended to the whole family: `*{color:red}x*` → `<strong style="color:red;">`, `_(big)x_` → `<em class="big">`, doubled/long operators included, via the shared `.phrase` payload + a combined renderer arm; same fallbacks as the span forms; a `{` after an opener is a style (macros only unattached); `--` em-dash interplay intact; Markdown untouched | after T20 | merged on main (PR #36) |
 | Textile worker | T22 citation + acronyms | Hobix's `??citation??` → `<cite>` (a doubled `?` joins the phrase family with attrs + nesting) and `ABC(def)` → `<acronym title="def">`; the both-flag delimiter fix (a run that is open and close tries close first, then opens); the acronym whole-run skip keeps the scan linear; Markdown untouched | after T21 | merged on main (PR #37) |
-| Textile worker | T23 dl. definition lists | Textile 2's `dl. term:definition` → `<dl>`/`<dt>`/`<dd>`, converging on the shared list model (a `.definition` kind + role-bearing `.list_item` payload); multi-line definitions, `dl<mods>.` attrs, the term-run rule, literal signature fallbacks; Markdown untouched | after T22 | in flight (T23) |
+| Textile worker | T23 dl. definition lists | Textile 2's `dl. term:definition` → `<dl>`/`<dt>`/`<dd>`, converging on the shared list model (a `.definition` kind + role-bearing `.list_item` payload); multi-line definitions, `dl<mods>.` attrs, the term-run rule, literal signature fallbacks; Markdown untouched | after T22 | merged on main (PR #38) |
+| Textile worker | T24 clear. marker | Textile 2's lone `clear.`/`clear<.`/`clear>.` line parks a CSS fragment (`clear:both`/`left`/`right`) that the next block folds ahead of its own style via the §8 block-attribute machinery; applies to every block family, closes open extended blocks, literal lookalikes; Markdown untouched | after T23 | in flight (T24) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -844,8 +845,41 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   (`dl-basic`, `dl-literal`).
 - **Parallelism:** yes; Textile-only, Markdown untouched.
 - **Integration:** after T22 (the 652/652 gate is re-verified).
-- **State:** in flight (T23). 199/199 tests green; canonical
+- **State:** merged on main (PR #38). 199/199 tests green; canonical
   scorecard still 652/652 with 0 not-yet and 0 divergences.
+
+## T24 — `clear.` marker
+
+- **Objective:** close the audit's `clear` deferral — Textile 2's `clear.`
+  block signature that makes the next block emit a CSS style attribute
+  clearing floating elements.
+- **Normative source:** Textile 2 "clear" — `clear.` (clear both),
+  `clear<.` (clear left), `clear>.` (clear right); "the next block should
+  emit a CSS style attribute that clears any floating elements". The
+  current Textile docs do not document the form (clean-room session 19).
+- **Dependencies:** the §8 block-attribute machinery (T10) and the
+  signature/family open sites in the parse loop.
+- **Seams:** `src/textile.zig` (`tryClearMarker`, `mergeClearStyle` —
+  the clear becomes the first style rule, prepended ahead of an existing
+  style — and `takeClear` consumed at every block-open site in the parse
+  loop via a `pending_clear` state; `trySignature` coverage). No model or
+  renderer change: the fragment rides the existing attribute lists.
+- **Acceptance:** `clear.` + plain paragraph → `<p style="clear:both;">`;
+  `clear<.`/`clear>.` → `left`/`right`; merge ahead of `p{color:red}.`;
+  applies to headings, block quotes (cite first), lists, tables,
+  definition lists, footnotes, and code blocks; a marker closes an open
+  extended `bq..`/`bc..`/`pre..` and definition list; inside a
+  single-period `bc.` the marker is code content; a `[alias]url` def line
+  between marker and block does not consume it; lookalikes
+  (`clear. with content`, `clear x.`, `clearb.`) and a dangling marker
+  at EOF stay literal/drop silently; the 652/652 gate is untouched.
+- **Tests:** 2 unit tests (the fold across families + interaction with
+  open blocks; the literal shapes and dangling-marker drop), 2 new
+  Textile fixture pairs (`clear-basic`, `clear-literal`).
+- **Parallelism:** yes; Textile-only, Markdown untouched.
+- **Integration:** after T23 (the 652/652 gate is re-verified).
+- **State:** in flight (T24). 201/201 tests green; canonical scorecard
+  still 652/652 with 0 not-yet and 0 divergences.
 
 ## C1 — Classified conformance expectations
 
