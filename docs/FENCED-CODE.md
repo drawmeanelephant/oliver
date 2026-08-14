@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Implementation contract for CommonMark section 4.5 fenced code blocks.
+---
+
 # Markdown fenced code blocks
 
 **Status:** implementation contract for CommonMark 0.31.2 §4.5.

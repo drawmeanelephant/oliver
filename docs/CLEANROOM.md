@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-13T00:00:00Z
+summary: The binding clean-room contract for everyone who writes Oliver code: read it before adding syntax features.
+---
+
 # Oliver Clean-Room Rules
 
 Oliver is a clean-room implementation. This file is the binding contract for

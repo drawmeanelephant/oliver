@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Contract for emphasis and strong emphasis, plus code spans, links, images, and autolinks on the scan-match-emit seam.
+---
+
 # Oliver Inline Parsing: Emphasis and Strong Emphasis
 
 **Status: implemented (Markdown), with code spans (§6.6), inline links

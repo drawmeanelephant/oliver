@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Oliver implements the GFM section 4.10 tables extension in the Markdown frontend; Textile has its own table syntax.
+---
+
 # Tables (GFM extension)
 
 Oliver implements the GFM §4.10 tables extension in the **Markdown**

@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-13T00:00:00Z
+summary: The dependency-ordered engineering construction queue for Oliver at the CommonMark 0.31.2 leaf-block wave.
+---
+
 # Oliver engineering work ledger
 
 This is the dependency-ordered construction queue at the CommonMark 0.31.2

@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Oliver's conformance gate binds to the exact official CommonMark 0.31.2 spec.txt, not merely to parseable examples.
+---
+
 # CommonMark conformance expectations
 
 Oliver's conformance gate is bound to the exact official CommonMark 0.31.2

@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-14T00:00:00Z
+summary: Contract for the raw HTML slice of Oliver's Markdown frontend (section 6.6): implemented.
+---
+
 # Oliver Inline Parsing: Raw HTML (§6.6)
 
 **Status: implemented.** This document was written and committed before any

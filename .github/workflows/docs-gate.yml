@@ -93,3 +93,29 @@ jobs:
             --pages-base-path /oliver \
             --site-url https://drawmeanelephant.github.io/oliver \
             --quiet
+
+      # The Pages build also emits the rss.xml and llms.txt projections and
+      # validates every projection URL against the declared location. The
+      # gate runs the same two exporters so a bad published_at/summary
+      # frontmatter date, an invalid RSS config, or a projection URL escape
+      # fails before merge instead of at deploy time.
+      - name: Generate and validate the rss/llms projections
+        run: |
+          boris/zig-out/bin/boris \
+            --rss --rss-path dist/rss.xml \
+            --input docs \
+            --site-url https://drawmeanelephant.github.io/oliver \
+            --rss-title "Oliver documentation" \
+            --rss-description "Oliver is a small, freestanding markup parsing and rendering library in Zig." \
+            --rss-limit 20 \
+            --pages-base-url https://drawmeanelephant.github.io/oliver \
+            --pages-origin https://drawmeanelephant.github.io \
+            --pages-base-path /oliver \
+            --quiet
+          boris/zig-out/bin/boris \
+            --llms --llms-path dist/llms.txt \
+            --input docs \
+            --pages-base-url https://drawmeanelephant.github.io/oliver \
+            --pages-origin https://drawmeanelephant.github.io \
+            --pages-base-path /oliver \
+            --quiet
