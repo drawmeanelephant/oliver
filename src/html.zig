@@ -38,6 +38,27 @@
 //! - Void elements are emitted as `<br />` by default (CommonMark reference
 //!   style), toggleable via `RenderOptions`.
 //!
+//! ## Output profiles
+//!
+//! The same traversal implements two deterministic serialization profiles
+//! (one IR, one semantics, different bytes):
+//!
+//! - `.html` (default): today's HTML serialization, including the raw-HTML
+//!   passthrough policy below.
+//! - `.xhtml`: XML-compatible XHTML fragment serialization. Void elements
+//!   always use the XML empty-element form (`<br />`, `<hr />`, `<img ... />`)
+//!   regardless of `void_trailing_slash`; text and attribute escaping already
+//!   satisfies XML (the four predefined escapes plus U+FFFD for NUL, with
+//!   raw Unicode preserved). No document wrapper, namespace declaration, or
+//!   DOCTYPE is added: this serializes the same fragment.
+//!
+//! The XHTML profile is fail-closed on verbatim content: `.raw_html` leaves,
+//! `.html_block` leaves, and Textile `pre.` code blocks (`escape == false`)
+//! pass source bytes through unchanged, which cannot be guaranteed
+//! XML-well-formed. Rendering such a document through `.xhtml` fails with
+//! `error.RawHtmlNotXmlWellFormed`; Oliver never rewrites, escapes, or
+//! reparses that content in XHTML mode. See docs/XHTML.md.
+//!
 //! Traversal uses an explicit stack rather than recursion, so rendering a
 //! hostile, deeply nested document cannot overflow the call stack.
 
@@ -45,11 +66,28 @@ const std = @import("std");
 const document = @import("document.zig");
 const entities = @import("entities.zig");
 
+/// The serializer output profile. Both profiles consume the same normalized
+/// document and differ only in serialization bytes (docs/XHTML.md).
+pub const OutputProfile = enum {
+    html,
+    xhtml,
+};
+
 pub const RenderOptions = struct {
     /// Emit void elements with a trailing slash (`<br />`) instead of the
     /// HTML5 form (`<br>`). Defaults to the CommonMark reference style.
+    /// Ignored under `.xhtml`, where voids always use the XML form.
     void_trailing_slash: bool = true,
+    /// The output profile: `.html` (default) or `.xhtml`.
+    profile: OutputProfile = .html,
 };
+
+/// A document contains verbatim source bytes (Markdown raw HTML leaves or
+/// Textile `pre.` code blocks) that the XHTML profile cannot guarantee are
+/// XML-well-formed. XHTML rendering fails closed with this error instead of
+/// emitting possibly-malformed XML or silently rewriting content.
+/// docs/XHTML.md §"Raw HTML policy".
+pub const RawHtmlNotXmlWellFormed = error.RawHtmlNotXmlWellFormed;
 
 /// Renders `doc` to `writer`.
 ///
@@ -307,13 +345,15 @@ fn writeOpen(
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
         },
         .thematic_break => {
-            try writer.writeAll(if (options.void_trailing_slash) "<hr />\n" else "<hr>\n");
+            try writer.writeAll(if (voidSlash(options)) "<hr />\n" else "<hr>\n");
         },
         .code_block => {
             const code = node.data.code_block;
             // Textile `pre.` renders the content verbatim inside `<pre>`
             // (no `<code>` wrapper, no escaping, no info class;
-            // docs/TEXTILE-PARITY.md §8).
+            // docs/TEXTILE-PARITY.md §8). Verbatim content cannot be
+            // guaranteed XML-well-formed, so the XHTML profile rejects it.
+            if (options.profile == .xhtml and !code.escape) return RawHtmlNotXmlWellFormed;
             try writer.writeAll("<pre");
             try writeAttrs(writer, code.attrs);
             if (!code.escape) {
@@ -337,10 +377,12 @@ fn writeOpen(
         },
         .html_block => {
             // Leaf block: the verbatim container-stripped source lines, no
-            // escaping (the raw-HTML policy of docs/RAW-HTML.md §3). Every
-            // block is followed by exactly one `\n`, so an unterminated
-            // final line gets one here (the reference implementation's
-            // `cr()`).
+            // escaping (the raw-HTML policy of docs/RAW-HTML.md §3). The
+            // XHTML profile is fail-closed: verbatim source cannot be
+            // guaranteed XML-well-formed. Every block is followed by exactly
+            // one `\n`, so an unterminated final line gets one here (the
+            // reference implementation's `cr()`).
+            if (options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
             const content = node.data.html_block;
             try writer.writeAll(content);
             if (content.len == 0 or content[content.len - 1] != '\n') try writer.writeByte('\n');
@@ -437,7 +479,7 @@ fn writeOpen(
                 try writer.writeByte('\"');
             }
             try writeAttrs(writer, node.data.image.attrs);
-            try writer.writeAll(if (options.void_trailing_slash) " />" else ">");
+            try writer.writeAll(if (voidSlash(options)) " />" else ">");
         },
         .acronym => {
             // Textile `CSS(Cascading Style Sheets)` → `<acronym
@@ -454,12 +496,15 @@ fn writeOpen(
         .raw_html => {
             // Leaf tag: the raw source bytes of the construct, verbatim —
             // no escaping (docs/RAW-HTML.md §3). The span may include line
-            // endings inside a multi-line tag.
+            // endings inside a multi-line tag. The XHTML profile is
+            // fail-closed: verbatim source cannot be guaranteed
+            // XML-well-formed.
+            if (options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
             try writer.writeAll(src[node.span.start..node.span.end]);
         },
         .soft_break => try writer.writeAll("\n"),
         .hard_break => {
-            try writer.writeAll(if (options.void_trailing_slash) "<br />" else "<br>");
+            try writer.writeAll(if (voidSlash(options)) "<br />" else "<br>");
             try writer.writeAll("\n");
         },
     }
@@ -532,6 +577,13 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
 /// valid levels, so clamping is purely defensive.
 fn clampHeading(level: u8) u8 {
     return @min(@max(level, 1), 6);
+}
+
+/// Whether void elements serialize with the XML empty-element trailing
+/// slash. The XHTML profile always uses it; HTML mode follows
+/// `RenderOptions.void_trailing_slash` (default CommonMark reference style).
+fn voidSlash(options: RenderOptions) bool {
+    return options.profile == .xhtml or options.void_trailing_slash;
 }
 
 /// The HTML tag name for the Textile phrase tags (the ones with a shared
@@ -1066,6 +1118,134 @@ test "html: thematic break follows the void-element profile" {
     var modern_out = aw.toArrayList();
     defer modern_out.deinit(testing.allocator);
     try testing.expectEqualStrings("<hr>\n", modern_out.items);
+}
+
+test "html: xhtml profile always uses the XML void form" {
+    // The XHTML profile forces the empty-element trailing slash even when
+    // the HTML-mode option would emit the HTML5 bare form.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(doc.root, p);
+    try doc.appendChild(p, try doc.createNode(.hard_break, .{ .start = 0, .end = 0 }, .none));
+    try doc.appendChild(doc.root, try doc.createNode(.thematic_break, .{ .start = 0, .end = 0 }, .none));
+    try doc.appendChild(p, try doc.createNode(.image, .{ .start = 0, .end = 0 }, .{
+        .image = .{ .src = "/u", .alt = "a", .title = null },
+    }));
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try render(testing.allocator, &aw.writer, &doc, .{ .void_trailing_slash = false, .profile = .xhtml });
+    var out = aw.toArrayList();
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p><br />\n<img src=\"/u\" alt=\"a\" /></p>\n<hr />\n", out.items);
+}
+
+test "html: xhtml profile rejects raw HTML leaves fail-closed" {
+    // Inline raw_html: the source bytes are emitted verbatim in HTML mode
+    // and must fail in XHTML mode.
+    {
+        const input = "<b>hi</b>";
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = input });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = @intCast(input.len) }, .{ .paragraph = .{} });
+        try doc.appendChild(doc.root, p);
+        try doc.appendChild(p, try doc.createNode(.raw_html, .{ .start = 0, .end = @intCast(input.len) }, .none));
+
+        var html_out = try renderDoc(&doc);
+        defer html_out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p><b>hi</b></p>\n", html_out.items);
+
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try testing.expectError(RawHtmlNotXmlWellFormed, render(testing.allocator, &aw.writer, &doc, .{ .profile = .xhtml }));
+    }
+    // Block html_block: same fail-closed contract.
+    {
+        const input = "<div>\nx\n</div>";
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = input });
+        defer doc.deinit();
+        const html_block = try doc.createNode(.html_block, .{ .start = 0, .end = @intCast(input.len) }, .{ .html_block = input });
+        try doc.appendChild(doc.root, html_block);
+
+        var html_out = try renderDoc(&doc);
+        defer html_out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<div>\nx\n</div>\n", html_out.items);
+
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try testing.expectError(RawHtmlNotXmlWellFormed, render(testing.allocator, &aw.writer, &doc, .{ .profile = .xhtml }));
+    }
+}
+
+test "html: xhtml profile rejects Textile pre. verbatim code blocks" {
+    // A `.code_block` with `escape == false` (Textile `pre.`) passes its
+    // content through verbatim; the XHTML profile rejects it. Escaped code
+    // blocks (`escape == true`) remain fine.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    try doc.appendChild(doc.root, try doc.createNode(.code_block, .{ .start = 0, .end = 0 }, .{
+        .code_block = .{ .content = "a < b", .escape = false },
+    }));
+
+    var html_out = try renderDoc(&doc);
+    defer html_out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<pre>a < b</pre>\n", html_out.items);
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try testing.expectError(RawHtmlNotXmlWellFormed, render(testing.allocator, &aw.writer, &doc, .{ .profile = .xhtml }));
+
+    // Escaped code blocks render through the XHTML profile (escaped text is
+    // XML-safe).
+    var doc2 = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc2.deinit();
+    try doc2.appendChild(doc2.root, try doc2.createNode(.code_block, .{ .start = 0, .end = 0 }, .{
+        .code_block = .{ .content = "a < b & c", .info = "zig", .escape = true },
+    }));
+    var aw2 = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw2.deinit();
+    try render(testing.allocator, &aw2.writer, &doc2, .{ .profile = .xhtml });
+    var xhtml_out = aw2.toArrayList();
+    defer xhtml_out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<pre><code class=\"language-zig\">a &lt; b &amp; c</code></pre>\n", xhtml_out.items);
+}
+
+test "html: xhtml output is deterministic and html mode is unchanged" {
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(doc.root, p);
+    try addText(&doc, p, "a & b < c \" d \u{1F600} e");
+    const lnk = try doc.createNode(.link, .{ .start = 0, .end = 0 }, .{
+        .link = .{ .href = "/my url\"&x", .title = "t & t" },
+    });
+    try doc.appendChild(p, lnk);
+    try addText(&doc, lnk, "go");
+    try doc.appendChild(doc.root, try doc.createNode(.thematic_break, .{ .start = 0, .end = 0 }, .none));
+
+    // HTML mode: exactly today's bytes.
+    var html_out = try renderDoc(&doc);
+    defer html_out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>a &amp; b &lt; c &quot; d \u{1F600} e<a href=\"/my%20url%22&amp;x\" title=\"t &amp; t\">go</a></p>\n<hr />\n",
+        html_out.items,
+    );
+
+    // XHTML mode: identical bytes here (escaping is already XML-safe), and
+    // repeated renders are byte-identical.
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try render(testing.allocator, &aw.writer, &doc, .{ .profile = .xhtml });
+    var first = aw.toArrayList();
+    defer first.deinit(testing.allocator);
+    var aw2 = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw2.deinit();
+    try render(testing.allocator, &aw2.writer, &doc, .{ .profile = .xhtml });
+    var second = aw2.toArrayList();
+    defer second.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, first.items, second.items);
+    try testing.expectEqualSlices(u8, html_out.items, first.items);
 }
 
 test "html: code block escapes content and uses the first info word" {

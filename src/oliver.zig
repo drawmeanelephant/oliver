@@ -6,6 +6,8 @@
 //! const result = try oliver.parse(allocator, source, .markdown, .{});
 //! defer result.deinit();
 //! try oliver.html.render(allocator, &writer, &result.document, .{});
+//! // XHTML fragment serialization: same IR, different profile
+//! try oliver.html.render(allocator, &writer, &result.document, .{ .profile = .xhtml });
 //! ```
 //!
 //! Guarantees:
@@ -26,6 +28,10 @@ pub const document = @import("document.zig");
 pub const markdown = @import("markdown.zig");
 pub const textile = @import("textile.zig");
 pub const html = @import("html.zig");
+/// The renderer output profile (`.html` or `.xhtml`); shared by the
+/// Document renderer (`html.RenderOptions.profile`) and the Cooklang
+/// renderer (`cooklang_html.RenderOptions.profile`). docs/XHTML.md.
+pub const OutputProfile = html.OutputProfile;
 /// Cooklang: a first-class frontend with its own typed `Recipe` model (not
 /// the Markdown/Textile document IR). See docs/COOKLANG.md.
 pub const cooklang = @import("cooklang.zig");

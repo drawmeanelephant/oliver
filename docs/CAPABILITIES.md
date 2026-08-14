@@ -66,6 +66,8 @@ YAML). Derived operations over the same model:
   (`=`) quantities, timers, cookware, and recipe references untouched
 - **render** — a deterministic HTML policy: ingredients index,
   timers as `<time>` with ISO-8601 durations, section-aware layout
+  (with `--to xhtml` for the XML-compatible fragment profile,
+  docs/XHTML.md)
 - **menu** — the day/meal view over parsed `.menu` files (sections as
   days, `(YYYY-MM-DD)` dates, reference directives as source text)
 
@@ -75,10 +77,12 @@ YAML). Derived operations over the same model:
   `oliver.cooklang.parse` plus the derived operations for Cooklang. The
   caller supplies the allocator; results own their arenas; text payloads
   borrow the input bytes (which must outlive the result).
-- **CLI**: `oliver render --from <markdown|textile|cooklang>`,
-  `oliver serialize --from cooklang`, `oliver scale --from cooklang
-  (--factor n[/d] | --servings n)`, `oliver menu --from cooklang` — a
-  thin stdin/stdout adapter; all semantics live in the library.
+- **CLI**: `oliver render --from <markdown|textile|cooklang>
+  [--to <html|xhtml>]`, `oliver serialize --from cooklang`,
+  `oliver scale --from cooklang (--factor n[/d] | --servings n)`,
+  `oliver menu --from cooklang` — a thin stdin/stdout adapter; all
+  semantics live in the library. HTML remains the default; `--to xhtml`
+  selects the XML-compatible fragment serialization.
 
 ## Go deeper
 

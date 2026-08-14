@@ -45,14 +45,23 @@
 
 const std = @import("std");
 const cooklang = @import("cooklang.zig");
+const html_mod = @import("html.zig");
 
-pub const RenderOptions = struct {};
+/// The serializer output profile; shared with the Document renderer
+/// (docs/XHTML.md). Under `.xhtml`, the Recipe's HTML vocabulary is
+/// serialized XML-compatibly (void elements use `<br />`); all text and
+/// attribute values are already escaped for both profiles.
+pub const OutputProfile = html_mod.OutputProfile;
+
+pub const RenderOptions = struct {
+    /// The output profile: `.html` (default) or `.xhtml`.
+    profile: OutputProfile = .html,
+};
 
 pub fn render(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.Recipe, options: RenderOptions) !void {
-    _ = options;
     try writer.writeAll("<article class=\"recipe\">\n");
     try writeIngredientsIndex(gpa, writer, recipe.blocks);
-    try renderBlocks(writer, recipe.blocks);
+    try renderBlocks(writer, recipe.blocks, options.profile);
     try writer.writeAll("</article>\n");
 }
 
@@ -151,7 +160,7 @@ fn collectIngredients(
 
 /// Renders a run of blocks, opening one `<ol class="steps">` for each
 /// contiguous run of steps (notes and sections interrupt the run).
-fn renderBlocks(writer: anytype, blocks: []const cooklang.Block) !void {
+fn renderBlocks(writer: anytype, blocks: []const cooklang.Block, profile: OutputProfile) !void {
     var ol_open = false;
     for (blocks) |block| {
         switch (block) {
@@ -163,7 +172,7 @@ fn renderBlocks(writer: anytype, blocks: []const cooklang.Block) !void {
                 try writer.writeAll("<li>");
                 // Text parts carry their own source spacing, so parts
                 // render adjacent without a synthetic separator.
-                for (step.parts) |part| try renderPart(writer, part);
+                for (step.parts) |part| try renderPart(writer, part, profile);
                 try writer.writeAll("</li>\n");
             },
             .note => |note| {
@@ -187,7 +196,7 @@ fn renderBlocks(writer: anytype, blocks: []const cooklang.Block) !void {
                     try escapeInto(writer, section.name, false);
                     try writer.writeAll("</h2>\n");
                 }
-                try renderBlocks(writer, section.blocks);
+                try renderBlocks(writer, section.blocks, profile);
                 try writer.writeAll("</section>\n");
             },
         }
@@ -195,10 +204,10 @@ fn renderBlocks(writer: anytype, blocks: []const cooklang.Block) !void {
     if (ol_open) try writer.writeAll("</ol>\n");
 }
 
-fn renderPart(writer: anytype, part: cooklang.Part) !void {
+fn renderPart(writer: anytype, part: cooklang.Part, profile: OutputProfile) !void {
     switch (part) {
         .text => |t| try escapeInto(writer, t.text, false),
-        .line_break => try writer.writeAll("<br>"),
+        .line_break => try writer.writeAll(if (profile == .xhtml) "<br />" else "<br>"),
         .ingredient => |ig| {
             if (ig.is_recipe_reference) {
                 try writer.writeAll("<span class=\"recipe-ref\" data-ref=\"");
@@ -423,4 +432,36 @@ test "cooklang html: richer policy structure" {
     const plain = try renderT(std.testing.allocator, "Boil water, then serve.");
     defer std.testing.allocator.free(plain);
     try std.testing.expect(std.mem.indexOf(u8, plain, "class=\"ingredients\"") == null);
+}
+
+test "cooklang html: xhtml profile serializes line breaks with the XML void form" {
+    // A trailing backslash at end of line is a step line break (Cooklang
+    // spec); the HTML profile emits `<br>`, the XHTML profile `<br />`.
+    // Everything else is identical (text and attribute values are escaped
+    // for both profiles).
+    const input = "Chop @onion, then simmer \\\n~{25%minutes}.";
+    var result = try cooklang.parse(std.testing.allocator, input, .{});
+    defer result.deinit();
+
+    var html_aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer html_aw.deinit();
+    try render(std.testing.allocator, &html_aw.writer, &result.recipe, .{});
+    var html_out = html_aw.toArrayList();
+    defer html_out.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, html_out.items, "simmer <br><time class=\"timer\" data-quantity=\"25\" data-units=\"minutes\" datetime=\"PT25M\">25 minutes</time>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html_out.items, "<br />") == null);
+
+    var xhtml_aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer xhtml_aw.deinit();
+    try render(std.testing.allocator, &xhtml_aw.writer, &result.recipe, .{ .profile = .xhtml });
+    var xhtml_out = xhtml_aw.toArrayList();
+    defer xhtml_out.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, xhtml_out.items, "simmer <br /><time class=\"timer\" data-quantity=\"25\" data-units=\"minutes\" datetime=\"PT25M\">25 minutes</time>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, xhtml_out.items, "<br>") == null);
+
+    // The only difference is the void serialization: strip `<br />` from
+    // the xhtml output and compare with the html output.
+    const xhtml_with_br = try std.mem.replaceOwned(u8, std.testing.allocator, xhtml_out.items, "<br />", "<br>");
+    defer std.testing.allocator.free(xhtml_with_br);
+    try std.testing.expectEqualSlices(u8, html_out.items, xhtml_with_br);
 }

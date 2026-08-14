@@ -240,7 +240,9 @@ diagnostics.
   semantics through an IR that cannot carry them. The existing
   Markdown/Textile API is untouched (source-compatible).
 - CLI: `oliver render --from cooklang` renders the recipe through the
-  Cooklang HTML policy; `oliver serialize --from cooklang` writes the
+  Cooklang HTML policy; `--to xhtml` selects the same policy under the
+  XML-compatible profile (the forced line break becomes `<br />`;
+  docs/XHTML.md). `oliver serialize --from cooklang` writes the
   canonical `.cook` text (§10).
 
 ## 7. HTML rendering policy (Oliver-owned, not Cooklang-conformant)

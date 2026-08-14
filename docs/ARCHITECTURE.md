@@ -17,7 +17,7 @@ source bytes
 dialect parser (markdown | textile)
     |
     v
-normalized typed document ──────> renderer (html) ─> output bytes
+normalized typed document ──────> renderer (html | xhtml profile) ─> output bytes
 
 source bytes (cooklang)
     |
@@ -25,7 +25,7 @@ source bytes (cooklang)
 cooklang parser
     |
     v
-typed Recipe ──┬────────────────> cooklang_html policy ─> output bytes
+typed Recipe ──┬────────────────> cooklang_html policy (html | xhtml) ─> output bytes
                └────────────────> cooklang_serialize ──> canonical .cook
 ```
 
@@ -67,14 +67,16 @@ The two boundaries that matter:
 | `src/markdown.zig` | Markdown frontend (block pass + inline pass) |
 | `src/textile.zig` | Textile frontend (block pass + inline pass) |
 | `src/cooklang.zig` | Cooklang frontend: typed Recipe model + parser |
-| `src/html.zig` | deterministic HTML renderer (Document) |
-| `src/cooklang_html.zig` | deterministic Cooklang HTML policy (Recipe) |
+| `src/html.zig` | deterministic Document renderer (HTML default, XHTML profile) |
+| `src/cooklang_html.zig` | deterministic Recipe renderer (HTML default, XHTML profile) |
 | `src/cooklang_serialize.zig` | canonical Cooklang serializer (Recipe → valid `.cook`) |
 | `src/cooklang_scale.zig` | pure Cooklang scaling (Recipe → scaled Recipe, exact rationals) |
 | `src/cooklang_menu.zig` | `.menu` convenience view (Recipe → day/meal structure) |
 | `src/main.zig` | provisional CLI: arguments + stdio only; no parser semantics |
 | `tools/cooklang_conformance.zig` | Cooklang canonical-corpus harness (`zig build cooklang-conformance`) |
 | `tests/fixtures_test.zig` | fixture-driven tests + adversarial smoke tests |
+| `tests/xhtml_test.zig` | XHTML profile tests: paired fixtures, raw-HTML rejection, determinism, well-formedness gate |
+| `tests/xhtml_wellformed.zig` | test-only XML well-formedness scanner (evidence for the XHTML gate) |
 
 Frontends are deliberately independent files: they share the document model
 and the renderer, but each owns its syntax. Common structure is *not* forced
@@ -132,6 +134,13 @@ Explicit, documented policies:
   policy for the inline §6.6 slice and the §4.6 HTML blocks (all seven
   types, `.html_block` leaves). A configurable escaped/rejected mode
   remains future work.
+- Serializer profiles: both HTML-family renderers take an
+  `OutputProfile` (`html | xhtml`); the default `.html` is byte-unchanged,
+  and `.xhtml` is an XML-compatible serialization of the same semantics
+  (docs/XHTML.md). Under `.xhtml`, voids always use the XML form and raw
+  verbatim content (`.raw_html`, `.html_block`, Textile `pre.`) fails
+  closed with `error.RawHtmlNotXmlWellFormed` instead of risking
+  non-well-formed XML.
 - Headings: `<h1>`..`<h6>`; levels outside 1..6 are clamped (defensive for
   hand-built documents; frontends never produce them).
 - Thematic breaks: semantic `.thematic_break` leaves render as `<hr />` by

@@ -50,6 +50,9 @@ consume directly. The map below mirrors it.
   across the dialects, with provenance
 - [Tests and fixtures](TESTS.html) — the suites, the conformance walls,
   and the fixture convention
+- [XHTML output profile](XHTML.html) — the same IR and semantics under
+  an XML-compatible serialization, the fail-closed raw-HTML policy, and
+  the well-formedness gate
 - [CommonMark expectations](COMMONMARK-EXPECTATIONS.html) — the
   classified conformance expectation set behind the 652/652 gate
 

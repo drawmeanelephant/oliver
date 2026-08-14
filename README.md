@@ -3,9 +3,9 @@
 A small, freestanding markup parsing and rendering library in Zig.
 
 ```text
-Markdown ──> normalized typed document ──> deterministic HTML
-Textile ───> normalized typed document ──> deterministic HTML
-Cooklang ──> typed Recipe (its own model) ─> deterministic HTML policy
+Markdown ──> normalized typed document ──> deterministic HTML / XHTML
+Textile ───> normalized typed document ──> deterministic HTML / XHTML
+Cooklang ──> typed Recipe (its own model) ─> deterministic HTML / XHTML policy
 ```
 
 Oliver is **markup infrastructure**: it parses a byte slice, produces a typed
@@ -193,7 +193,7 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (251 tests)
+zig build test    # run all tests (274 tests)
 zig build         # build the static library and CLI into zig-out/
 zig build cooklang-conformance   # Cooklang canonical corpus (vendored)
 ```
@@ -209,6 +209,11 @@ defer result.deinit();
 var aw = std.Io.Writer.Allocating.init(allocator);
 defer aw.deinit();
 try oliver.html.render(allocator, &aw.writer, &result.document, .{});
+
+// XHTML fragment: same IR, same semantics, XML-compatible serialization
+// (docs/XHTML.md). `.profile = .xhtml` on either HTML-family renderer;
+// the default remains byte-identical HTML.
+try oliver.html.render(allocator, &aw.writer, &result.document, .{ .profile = .xhtml });
 ```
 
 Cooklang parses into its own typed model through an explicit entry point
@@ -220,6 +225,7 @@ defer cooked.deinit();
 // cooked.recipe.blocks / .frontmatter / .diagnostics
 
 try oliver.cooklang_html.render(allocator, &aw.writer, &cooked.recipe, .{});
+try oliver.cooklang_html.render(allocator, &aw.writer, &cooked.recipe, .{ .profile = .xhtml });
 
 // Canonical serialization: semantic Recipe -> valid .cook (idempotent;
 // docs/COOKLANG.md §10).
@@ -253,6 +259,9 @@ caches, deterministic output.
 oliver render --from markdown  < document.md
 oliver render --from textile   < document.textile
 oliver render --from cooklang  < recipe.cook
+oliver render --from markdown --to xhtml < document.md  # XML-compatible fragment
+oliver render --from textile  --to xhtml < document.textile
+oliver render --from cooklang --to xhtml < recipe.cook
 oliver serialize --from cooklang < recipe.cook   # canonical .cook
 oliver scale --from cooklang --factor 2 < recipe.cook   # scaled .cook
 oliver scale --from cooklang --servings 4 < recipe.cook  # via servings
