@@ -569,6 +569,151 @@ hr {
   padding-left: 20px;
 }
 
+/* Search widget (the compiler-emitted rendered-search index, client-side) */
+.site-search__label {
+  display: block;
+  font-family: var(--txp-font-sans);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--txp-text-light);
+  margin-bottom: 6px;
+}
+
+.site-search__controls input[type="search"] {
+  width: 100%;
+  padding: 8px 10px;
+  font-family: var(--txp-font-sans);
+  font-size: 0.9rem;
+  color: var(--txp-text-main);
+  background: #ffffff;
+  border: 1px solid var(--txp-border-dark);
+  border-left: 3px solid var(--txp-crimson);
+  border-radius: 2px;
+}
+
+.site-search__controls input[type="search"]:focus {
+  outline: none;
+  border-color: var(--txp-crimson);
+  box-shadow: 0 0 0 1px rgba(140, 35, 35, 0.25);
+}
+
+.site-search__status {
+  margin: 8px 0 0 0;
+  font-family: var(--txp-font-sans);
+  font-size: 0.75rem;
+  color: var(--txp-text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.site-search__results {
+  list-style: none;
+  margin: 8px 0 0 0;
+  padding: 0;
+}
+
+.site-search__result {
+  margin-bottom: 8px;
+}
+
+.site-search__result a {
+  display: block;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid var(--txp-border-color);
+  border-left: 3px solid var(--txp-crimson);
+  text-decoration: none;
+  color: var(--txp-text-main);
+}
+
+.site-search__result a:hover {
+  background: var(--txp-crimson-light);
+  border-left-color: var(--txp-crimson-hover);
+}
+
+.site-search__title {
+  display: block;
+  font-family: var(--txp-font-serif);
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--txp-crimson);
+}
+
+.site-search__path {
+  display: block;
+  font-family: var(--txp-font-mono);
+  font-size: 0.7rem;
+  color: var(--txp-text-light);
+  text-transform: lowercase;
+  margin: 2px 0;
+}
+
+.site-search__excerpt {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--txp-text-muted);
+}
+
+.site-search__fallback {
+  margin: 8px 0 0 0;
+  font-size: 0.8rem;
+  color: var(--txp-text-muted);
+}
+
+/* Grouped Documentation menu subheadings */
+.txp-sidebar .site-nav li.site-nav__group {
+  margin: 14px 0 6px 0;
+  padding-bottom: 3px;
+  font-family: var(--txp-font-sans);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--txp-slate);
+  border-bottom: 1px solid var(--txp-border-dark);
+}
+
+.txp-sidebar .site-nav li.site-nav__group:first-child {
+  margin-top: 0;
+}
+
+/* Conformance status box */
+.txp-status-box {
+  background: #ffffff;
+  border: 1px solid var(--txp-border-color);
+  padding: 10px 14px;
+  margin-bottom: 8px;
+}
+
+.txp-status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 0.8rem;
+  border-bottom: 1px dotted var(--txp-border-subtle);
+}
+
+.txp-status-row:last-child {
+  border-bottom: none;
+}
+
+.txp-status-key {
+  font-weight: 600;
+  color: var(--txp-text-muted);
+}
+
+.txp-status-val {
+  color: var(--txp-crimson);
+  font-weight: 700;
+}
+
+.txp-small-text {
+  font-size: 0.75rem;
+  color: var(--txp-text-light);
+}
+
 /* ==========================================================================
    Site Footer
    ========================================================================== */
