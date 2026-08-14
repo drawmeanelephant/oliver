@@ -35,6 +35,13 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(cli);
 
+    // CLI argument-parsing tests (src/main.zig) run as part of the ordinary
+    // test gate.
+    const cli_tests = b.addTest(.{
+        .root_module = cli_mod,
+    });
+    const run_cli_tests = b.addRunArtifact(cli_tests);
+
     const cli_run = b.addRunArtifact(cli);
     if (b.args) |args| cli_run.addArgs(args);
     const run_step = b.step("run", "Run the oliver CLI");
@@ -117,8 +124,24 @@ pub fn build(b: *std.Build) void {
     });
     const run_fixture_tests = b.addRunArtifact(fixture_tests);
 
+    // XHTML output-profile tests (tests/xhtml_test.zig) including the
+    // mechanical well-formedness gate (tests/xhtml_wellformed.zig).
+    const xhtml_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/xhtml_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "oliver", .module = oliver_mod },
+            },
+        }),
+    });
+    const run_xhtml_tests = b.addRunArtifact(xhtml_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_fixture_tests.step);
     test_step.dependOn(&run_spec_tool_tests.step);
+    test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_xhtml_tests.step);
 }

@@ -5,7 +5,8 @@ summary: Tests are product contracts: zig build test runs three suites covering 
 
 # Oliver tests and fixtures
 
-Tests are product contracts. `zig build test` runs three suites:
+Tests are product contracts. `zig build test` runs four suites (the
+fourth — the XHTML profile suite — is described in its own section below):
 
 1. **Library module tests** — 230 `test` blocks inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
@@ -355,6 +356,33 @@ not-yet example — §4.7 edge case #201, an angle destination directly
 followed by a would-be title — was closed by the full-conformance
 milestone. No named divergences remain. Failures are not silently skipped:
 the classified gate makes the whole 0.31.2 corpus a regression wall.
+
+## XHTML profile suite
+
+`tests/xhtml_test.zig` (wired into `zig build test` alongside the
+fixture wall) covers the `.xhtml` serializer profile end to end
+(docs/XHTML.md):
+
+- **Paired fixtures** — inputs with byte-exact `html` and `xhtml`
+  expectations across Markdown, Textile, and Cooklang; pairs that are
+  byte-identical document the shared serialization, and the Cooklang line
+  break documents the one owned delta (`<br>` → `<br />`).
+- **HTML-mode guard** — representative committed Markdown fixtures are
+  re-rendered through the default profile and compared byte-for-byte to
+  their committed `.html`, proving the new profile did not perturb HTML
+  output.
+- **Fail-closed raw content** — `.raw_html`, `.html_block`, and Textile
+  `pre.` render in HTML mode and are rejected with
+  `error.RawHtmlNotXmlWellFormed` under `.xhtml`.
+- **Determinism** — repeated rendering under both profiles is
+  byte-identical.
+- **Well-formedness gate** — `tests/xhtml_wellformed.zig` is a small,
+  hermetic, test-only XML well-formedness scanner (balanced,
+  name-matched elements; quoted attributes; predefined + numeric
+  entities; comments/CDATA/PIs; character validity). Representative
+  Markdown, Textile, and Cooklang XHTML fragments are wrapped in a
+  namespace-aware test-only wrapper and validated; the checker itself
+  distinguishes clean from poisoned input.
 
 ## Commands
 

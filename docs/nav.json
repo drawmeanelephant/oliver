@@ -48,6 +48,12 @@
           "summary": "The test suites, the conformance walls, and the fixture convention."
         },
         {
+          "file": "XHTML.md",
+          "title": "XHTML output profile",
+          "audience": "dev",
+          "summary": "The same IR and semantics under an XML-compatible serialization: fragment semantics, the fail-closed raw-HTML policy, and the well-formedness gate."
+        },
+        {
           "file": "COMMONMARK-EXPECTATIONS.md",
           "title": "CommonMark expectations",
           "audience": "dev",
