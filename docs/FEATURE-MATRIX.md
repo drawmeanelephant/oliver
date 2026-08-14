@@ -91,7 +91,7 @@ Textile is a first-class dialect. Where the references disagree, Oliver
 records the disagreement and chooses one behavior (see "Recorded ambiguities"
 below).
 
-## Blocks
+## Blocks (Textile)
 
 | feature | status | Oliver behavior / notes |
 | --- | --- | --- |
@@ -113,7 +113,7 @@ below).
 
 | `clear` signature | implemented | `clear.` (clear both), `clear<.` (clear left), `clear>.` (clear right) — a lone marker line (only trailing whitespace after the period, or the `<`/`>` direction) that renders nothing; the next block to open carries `style="clear:both;"` (or `left`/`right`) in its attribute set, merged ahead of any style the block already has (Textile 2 "clear": "the next block should emit a CSS style attribute that clears any floating elements"). Applies to every block family — paragraphs, headings, block quotes, lists, tables, definition lists, footnotes, code blocks — and closes whatever block was open (an extended `bq..`/`bc..` or definition list ends at the marker; a single-period `bc.` owns the marker as code content). A dangling marker at end of input is dropped; any other shape — content after the marker, a different modifier, a word merely starting with "clear" — stays ordinary text. Pinned in docs/TEXTILE-PARITY.md §22. |
 
-## Inlines
+## Inlines (Textile)
 
 | feature | status | Oliver behavior / notes |
 | --- | --- | --- |

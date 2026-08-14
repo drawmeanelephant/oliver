@@ -1,0 +1,56 @@
+:root {
+  --oliver-ink: #1c1e21;
+  --oliver-muted: #5c6470;
+  --oliver-line: #e2e5ea;
+  --oliver-accent: #3b5bdb;
+  --oliver-bg: #ffffff;
+  --oliver-sidebar: #f6f7f9;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  color: var(--oliver-ink);
+  background: var(--oliver-bg);
+  line-height: 1.55;
+}
+
+.site-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  padding: 1.25rem 1.5rem;
+  background: var(--oliver-sidebar);
+  border-right: 1px solid var(--oliver-line);
+}
+
+@media (min-width: 64rem) {
+  body { display: grid; grid-template-columns: 18rem minmax(0, 1fr); }
+  .site-sidebar { height: 100vh; overflow-y: auto; }
+  main, nav.site-breadcrumb, nav.site-toc { padding: 2rem 3rem; max-width: 60rem; }
+}
+
+.site-brand__name { display: block; font-weight: 700; font-size: 1.25rem; }
+.site-brand__tagline { display: block; margin-top: 0.25rem; color: var(--oliver-muted); font-size: 0.85rem; }
+
+.site-menu summary { cursor: pointer; font-weight: 600; margin: 1rem 0 0.5rem; }
+.site-menu ul { list-style: none; padding-left: 0.75rem; margin: 0.25rem 0; }
+.site-menu li { margin: 0.15rem 0; }
+.site-menu a { color: var(--oliver-accent); text-decoration: none; }
+.site-menu a:hover { text-decoration: underline; }
+
+main { min-width: 0; padding: 2rem 1.5rem; }
+main h1 { font-size: 1.9rem; border-bottom: 1px solid var(--oliver-line); padding-bottom: 0.4rem; }
+main h2 { font-size: 1.4rem; margin-top: 2rem; }
+main h3 { font-size: 1.15rem; }
+main a { color: var(--oliver-accent); }
+main code { background: var(--oliver-sidebar); border-radius: 4px; padding: 0.1em 0.35em; font-size: 0.9em; }
+main pre { background: var(--oliver-sidebar); border: 1px solid var(--oliver-line); border-radius: 6px; padding: 1rem; overflow-x: auto; }
+main pre code { background: none; padding: 0; }
+main table { border-collapse: collapse; width: 100%; }
+main th, main td { border: 1px solid var(--oliver-line); padding: 0.4rem 0.6rem; text-align: left; }
+main blockquote { border-left: 3px solid var(--oliver-accent); margin-left: 0; padding-left: 1rem; color: var(--oliver-muted); }
+
+.site-footer { grid-column: 1 / -1; padding: 1rem 1.5rem; border-top: 1px solid var(--oliver-line); color: var(--oliver-muted); font-size: 0.85rem; }

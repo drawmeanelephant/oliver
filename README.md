@@ -31,7 +31,10 @@ and renders). As a contributor, start with
 [docs/DOCUMENT-MODEL.md](docs/DOCUMENT-MODEL.md),
 [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md),
 [docs/TESTS.md](docs/TESTS.md), [docs/CLEANROOM.md](docs/CLEANROOM.md),
-and [docs/WORK-LEDGER.md](docs/WORK-LEDGER.md).
+and [docs/WORK-LEDGER.md](docs/WORK-LEDGER.md). The docs tree itself
+publishes to GitHub Pages through `.github/workflows/github-pages.yml`;
+see [docs/github-pages.md](docs/github-pages.md) for how to enable and
+operate it.
 
 ## Status
 

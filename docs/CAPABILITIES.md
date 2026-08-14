@@ -2,7 +2,7 @@
 
 What Oliver parses and renders today on `main`. The full design
 contracts live in the per-frontend documents (see the
-[docs home](index.md)); this page is the user-facing overview.
+[docs home](index.html)); this page is the user-facing overview.
 
 ## Frontends at a glance
 
@@ -77,8 +77,8 @@ YAML). Derived operations over the same model:
 
 ## Go deeper
 
-- [Markdown docs](index.md#markdown-frontend) ·
-  [Textile docs](index.md#textile-frontend) ·
-  [Cooklang contract](COOKLANG.md)
-- [Architecture](ARCHITECTURE.md) · [Document model](DOCUMENT-MODEL.md)
-  · [Feature matrix](FEATURE-MATRIX.md) · [Tests](TESTS.md)
+- [Markdown docs](index.html#markdown-frontend) ·
+  [Textile docs](index.html#textile-frontend) ·
+  [Cooklang contract](COOKLANG.html)
+- [Architecture](ARCHITECTURE.html) · [Document model](DOCUMENT-MODEL.html)
+  · [Feature matrix](FEATURE-MATRIX.html) · [Tests](TESTS.html)

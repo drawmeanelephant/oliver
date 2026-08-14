@@ -1,0 +1,23 @@
+{
+  "format": "boris-publication-profile",
+  "schema_version": 1,
+  "input": "docs",
+  "site": {
+    "url": "https://drawmeanelephant.github.io/oliver"
+  },
+  "publication": {
+    "target": "github-pages",
+    "base_url": "https://drawmeanelephant.github.io/oliver",
+    "origin": "https://drawmeanelephant.github.io",
+    "base_path": "/oliver"
+  },
+  "targets": [
+    {
+      "name": "public",
+      "output": "dist",
+      "public": true,
+      "theme": "themes/oliver",
+      "sitemap": { "path": "sitemap.xml" }
+    }
+  ]
+}
