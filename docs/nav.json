@@ -182,6 +182,77 @@
           "summary": "Historical early-session report."
         }
       ]
+    },
+    {
+      "name": "Publications",
+      "pages": [
+        {
+          "file": "github-pages.md",
+          "title": "GitHub Pages publication",
+          "audience": "user",
+          "summary": "How this docs tree publishes to GitHub Pages: the workflow, the pinned Boris toolchain, the /oliver project-site shape, and the optional post-deploy audit."
+        },
+        {
+          "file": "contracts/index.md",
+          "title": "Publication contracts",
+          "audience": "dev",
+          "summary": "Landing page for the normative publication contract set Oliver's Pages pipeline relies on."
+        },
+        {
+          "file": "contracts/publication-model.md",
+          "title": "Publication model contract",
+          "audience": "dev",
+          "summary": "The meta-contract: document facts, publication facts, migration provenance, projections, and verification claims."
+        },
+        {
+          "file": "contracts/publication-profile.md",
+          "title": "Publication profile contract",
+          "audience": "dev",
+          "summary": "Schema v1 declaration input: the GitHub Pages location slice, bounds, and fail-closed validation."
+        },
+        {
+          "file": "contracts/publication-plan.md",
+          "title": "Publication plan contract",
+          "audience": "dev",
+          "summary": "The normalized declaration: boris plan --profile stdout, canonical JSON, and determinism."
+        },
+        {
+          "file": "contracts/publication-checks.md",
+          "title": "Publication checks contract",
+          "audience": "dev",
+          "summary": "Target-local checks.json: which checks ran and their findings, bound to committed inventory bytes."
+        },
+        {
+          "file": "contracts/publication-claims.md",
+          "title": "Publication claims contract",
+          "audience": "dev",
+          "summary": "Target-local claims.json: fixed claims and limitations derived from inventory and checks bytes."
+        },
+        {
+          "file": "contracts/publication-artifacts.md",
+          "title": "Publication artifacts contract",
+          "audience": "dev",
+          "summary": "The committed artifacts.json inventory: byte counts and SHA-256 for every emitted file."
+        },
+        {
+          "file": "contracts/publication-touches.md",
+          "title": "Publication Touch Atlas contract",
+          "audience": "dev",
+          "summary": "touches.json: the relationship index derived exclusively from the existing evidence reports."
+        },
+        {
+          "file": "contracts/publication-proof-pack.md",
+          "title": "Publication Proof Pack contract",
+          "audience": "dev",
+          "summary": "The two-file presentation model (proof-pack.json + index.html) over committed evidence."
+        },
+        {
+          "file": "contracts/github-pages-deployment-evidence.md",
+          "title": "Deployment evidence contract",
+          "audience": "dev",
+          "summary": "The optional post-deploy audit report: a bounded HTTP observation bound to the plan and inventory."
+        }
+      ]
     }
   ]
 }

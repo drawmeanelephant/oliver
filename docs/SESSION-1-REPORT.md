@@ -50,7 +50,7 @@ concept.
 ## Clean-room sources consulted
 
 Only specifications and user-facing documentation (full list with URLs in
-[docs/CLEANROOM.md](docs/CLEANROOM.md)):
+[docs/CLEANROOM.md](CLEANROOM.html)):
 
 - CommonMark specification 0.31.2 `spec.txt` (lines, blank lines, tabs, NUL,
   backslash escapes, ATX headings §4.2, setext §4.3, precedence).
@@ -63,7 +63,7 @@ No parser implementation source was consulted.
 
 ## Feature matrix
 
-Full matrix in [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md).
+Full matrix in [docs/FEATURE-MATRIX.md](FEATURE-MATRIX.html).
 Implemented in the slice: paragraphs, ATX headings, plain text, soft/hard
 breaks, blank lines, Textile `p.`/`hN.` markers, Textile hard line breaks.
 Planned next: emphasis/strong, code spans, links, escapes, thematic breaks,

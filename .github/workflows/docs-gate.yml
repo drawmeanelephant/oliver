@@ -1,0 +1,89 @@
+# Docs publication gate.
+#
+# Runs the Boris prepublication validation against the docs/ tree on every
+# push and pull request, so broken links, content-local asset errors, or
+# URLs that escape the declared origin/base path fail before merge. The
+# gate uses the same pipeline as the Pages build: the same pinned Boris
+# revision (single source of truth in .github/boris-pin.json, shared with
+# .github/workflows/github-pages.yml), the same project-site location
+# (/oliver), the same theme, and the same profile/plan normalization.
+#
+# `boris validate` runs the same prepublication path as `boris compile`
+# without writing artifacts, so this job leaves the working tree clean and
+# adds no CI-side output beyond the plan check below.
+#
+# The project-site location is the canonical /oliver shape for this
+# repository. Update these flags together with
+# publication-profile.example.json if the site shape ever changes.
+
+name: Docs gate
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: docs-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate docs publication
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+
+      # The Boris revision is the single pin in .github/boris-pin.json,
+      # shared with the Pages publish workflow: this gate always validates
+      # the same toolchain that publishes.
+      - name: Resolve Boris toolchain pin
+        id: boris-pin
+        run: echo "revision=$(jq -r .revision .github/boris-pin.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pinned Boris toolchain
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: drawmeanelephant/boris
+          ref: ${{ steps.boris-pin.outputs.revision }}
+          path: boris
+          fetch-depth: 1
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      - name: Build Boris
+        run: cd boris && zig build -Doptimize=ReleaseSafe
+
+      # Cheap schema-drift guard: the starter profile must still plan to
+      # the /oliver project-site shape the gate and the publish workflow
+      # hard-code.
+      - name: Validate the starter publication profile
+        run: |
+          boris/zig-out/bin/boris plan --profile publication-profile.example.json > /tmp/publication-plan.json
+          test "$(jq -r '.publication.site_kind' /tmp/publication-plan.json)" = "project-site"
+          test "$(jq -r '.publication.base_path' /tmp/publication-plan.json)" = "/oliver"
+
+      # The same prepublication checks as the Pages build, without writing
+      # dist/. Fails on EPUBLICATIONLOCATION (URL escapes the declared
+      # origin/base path), EASSET, ECOMPONENT, and any other compiler
+      # finding that would fail the publish workflow.
+      - name: Validate docs against the project-site location
+        run: |
+          boris/zig-out/bin/boris validate \
+            --input docs \
+            --target public=dist \
+            --target-layout public=themes/oliver/layouts/main.html \
+            --sitemap \
+            --pages-base-url https://drawmeanelephant.github.io/oliver \
+            --pages-origin https://drawmeanelephant.github.io \
+            --pages-base-path /oliver \
+            --site-url https://drawmeanelephant.github.io/oliver

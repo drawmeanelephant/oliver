@@ -66,7 +66,7 @@ pass finds maximal tags over the whole paragraph, and `scanLine` merges
 the two sorted lists by earliest start, dropping any construct that
 starts inside an already-accepted one. The drop rule is exactly
 first-come: `` `<a href="x">` `` is a code span (its `<` is inside the
-span), `<a href="`">` is a tag (its backtick is inside the tag).
+span), `` `<a href="`">` `` is a tag (its backtick is inside the tag).
 
 ### Tag vs autolink at `<`
 

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{title}} · Oliver</title>
+  <link rel="stylesheet" href="{{asset-url assets/css/oliver.css}}">
+</head>
+<body class="txp-body">
+<div class="txp-container">
+  <header class="txp-header">
+    <div class="txp-branding">
+      <p class="txp-site-name">Oliver<span class="txp-amp">&amp;</span>docs</p>
+      <p class="txp-tagline">A small, freestanding markup parsing and rendering library in Zig.</p>
+    </div>
+  </header>
+  <div class="txp-layout-body">
+    <article class="txp-content">
+      <header class="txp-article-header">
+        {{breadcrumb}}
+      </header>
+      <div class="txp-article-body">
+        {{content}}
+      </div>
+    </article>
+    <aside class="txp-sidebar">
+      <div class="txp-widget">
+        <h2 class="txp-widget-title" id="search">Search</h2>
+        <section class="site-search" data-boris-search-ui aria-labelledby="site-search-label">
+          <form action="_boris/search/" method="get" role="search" data-boris-search-form>
+            <label class="site-search__label" id="site-search-label" for="site-search-input">Search the documentation</label>
+            <div class="site-search__controls">
+              <input id="site-search-input" name="q" type="search" autocomplete="off" placeholder="Search…" spellcheck="false">
+            </div>
+          </form>
+          <p class="site-search__status" data-boris-search-status role="status" aria-live="polite">Loading search…</p>
+          <ol class="site-search__results" data-boris-search-results aria-label="Search results"></ol>
+          <noscript><p class="site-search__fallback">Search needs JavaScript in this static site. Use the Documentation menu.</p></noscript>
+        </section>
+      </div>
+      <div class="txp-widget">
+        <h2 class="txp-widget-title" id="on-this-page">On this page</h2>
+        {{toc}}
+      </div>
+      <div class="txp-widget">
+        <h2 class="txp-widget-title" id="documentation">Documentation</h2>
+        {{nav}}
+      </div>
+      <div class="txp-widget">
+        <h2 class="txp-widget-title" id="conformance">Conformance</h2>
+        <div class="txp-status-box">
+          <div class="txp-status-row"><span class="txp-status-key">CommonMark 0.31.2</span><span class="txp-status-val">652/652</span></div>
+          <div class="txp-status-row"><span class="txp-status-key">Cooklang canonical</span><span class="txp-status-val">60/60</span></div>
+          <div class="txp-status-row"><span class="txp-status-key">Textile fixture wall</span><span class="txp-status-val">green</span></div>
+          <div class="txp-status-row"><span class="txp-status-key">Test suite</span><span class="txp-status-val">251/251</span></div>
+        </div>
+        <p class="txp-small-text">The walls gate every push. Snapshot from the docs home.</p>
+      </div>
+      <div class="txp-widget">
+        <h2 class="txp-widget-title" id="about-oliver">About Oliver</h2>
+        <p>Oliver is a small, freestanding markup parsing and rendering library in Zig: Markdown, Textile, and Cooklang in, deterministic HTML out.</p>
+      </div>
+      <div class="txp-widget">
+        <h2 class="txp-widget-title" id="publication">Publication</h2>
+        <p>This documentation is built with a pinned Boris binary and published to GitHub Pages. The publication guide, contracts, and pipeline are in the Documentation menu.</p>
+      </div>
+    </aside>
+  </div>
+  <footer class="txp-footer">
+    <p class="txp-footer-line">Oliver documentation · deterministic markup in, typed documents out</p>
+    <p class="txp-footer-meta">GitHub Pages · oliver theme · built with Boris</p>
+  </footer>
+</div>
+<script>
+(() => {
+  "use strict";
+  // Site search over the compiler-emitted rendered-search index.
+  const ui = document.querySelector("[data-boris-search-ui]");
+  if (ui) {
+    const input = ui.querySelector("#site-search-input");
+    const form = ui.querySelector("form");
+    const status = ui.querySelector("[data-boris-search-status]");
+    const results = ui.querySelector("[data-boris-search-results]");
+    // Derive the site-root-relative prefix from the page-relative stylesheet
+    // href emitted by asset-url ("" from index.html, "../" from contracts/…).
+    const siteRootPrefix = (() => {
+      const sheet = document.querySelector('link[rel="stylesheet"][href*="assets/"]');
+      const href = sheet ? (sheet.getAttribute("href") || "") : "";
+      const marker = href.lastIndexOf("assets/");
+      return marker >= 0 ? href.slice(0, marker) : "";
+    })();
+    if (form) form.action = siteRootPrefix + "_boris/search/";
+    const indexUrl = new URL(siteRootPrefix + "_boris/search/search-index.json", document.baseURI);
+    const expectedFormat = "boris-rendered-search-index";
+    const expectedSchema = 1;
+    let documents = [];
+    const normalize = value => String(value || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+    const fields = section => [section.heading, section.text, section.code].map(normalize);
+    const excerpt = (section, terms) => {
+      const source = String(section.text || section.code || section.heading || "").replace(/\s+/g, " ").trim();
+      if (!source) return "";
+      const needle = terms.find(term => source.toLowerCase().indexOf(term) >= 0);
+      const start = needle ? Math.max(0, source.toLowerCase().indexOf(needle) - 48) : 0;
+      return (start ? "…" : "") + source.slice(start, start + 150) + (start + 150 < source.length ? "…" : "");
+    };
+    const scoreDocument = (doc, terms, phrase) => {
+      const title = normalize(doc.title);
+      let best = null;
+      (Array.isArray(doc.sections) ? doc.sections : []).forEach((section, sectionIndex) => {
+        const values = fields(section);
+        let score = 0;
+        terms.forEach(term => {
+          if (title.includes(term)) score += 12;
+          if (values[0].includes(term)) score += 8;
+          if (values[1].includes(term)) score += 2;
+          if (values[2].includes(term)) score += 1;
+        });
+        if (section.level === 1) score += 1;
+        if (phrase && (title.includes(phrase) || values.some(value => value.includes(phrase)))) score += 5;
+        if (score && (!best || score > best.score)) best = { doc, section, sectionIndex, score };
+      });
+      return best;
+    };
+    const setStatus = message => { status.textContent = message; };
+    const render = () => {
+      results.replaceChildren();
+      const query = normalize(input.value);
+      if (!query) { setStatus(documents.length ? "Type to search the site." : "Search index unavailable."); return; }
+      const terms = query.split(" ").filter(Boolean);
+      const matches = documents.map(doc => scoreDocument(doc, terms, query)).filter(Boolean).sort((a, b) => b.score - a.score || String(a.doc.path).localeCompare(String(b.doc.path)) || a.sectionIndex - b.sectionIndex);
+      if (!matches.length) { setStatus("No results. Try a different search."); return; }
+      setStatus(matches.length + " result" + (matches.length === 1 ? "" : "s") + ".");
+      matches.slice(0, 12).forEach(match => {
+        const item = document.createElement("li"); item.className = "site-search__result";
+        const link = document.createElement("a"); link.href = new URL(siteRootPrefix + String(match.doc.path).replace(/^\/+/, "") + (match.section.fragment ? "#" + match.section.fragment : ""), document.baseURI).href;
+        const title = document.createElement("span"); title.className = "site-search__title"; title.textContent = match.section.heading || match.doc.title;
+        const path = document.createElement("span"); path.className = "site-search__path"; path.textContent = String(match.doc.path) + (match.section.fragment ? "#" + String(match.section.fragment) : "");
+        const text = document.createElement("span"); text.className = "site-search__excerpt"; text.textContent = excerpt(match.section, terms);
+        link.append(title, path, text); item.append(link); results.append(item);
+      });
+    };
+    form.addEventListener("submit", event => { event.preventDefault(); render(); input.focus(); });
+    input.addEventListener("input", render);
+    document.addEventListener("keydown", event => {
+      if (event.key === "/" && document.activeElement !== input && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { event.preventDefault(); input.focus(); }
+      if (event.key === "Escape" && document.activeElement === input) { input.value = ""; render(); }
+    });
+    fetch(indexUrl, { credentials: "same-origin" }).then(response => { if (!response.ok) throw new Error("index request failed"); return response.json(); }).then(index => {
+      if (!index || index.format !== expectedFormat || index.schema_version !== expectedSchema || !Array.isArray(index.documents)) throw new Error("unsupported search index");
+      documents = index.documents.filter(doc => doc && typeof doc.path === "string" && typeof doc.title === "string" && Array.isArray(doc.sections)).map(doc => ({
+        path: doc.path,
+        title: doc.title,
+        sections: doc.sections.filter(section => section && typeof section.level === "number" && typeof section.heading === "string" && typeof section.fragment === "string" && typeof section.text === "string" && typeof section.code === "string")
+      }));
+      render();
+    }).catch(() => { documents = []; setStatus("Search index unavailable."); });
+  }
+  // Group the flat Documentation menu by first path segment. Nav hrefs are
+  // page-relative, so resolve each against the stylesheet's absolute location
+  // (the stylesheet always lives at the site root) rather than parsing raw hrefs.
+  const siteNav = document.querySelector(".txp-sidebar .site-nav");
+  if (siteNav) {
+    const sheet = document.querySelector('link[rel="stylesheet"][href*="assets/"]');
+    const siteRoot = sheet ? new URL("../../", sheet.href).pathname : null;
+    const groups = new Map();
+    Array.from(siteNav.querySelectorAll("li")).forEach(li => {
+      const a = li.querySelector("a");
+      if (!a || !siteRoot) return;
+      const path = new URL(a.href, document.baseURI).pathname;
+      const relative = path.startsWith(siteRoot) ? path.slice(siteRoot.length) : path.replace(/^\//, "");
+      const first = relative.split("/")[0] || "";
+      if (!first || !relative.includes("/")) return; // root pages stay ungrouped
+      if (!groups.has(first)) groups.set(first, []);
+      groups.get(first).push(li);
+    });
+    groups.forEach((items, group) => {
+      const heading = document.createElement("li");
+      heading.className = "site-nav__group";
+      heading.textContent = group.charAt(0).toUpperCase() + group.slice(1);
+      items[0].parentNode.insertBefore(heading, items[0]);
+    });
+  }
+})();
+</script>
+</body>
+</html>

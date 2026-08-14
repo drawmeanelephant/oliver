@@ -7,12 +7,12 @@ request. This is the documentation home.
 The documentation is written for two audiences:
 
 - **Consumers** — applications (like Boris) that embed Oliver. Start
-  with [Capabilities](CAPABILITIES.md) and the README's library-use and
+  with [Capabilities](CAPABILITIES.html) and the README's library-use and
   CLI sections, then the frontend pages that matter to you.
 - **Contributors** — anyone changing Oliver. Start with
-  [Architecture](ARCHITECTURE.md) and [Clean-room rules](CLEANROOM.md),
+  [Architecture](ARCHITECTURE.html) and [Clean-room rules](CLEANROOM.html),
   then the per-feature parsing documents and the
-  [work ledger](WORK-LEDGER.md).
+  [work ledger](WORK-LEDGER.html).
 
 ## Conformance status
 
@@ -29,53 +29,73 @@ Both conformance gates run in CI on every push/PR
 
 ## Site map
 
-[nav.json](nav.json) is the machine-readable manifest — sections,
+`nav.json` is the machine-readable manifest — sections,
 pages, titles, audiences, and summaries — that any docs renderer can
 consume directly. The map below mirrors it.
 
 ### Overview
 
-- [Capabilities](CAPABILITIES.md) — what each frontend parses and
+- [Capabilities](CAPABILITIES.html) — what each frontend parses and
   renders today, with conformance status (start here as a user)
-- [Architecture](ARCHITECTURE.md) — pipeline, the two document
+- [Architecture](ARCHITECTURE.html) — pipeline, the two document
   families, module map, the boundaries that matter
-- [Document model](DOCUMENT-MODEL.md) — the shared normalized model and
+- [Document model](DOCUMENT-MODEL.html) — the shared normalized model and
   its invariants
-- [Feature matrix](FEATURE-MATRIX.md) — every implemented feature
+- [Feature matrix](FEATURE-MATRIX.html) — every implemented feature
   across the dialects, with provenance
-- [Tests and fixtures](TESTS.md) — the suites, the conformance walls,
+- [Tests and fixtures](TESTS.html) — the suites, the conformance walls,
   and the fixture convention
-- [CommonMark expectations](COMMONMARK-EXPECTATIONS.md) — the
+- [CommonMark expectations](COMMONMARK-EXPECTATIONS.html) — the
   classified conformance expectation set behind the 652/652 gate
 
 ### Markdown frontend
 
-- [Block parsing](BLOCKS-PARSING.md) · [Leaf blocks](LEAF-BLOCKS.md) ·
-  [Fenced code](FENCED-CODE.md) · [HTML blocks](HTML-BLOCKS.md) ·
-  [Entities](ENTITIES.md)
-- [Emphasis and strong](INLINE-PARSING.md) · [Autolinks](AUTOLINKS.md) ·
-  [Raw HTML](RAW-HTML.md) · [Images](IMAGES-PARSING.md) ·
-  [Reference images](REFERENCE-IMAGES.md) · [Tables (GFM)](TABLES.md)
+- [Block parsing](BLOCKS-PARSING.html) · [Leaf blocks](LEAF-BLOCKS.html) ·
+  [Fenced code](FENCED-CODE.html) · [HTML blocks](HTML-BLOCKS.html) ·
+  [Entities](ENTITIES.html)
+- [Emphasis and strong](INLINE-PARSING.html) · [Autolinks](AUTOLINKS.html) ·
+  [Raw HTML](RAW-HTML.html) · [Images](IMAGES-PARSING.html) ·
+  [Reference images](REFERENCE-IMAGES.html) · [Tables (GFM)](TABLES.html)
 
 ### Textile frontend
 
-- [Textile parity audit](TEXTILE-PARITY.md) · [Inline code
-  contract](TEXTILE-INLINE-CODE.md)
+- [Textile parity audit](TEXTILE-PARITY.html) · [Inline code
+  contract](TEXTILE-INLINE-CODE.html)
 
 ### Cooklang frontend
 
-- [Cooklang design contract](COOKLANG.md) — the typed Recipe model,
+- [Cooklang design contract](COOKLANG.html) — the typed Recipe model,
   the boundaries, and the serialize / scale / HTML / menu policies
 
 ### Process
 
-- [Clean-room rules](CLEANROOM.md) · [Work ledger](WORK-LEDGER.md)
+- [Clean-room rules](CLEANROOM.html) · [Work ledger](WORK-LEDGER.html)
+
+### Publications
+
+- [GitHub Pages publication](github-pages.html) — how this docs tree
+  publishes to GitHub Pages: enable the target, the pinned Boris
+  toolchain, the `/oliver` project-site shape, the public/evidence
+  boundary, and the optional post-deploy audit
+- [Publication contracts](contracts/index.html) — the landing page for
+  the normative contract set behind the publication pipeline
+- Contracts: [model](contracts/publication-model.html) ·
+  [profile](contracts/publication-profile.html) ·
+  [plan](contracts/publication-plan.html) ·
+  [checks](contracts/publication-checks.html) ·
+  [claims](contracts/publication-claims.html) ·
+  [artifacts](contracts/publication-artifacts.html) ·
+  [touches](contracts/publication-touches.html) ·
+  [proof pack](contracts/publication-proof-pack.html) ·
+  [deployment evidence](contracts/github-pages-deployment-evidence.html)
 
 ## Rendering as pages
 
-`docs/nav.json` is the single source of navigation truth and is kept
-renderer-agnostic: a later docs site (mdBook, mkdocs, Docusaurus, or a
-hand-rolled generator) can consume it directly or transpile it to its
-own sidebar format. The markdown files are self-contained and
+This tree currently renders and publishes through the GitHub Pages
+workflow — see the [GitHub Pages publication](github-pages.html) guide.
+`docs/nav.json` remains the single source of navigation truth and is kept
+renderer-agnostic: the renderer, or any other docs generator (mdBook,
+mkdocs, Docusaurus, or a hand-rolled one), can consume it directly or
+transpile it to its own sidebar format. The markdown files are self-contained and
 cross-linked, so any static renderer with a markdown engine can serve
 them as-is — no repository restructuring is needed to ship pages.
