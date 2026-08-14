@@ -22,7 +22,7 @@ profile ──> plan ──> validate ──> compile ──> artifact ──> d
    │          │         │            │            │           └─ optional, opt-in
    │          │         │            │            └─ public-site, inventory-verified only
    │          │         │            └─ dist/ HTML + sitemap + _boris/proof/ reports
-   │          │         └─ prepublication checks; no writes (CI gate)
+   │          │         └─ local preflight; skips the link audit — the CI gate runs the full compile
    │          └─ normalized plan; the single source of URL truth
    └─ generated from configure-pages outputs
 ```
@@ -34,7 +34,7 @@ Each stage is governed by a normative contract in
 |---|---|---|
 | Profile | `jq` builds the profile from `configure-pages`; `boris plan --profile` validates it | [publication-profile](contracts/publication-profile.html) |
 | Plan | normalized declaration with `site_kind` and the cross-checked `base_url`/`origin`/`base_path` | [publication-plan](contracts/publication-plan.html) |
-| Validate | the same prepublication path as compile, without writing artifacts | — (see compile) |
+| Validate | local preflight: renders pages + sitemap in memory, no writes; skips the post-render link audit, so the CI gate runs the full compile ([boris#430](https://github.com/drawmeanelephant/boris/issues/430)) | — (see compile) |
 | Compile | HTML + sitemap under `dist/`; every URL projection audited against the declared location; proof reports emitted | [publication-model](contracts/publication-model.html) · [checks](contracts/publication-checks.html) · [claims](contracts/publication-claims.html) |
 | Artifact | inventory-verified copy into `public-site/` (bytes + SHA-256, `index.html`, 1 GiB bound) | [artifacts](contracts/publication-artifacts.html) · [touches](contracts/publication-touches.html) · [proof pack](contracts/publication-proof-pack.html) |
 | Deploy | `deploy-pages` publishes the artifact to the `github-pages` environment | — (GitHub's contract) |
@@ -141,10 +141,15 @@ boris/zig-out/bin/boris validate --input docs \
 ```
 
 `plan` writes the normalized declaration (exit 2 on an invalid profile, 3 on
-I/O failure); `validate` runs the same prepublication path as the build
-without writing artifacts. Then run the full compile command above and confirm
-exit 0 before the first CI run. The profile is the single source of URL truth —
-never re-derive the Pages location from the repository name.
+I/O failure); `validate` renders the pages and sitemap in memory without
+writing artifacts. Note that `validate` deliberately skips the post-render
+link audit — location escapes (`EPUBLICATIONLOCATION`) and broken local
+routes (`EROUTEMISSING`) pass it silently (see
+[boris#430](https://github.com/drawmeanelephant/boris/issues/430)) — so the
+authoritative prepublication check is the full compile command above, which
+is exactly what the CI gate runs. Confirm exit 0 before the first CI run. The
+profile is the single source of URL truth — never re-derive the Pages
+location from the repository name.
 
 ## Public artifact and retained evidence
 
