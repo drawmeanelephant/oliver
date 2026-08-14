@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Contract for CommonMark section 2.5 entity and numeric character references: implemented, scorecard 17/17.
+---
+
 # Markdown entity and numeric character references
 
 **Status: implemented** — CommonMark 0.31.2 §2.5, scorecard 17/17.

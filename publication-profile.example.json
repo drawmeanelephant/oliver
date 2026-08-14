@@ -3,7 +3,9 @@
   "schema_version": 1,
   "input": "docs",
   "site": {
-    "url": "https://drawmeanelephant.github.io/oliver"
+    "url": "https://drawmeanelephant.github.io/oliver",
+    "title": "Oliver documentation",
+    "description": "Oliver is a small, freestanding markup parsing and rendering library in Zig."
   },
   "publication": {
     "target": "github-pages",
@@ -17,7 +19,9 @@
       "output": "dist",
       "public": true,
       "theme": "themes/oliver",
-      "sitemap": { "path": "sitemap.xml" }
+      "sitemap": { "path": "sitemap.xml" },
+      "rss": { "path": "rss.xml", "limit": 20 },
+      "llms": { "path": "llms.txt" }
     }
   ]
 }

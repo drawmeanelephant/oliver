@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Design contract for reference-style images (sections 6.4/6.7) in Oliver's Markdown frontend.
+---
+
 # Oliver Inline Parsing: Reference-Style Images (§6.4/§6.7)
 
 **Status: design note (written before any code).** This document is the

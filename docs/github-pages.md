@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-14T00:00:00Z
+summary: How Oliver publishes this docs tree to GitHub Pages with a pinned Boris binary: profile, plan, artifact, and audit contracts.
+---
+
 # GitHub Pages publication
 
 Oliver publishes this `docs/` tree to GitHub Pages with a Boris binary built
@@ -21,7 +26,7 @@ profile ──> plan ──> validate ──> compile ──> artifact ──> d
    │          │         │            │            │           │
    │          │         │            │            │           └─ optional, opt-in
    │          │         │            │            └─ public-site, inventory-verified only
-   │          │         │            └─ dist/ HTML + sitemap + _boris/proof/ reports
+   │          │         │            └─ dist/ HTML + sitemap + rss.xml + llms.txt + _boris/proof/ reports
    │          │         └─ local preflight; skips the link audit — the CI gate runs the full compile
    │          └─ normalized plan; the single source of URL truth
    └─ generated from configure-pages outputs
@@ -35,7 +40,7 @@ Each stage is governed by a normative contract in
 | Profile | `jq` builds the profile from `configure-pages`; `boris plan --profile` validates it | [publication-profile](contracts/publication-profile.html) |
 | Plan | normalized declaration with `site_kind` and the cross-checked `base_url`/`origin`/`base_path` | [publication-plan](contracts/publication-plan.html) |
 | Validate | local preflight: renders pages + sitemap in memory, no writes; skips the post-render link audit, so the CI gate runs the full compile ([boris#430](https://github.com/drawmeanelephant/boris/issues/430)) | — (see compile) |
-| Compile | HTML + sitemap under `dist/`; every URL projection audited against the declared location; proof reports emitted | [publication-model](contracts/publication-model.html) · [checks](contracts/publication-checks.html) · [claims](contracts/publication-claims.html) |
+| Compile | HTML + sitemap under `dist/`; every URL projection audited against the declared location; proof reports emitted. `rss.xml` + `llms.txt` are generated afterward by the standalone exporters (see [Projections](#projections)) | [publication-model](contracts/publication-model.html) · [checks](contracts/publication-checks.html) · [claims](contracts/publication-claims.html) |
 | Artifact | inventory-verified copy into `public-site/` (bytes + SHA-256, `index.html`, 1 GiB bound) | [artifacts](contracts/publication-artifacts.html) · [touches](contracts/publication-touches.html) · [proof pack](contracts/publication-proof-pack.html) |
 | Deploy | `deploy-pages` publishes the artifact to the `github-pages` environment | — (GitHub's contract) |
 | Audit (optional) | bounded HTTP observation bound to the retained plan and inventory | [deployment evidence](contracts/github-pages-deployment-evidence.html) |
@@ -150,6 +155,50 @@ authoritative prepublication check is the full compile command above, which
 is exactly what the CI gate runs. Confirm exit 0 before the first CI run. The
 profile is the single source of URL truth — never re-derive the Pages
 location from the repository name.
+
+## Projections: sitemap, RSS, and llms.txt
+
+The public target declares three projections in the publication profile, and
+the normalized plan records each one under `projections` so the post-deploy
+audit can verify them:
+
+| Projection | Path | Producer | Audit check |
+|---|---|---|---|
+| Sitemap | `sitemap.xml` | compiler (`--sitemap`) | `sitemap` |
+| RSS 2.0 | `rss.xml` | exporter (`--rss`) | `rss` |
+| llms.txt | `llms.txt` | exporter (`--llms`) | `llms` |
+
+Declaring `rss` requires `site.url` **and** `site.title`/`site.description`
+in the profile (`RssRequiresSiteMetadata` otherwise); the starter profile at
+`publication-profile.example.json` carries all three.
+
+RSS items come from pages whose frontmatter declares `published_at` (RFC
+3339, e.g. `2026-08-13T00:00:00Z`) and `summary`; pages without them are
+omitted, so the feed lists only documented publications. Add the block to a
+doc to publish it in the feed:
+
+```markdown
+---
+published_at: 2026-08-13T00:00:00Z
+summary: One-line description of the document.
+---
+```
+
+Frontmatter is metadata only: `published_at`/`summary` do not change the
+rendered HTML. `boris --rss` sorts items by date descending, honors
+`--rss-limit` (default 20), validates every link against the declared Pages
+location, and fails on `published_at` values that are not RFC 3339.
+`boris --llms` emits an absolute-URL link index for the whole graph, rooted
+at the declared location.
+
+The compiler at the pinned revision emits HTML/search/sitemap only, so the
+workflow runs the two standalone exporters after the compile and appends
+their records (bytes + SHA-256, re-sorted canonically) to the compiler-owned
+inventory at `dist/_boris/proof/artifacts.json`. This is required by the
+audit's plan↔inventory consistency rule: a projection declared in the plan
+but absent from the inventory fails the deployment report, as does an
+inventoried projection the plan omits. The CI gate runs the same two
+exporters so a bad date or a projection URL escape fails before merge.
 
 ## Public artifact and retained evidence
 

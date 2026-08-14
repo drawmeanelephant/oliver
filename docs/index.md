@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-14T00:00:00Z
+summary: Oliver documentation home: a small, freestanding markup parsing and rendering library in Zig.
+---
+
 # Oliver documentation
 
 Oliver is a small, freestanding markup parsing and rendering library in

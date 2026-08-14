@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Contract record for the autolinks slice of Oliver's Markdown frontend (URI and email autolinks), implemented and tested.
+---
+
 # Oliver Inline Parsing: Autolinks (§6.8)
 
 **Status: implemented (Markdown).** This document began as the design

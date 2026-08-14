@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-13T00:00:00Z
+summary: Textile has no normative corpus, so its quality bar is a fixture audit: the parity audit holds the frontend to documented expectations.
+---
+
 # Textile parity audit
 
 Oliver's Markdown frontend is held to the 652-example CommonMark 0.31.2

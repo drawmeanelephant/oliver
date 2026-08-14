@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Implementation contract for CommonMark sections 4.1 and 4.3 leaf blocks: thematic breaks and Setext headings.
+---
+
 # Markdown leaf blocks: thematic breaks and Setext headings
 
 **Status:** implementation contract for CommonMark 0.31.2 §4.1 and §4.3.

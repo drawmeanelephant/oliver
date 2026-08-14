@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Operational brief for a delegated agent implementing the inline-images slice of Oliver's Markdown frontend (section 6.7).
+---
+
 # Mission brief: Markdown images (§6.7) — for a delegated agent
 
 This is an operational brief. A separate agent (e.g. `codex/agent-2` or

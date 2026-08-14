@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-13T00:00:00Z
+summary: Design and provenance contract for the first-class Cooklang (.cook) frontend: bytes in, a typed Recipe out.
+---
+
 # Cooklang frontend: design contract
 
 Status: **CK1 — design and provenance contract** (see docs/WORK-LEDGER.md).

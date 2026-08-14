@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-14T00:00:00Z
+summary: What Oliver parses and renders today on main: the user-facing overview of frontend capabilities.
+---
+
 # Oliver capabilities
 
 What Oliver parses and renders today on `main`. The full design

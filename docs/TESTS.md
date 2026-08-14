@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-13T00:00:00Z
+summary: Tests are product contracts: zig build test runs three suites covering library modules, fixtures, and conformance.
+---
+
 # Oliver tests and fixtures
 
 Tests are product contracts. `zig build test` runs three suites:

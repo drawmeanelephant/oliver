@@ -1,3 +1,8 @@
+---
+published_at: 2026-08-12T00:00:00Z
+summary: Clean-room design contract fixing Oliver's Textile @code@ milestone behavior before the parser implementation.
+---
+
 # Textile inline code: clean-room design contract
 
 This document fixes Oliver's behavior for the Textile `@code@` milestone
