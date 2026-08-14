@@ -6,22 +6,46 @@
   <title>{{title}} · Oliver</title>
   <link rel="stylesheet" href="{{asset-url assets/css/oliver.css}}">
 </head>
-<body>
-<aside class="site-sidebar">
-<header class="site-brand">
-<span class="site-brand__name">Oliver</span>
-<span class="site-brand__tagline">A small, freestanding markup parsing and rendering library in Zig.</span>
-</header>
-<details class="site-menu" open>
-<summary>Documentation menu</summary>
-{{nav}}
-</details>
-</aside>
-{{breadcrumb}}
-{{toc}}
-<main>
-{{content}}
-</main>
-<footer class="site-footer">Oliver documentation · deterministic markup in, typed documents out</footer>
+<body class="txp-body">
+<div class="txp-container">
+  <header class="txp-header">
+    <div class="txp-branding">
+      <p class="txp-site-name">Oliver<span class="txp-amp">&amp;</span>docs</p>
+      <p class="txp-tagline">A small, freestanding markup parsing and rendering library in Zig.</p>
+    </div>
+  </header>
+  <div class="txp-layout-body">
+    <article class="txp-content">
+      <header class="txp-article-header">
+        {{breadcrumb}}
+      </header>
+      <div class="txp-article-body">
+        {{content}}
+      </div>
+    </article>
+    <aside class="txp-sidebar">
+      <div class="txp-widget">
+        <h2 class="txp-widget-title">On this page</h2>
+        {{toc}}
+      </div>
+      <div class="txp-widget">
+        <h2 class="txp-widget-title">Documentation</h2>
+        {{nav}}
+      </div>
+      <div class="txp-widget">
+        <h2 class="txp-widget-title">About Oliver</h2>
+        <p>Oliver is a small, freestanding markup parsing and rendering library in Zig: Markdown, Textile, and Cooklang in, deterministic HTML out.</p>
+      </div>
+      <div class="txp-widget">
+        <h2 class="txp-widget-title">Publication</h2>
+        <p>This documentation is built with a pinned Boris binary and published to GitHub Pages. The publication guide, contracts, and pipeline are in the Documentation menu.</p>
+      </div>
+    </aside>
+  </div>
+  <footer class="txp-footer">
+    <p class="txp-footer-line">Oliver documentation · deterministic markup in, typed documents out</p>
+    <p class="txp-footer-meta">GitHub Pages · oliver theme · built with Boris</p>
+  </footer>
+</div>
 </body>
 </html>
