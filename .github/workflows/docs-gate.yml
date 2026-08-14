@@ -1,6 +1,6 @@
 # Docs publication gate.
 #
-# Runs the Boris prepublication validation against the docs/ tree on every
+# Runs the Boris prepublication compile against the docs/ tree on every
 # push and pull request, so broken links, content-local asset errors, or
 # URLs that escape the declared origin/base path fail before merge. The
 # gate uses the same pipeline as the Pages build: the same pinned Boris
@@ -8,9 +8,14 @@
 # .github/workflows/github-pages.yml), the same project-site location
 # (/oliver), the same theme, and the same profile/plan normalization.
 #
-# `boris validate` runs the same prepublication path as `boris compile`
-# without writing artifacts, so this job leaves the working tree clean and
-# adds no CI-side output beyond the plan check below.
+# This deliberately runs the full `boris` compile (into a throwaway dist/)
+# rather than `boris validate`: validate's early-return path
+# (`validatePrepublicationTarget`) does NOT run the post-render link audit,
+# so EPUBLICATIONLOCATION (URL escapes the declared origin/base path) and
+# EROUTEMISSING (broken local route) pass validate silently. The compile
+# runs that audit and fails before anything is published. The dist/ output
+# is ephemeral in CI, is never committed, and the job stops before any
+# artifact/evidence step.
 #
 # The project-site location is the canonical /oliver shape for this
 # repository. Update these flags together with
@@ -30,8 +35,8 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Validate docs publication
+  gate:
+    name: Docs publication gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -72,13 +77,13 @@ jobs:
           test "$(jq -r '.publication.site_kind' /tmp/publication-plan.json)" = "project-site"
           test "$(jq -r '.publication.base_path' /tmp/publication-plan.json)" = "/oliver"
 
-      # The same prepublication checks as the Pages build, without writing
-      # dist/. Fails on EPUBLICATIONLOCATION (URL escapes the declared
-      # origin/base path), EASSET, ECOMPONENT, and any other compiler
-      # finding that would fail the publish workflow.
-      - name: Validate docs against the project-site location
+      # The same prepublication path as the Pages build: full compile,
+      # including the post-render link audit that validate skips. Fails on
+      # EPUBLICATIONLOCATION, EROUTEMISSING, EASSET, ECOMPONENT, and any
+      # other compiler finding that would fail the publish workflow.
+      - name: Run the full prepublication compile (incl. link audit)
         run: |
-          boris/zig-out/bin/boris validate \
+          boris/zig-out/bin/boris \
             --input docs \
             --target public=dist \
             --target-layout public=themes/oliver/layouts/main.html \
@@ -86,4 +91,5 @@ jobs:
             --pages-base-url https://drawmeanelephant.github.io/oliver \
             --pages-origin https://drawmeanelephant.github.io \
             --pages-base-path /oliver \
-            --site-url https://drawmeanelephant.github.io/oliver
+            --site-url https://drawmeanelephant.github.io/oliver \
+            --quiet

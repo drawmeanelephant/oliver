@@ -3,3 +3,7 @@ zig-out/
 *.o
 .DS_Store
 .freebuff/
+# Throwaway prepublication compile output (docs-gate + Pages workflow)
+dist/
+# Pages workflow retained evidence staging (plan, artifact verification)
+evidence/
