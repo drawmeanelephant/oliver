@@ -15,6 +15,10 @@
 
 const std = @import("std");
 const oliver = @import("oliver");
+// Injected by build.zig: the package version and the source commit SHA
+// (CI passes -Dcommit=$GITHUB_SHA). `oliver --version` prints them so a
+// downloaded binary can prove which commit it was built from.
+const build_options = @import("build_options");
 
 /// The CLI operation, selected by the subcommand token. Exactly one is
 /// required; `parseArgs` rejects a missing, duplicated, or conflicting
@@ -47,7 +51,7 @@ pub const RunConfig = struct {
 /// scale-only), and `error.Help` for `--help`/`-h` (help is a requested
 /// outcome, not an error). Pure: no allocator, no I/O, so it is
 /// unit-tested directly.
-pub fn parseArgs(args: []const []const u8) error{ Usage, Help }!RunConfig {
+pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConfig {
     var command: ?Command = null;
     var dialect: ?oliver.Dialect = null;
     var cooklang = false;
@@ -124,6 +128,8 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help }!RunConfig {
             if (servings_target.? == 0) return error.Usage;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.Help;
+        } else if (std.mem.eql(u8, arg, "--version")) {
+            return error.Version;
         } else return error.Usage;
     }
 
@@ -178,6 +184,9 @@ pub fn main(init: std.process.Init) !u8 {
             printUsage();
             return 0;
         },
+        // `--version` is a requested outcome like `--help`: print the
+        // version and the embedded source commit, then exit 0.
+        error.Version => return version(init),
         error.Usage => return usage(),
     };
     const profile = cfg.profile;
@@ -275,10 +284,12 @@ fn printUsage() void {
         \\       oliver serialize --from cooklang
         \\       oliver scale --from cooklang (--factor <num[/den]> | --servings <n>)
         \\       oliver menu --from cooklang
+        \\       oliver --version
         \\
         \\Reads a document from stdin and writes rendered HTML to stdout
         \\(XHTML fragment with --to xhtml). serialize/scale write canonical
-        \\Cooklang text; menu writes the day/meal text dump.
+        \\Cooklang text; menu writes the day/meal text dump. --version prints
+        \\the version and the embedded source commit (CI builds).
         \\
     , .{});
 }
@@ -286,6 +297,20 @@ fn printUsage() void {
 fn usage() u8 {
     printUsage();
     return 1;
+}
+
+/// `--version` is a requested outcome: print the package version and, for
+/// CI builds that embedded one, the exact source commit, then exit 0.
+/// Written to stdout (not stderr) so a consumer can parse it: an
+/// installer asserts the reported commit equals its pin.
+fn version(init: std.process.Init) u8 {
+    const text = if (build_options.commit.len == 0)
+        std.fmt.allocPrint(init.gpa, "oliver {s}\n", .{build_options.version}) catch return 1
+    else
+        std.fmt.allocPrint(init.gpa, "oliver {s} (commit {s})\n", .{ build_options.version, build_options.commit }) catch return 1;
+    defer init.gpa.free(text);
+    std.Io.File.stdout().writeStreamingAll(init.io, text) catch return 1;
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +365,11 @@ test "cli: --from must name a supported dialect and appear at most once" {
 test "cli: --help and -h are requested outcomes, not errors" {
     try testing.expectError(error.Help, parseArgs(&.{"--help"}));
     try testing.expectError(error.Help, parseArgs(&.{ "render", "--from", "markdown", "-h" }));
+}
+
+test "cli: --version is a requested outcome, not an error" {
+    try testing.expectError(error.Version, parseArgs(&.{"--version"}));
+    try testing.expectError(error.Version, parseArgs(&.{ "render", "--from", "markdown", "--version" }));
 }
 
 test "cli: invalid --to values and missing values fail clearly" {

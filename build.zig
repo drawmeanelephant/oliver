@@ -4,6 +4,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // The source commit SHA, embedded into `oliver --version` so a
+    // downloaded binary can prove which commit it was built from. CI
+    // passes -Dcommit=$GITHUB_SHA; local builds leave it unset and the
+    // CLI reports no commit.
+    const commit = b.option([]const u8, "commit", "Source commit SHA reported by `oliver --version`") orelse "";
+
     // The core library. Consumers import it by name (see build.zig.zon);
     // `addModule` registers it as the package's "oliver" module.
     const oliver_mod = b.addModule("oliver", .{
@@ -22,12 +28,18 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
 
     // Provisional CLI: a thin adapter over the library (stdin -> stdout).
+    // The version + commit are injected at build time so `oliver --version`
+    // is authoritative (consumers assert it against their pin).
+    const cli_options = b.addOptions();
+    cli_options.addOption([]const u8, "commit", commit);
+    cli_options.addOption([]const u8, "version", packageVersion(b));
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "oliver", .module = oliver_mod },
+            .{ .name = "build_options", .module = cli_options.createModule() },
         },
     });
     const cli = b.addExecutable(.{
@@ -145,4 +157,17 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_spec_tool_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_xhtml_tests.step);
+}
+
+/// The package version from build.zig.zon (single source of truth). Zig
+/// 0.16 exposes no Build API for it, so read the zon file at configure
+/// time and extract `.version = "..."`; fall back to "0.0.0" if the file
+/// is unreadable or the marker is missing.
+fn packageVersion(b: *std.Build) []const u8 {
+    const marker = ".version = \"";
+    const zon = std.Io.Dir.readFileAlloc(.cwd(), b.graph.io, "build.zig.zon", b.allocator, .limited(1 << 20)) catch return "0.0.0";
+    const start = std.mem.indexOf(u8, zon, marker) orelse return "0.0.0";
+    const rest = zon[start + marker.len ..];
+    const end = std.mem.indexOfScalar(u8, rest, '"') orelse return "0.0.0";
+    return b.dupe(rest[0..end]);
 }

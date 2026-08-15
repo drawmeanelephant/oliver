@@ -1,0 +1,87 @@
+# Prebuilt binaries release.
+#
+# Minimal contract for consumers: one always-findable release on this
+# repository whose download URL is stable and derived from the tag alone:
+#
+#   https://github.com/drawmeanelephant/oliver/releases/download/builds/oliver-<os>-<arch>
+#
+# The `builds` release is re-populated on every push to main (and on
+# manual dispatch), so the tag always points at the current tip of main.
+# That is a deliberate simplification: Oliver is maintained solo and the
+# consumers are the same people, so per-commit artifact names and
+# immutable-byte guarantees are ceremony this project does not need.
+# Revisit per-sha asset names only if an external consumer pins arbitrary
+# old commits; the cross-compile matrix below makes that a naming-only
+# change.
+#
+# The matrix is the four platforms consumers actually run. Windows
+# cross-compiles trivially from Zig but would ship untested from a solo
+# maintainer, so it is deliberately excluded until someone needs it.
+# Everything is built on one ubuntu runner: no per-OS runners required.
+
+name: Binaries
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create/update the `builds` release and its assets
+
+jobs:
+  build:
+    name: Build and publish prebuilt binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      - name: Cross-compile the release matrix
+        run: |
+          mkdir -p dist
+          for target in x86_64-linux x86_64-macos aarch64-linux aarch64-macos; do
+            arch="${target%-*}"
+            os="${target#*-}"
+            echo "==> $target"
+            # -Dcommit embeds this exact source commit into the binary;
+            # `oliver --version` prints it so a pinned consumer can assert
+            # downloaded-binary commit == pin.
+            zig build -Dtarget="$target" -Doptimize=ReleaseSafe \
+              -Dcommit="$GITHUB_SHA" \
+              --prefix "/tmp/oliver/$target" >/dev/null
+            cp "/tmp/oliver/$target/bin/oliver" "dist/oliver-$os-$arch"
+          done
+
+      # Cheap integrity check before anything is published: the native
+      # Linux binary must render a known input byte-for-byte and must
+      # report the exact commit that produced it.
+      - name: Smoke-test the native binary
+        run: |
+          test "$(printf '# Hello *world*\n' | dist/oliver-linux-x86_64 render --from markdown)" = \
+            '<h1>Hello <em>world</em></h1>'
+          test "$(dist/oliver-linux-x86_64 --version)" = \
+            "oliver 0.0.0 (commit $GITHUB_SHA)"
+
+      - name: Write the checksum manifest
+        run: |
+          (cd dist && sha256sum oliver-*) > sha256sums.txt
+
+      # Create the release once; on later runs it already exists and only
+      # the assets are replaced (--clobber makes re-runs idempotent).
+      - name: Publish to the builds release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view builds >/dev/null 2>&1; then
+            gh release create builds \
+              --title "Oliver prebuilt binaries" \
+              --notes "Rolling prebuilt binaries for the current tip of main. Download URL: https://github.com/drawmeanelephant/oliver/releases/download/builds/oliver-<os>-<arch>"
+          fi
+          gh release upload builds dist/* sha256sums.txt --clobber

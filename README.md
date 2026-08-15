@@ -198,6 +198,29 @@ zig build         # build the static library and CLI into zig-out/
 zig build cooklang-conformance   # Cooklang canonical corpus (vendored)
 ```
 
+### Prebuilt binaries
+
+A rolling `builds` release on this repository carries the current CLI
+binary for each supported platform, rebuilt on every push to `main`:
+
+- `oliver-linux-x86_64`, `oliver-linux-aarch64`
+- `oliver-macos-x86_64`, `oliver-macos-aarch64`
+
+Download URL (stable, derived from the tag):
+
+```text
+https://github.com/drawmeanelephant/oliver/releases/download/builds/oliver-<os>-<arch>
+```
+
+`sha256sums.txt` in the same release verifies the assets. The binaries
+are ReleaseSafe and statically linked (macOS links only system libSystem).
+
+Every CI-built binary embeds the exact source commit it was built from:
+`oliver --version` prints `oliver <version> (commit <full-sha>)`. A
+consumer that pins a commit can assert the downloaded binary's reported
+commit equals its pin and reject on mismatch — the download URL itself
+may move, the byte identity cannot silently drift.
+
 ## Library use
 
 ```zig
@@ -266,6 +289,7 @@ oliver serialize --from cooklang < recipe.cook   # canonical .cook
 oliver scale --from cooklang --factor 2 < recipe.cook   # scaled .cook
 oliver scale --from cooklang --servings 4 < recipe.cook  # via servings
 oliver menu --from cooklang < plan.menu                 # day/meal text dump
+oliver --version   # prints version + embedded source commit (CI builds)
 ```
 
 A thin stdin/stdout adapter — all semantics live in the library.
