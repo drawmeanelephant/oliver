@@ -1,14 +1,14 @@
 ---
 published_at: 2026-08-13T00:00:00Z
-summary: Tests are product contracts: zig build test runs three suites covering library modules, fixtures, and conformance.
+summary: Tests are product contracts: zig build test runs five suites covering library modules, fixtures, conformance, CLI parsing, and the XHTML profile.
 ---
 
 # Oliver tests and fixtures
 
-Tests are product contracts. `zig build test` runs four suites (the
-fourth — the XHTML profile suite — is described in its own section below):
+Tests are product contracts. `zig build test` runs five suites (the
+fifth — the XHTML profile suite — is described in its own section below):
 
-1. **Library module tests** — 230 `test` blocks inside `src/*.zig` covering
+1. **Library module tests** — 236 `test` blocks inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
    frontends, the Cooklang frontend (parser + canonical serializer +
    pure scaling + the HTML policy + the `.menu` view), Unicode case
@@ -38,7 +38,7 @@ fourth — the XHTML profile suite — is described in its own section below):
    10,000-pair phrase storm, and a 2,000-deep phrase-nesting workload.
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
-2. **Fixture and adversarial tests** — 12 tests in `tests/fixtures_test.zig`.
+2. **Fixture and adversarial tests** — 14 tests in `tests/fixtures_test.zig`.
    The explicit index contains 275 Markdown and 105 Textile fixture pairs.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
@@ -173,10 +173,18 @@ fourth — the XHTML profile suite — is described in its own section below):
    complete/nonoverlapping manifest validation, malformed divergence-record
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
+4. **CLI argument-parsing tests** — 10 tests in `src/main.zig`: pure
+   `parseArgs` unit tests (no allocator, no I/O) pinning the subcommand
+   grammar (exactly one of `render`/`serialize`/`scale`/`menu`), flag
+   scoping (`--to` render-only; `--factor`/`--servings` scale-only),
+   dialect validation, zero-factor/zero-servings rejection, and
+   `--help`/`-h` handling. They run as part of the ordinary `zig build
+   test` gate.
 
-The current complete result is **251/251 tests passing** with Zig 0.16.0
-(230 library module tests + 14 fixture/adversarial tests + 7
-conformance-harness tests). On top of the unit gate: the CommonMark
+The current complete result is **280/280 tests passing** with Zig 0.16.0
+(236 library module tests + 14 fixture/adversarial tests + 7
+conformance-harness tests + 10 CLI argument-parsing tests + 13 XHTML
+profile tests). On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the
 Textile wall stays fully green, and the Cooklang canonical corpus passes
 **60/60** via `zig build cooklang-conformance` (bare: the vendored

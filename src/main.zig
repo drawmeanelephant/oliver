@@ -16,16 +16,24 @@
 const std = @import("std");
 const oliver = @import("oliver");
 
-/// The full command-line configuration, decided by `parseArgs`. Rendering
-/// always happens; `serialize`/`scale`/`menu` select the non-HTML Cooklang
-/// outputs instead. `profile` selects the renderer serialization (`html` by
-/// default, `xhtml` with `--to xhtml`).
+/// The CLI operation, selected by the subcommand token. Exactly one is
+/// required; `parseArgs` rejects a missing, duplicated, or conflicting
+/// subcommand (issue #57).
+pub const Command = enum {
+    render,
+    serialize,
+    scale,
+    menu,
+};
+
+/// The full command-line configuration, decided by `parseArgs`. `command`
+/// selects the operation; `dialect`/`cooklang` name the input frontend;
+/// `factor`/`servings` configure scaling; `profile` selects the renderer
+/// serialization (`html` by default, `xhtml` with `--to xhtml`).
 pub const RunConfig = struct {
+    command: Command,
     dialect: ?oliver.Dialect = null,
     cooklang: bool = false,
-    serialize: bool = false,
-    scale: bool = false,
-    menu: bool = false,
     factor_num: ?u32 = null,
     factor_den: ?u32 = null,
     servings_target: ?u32 = null,
@@ -34,75 +42,122 @@ pub const RunConfig = struct {
 
 /// Parses the argument vector (excluding the program name) into a
 /// `RunConfig`. Returns `error.Usage` for any unknown flag, invalid value,
-/// or nonsensical combination (e.g. `--to` with a non-rendering Cooklang
-/// command). Pure: no allocator, no I/O, so it is unit-tested directly.
-pub fn parseArgs(args: []const []const u8) error{Usage}!RunConfig {
-    var cfg = RunConfig{};
+/// missing or duplicated subcommand, or flag that does not belong to the
+/// selected command (`--to` is render-only; `--factor`/`--servings` are
+/// scale-only), and `error.Help` for `--help`/`-h` (help is a requested
+/// outcome, not an error). Pure: no allocator, no I/O, so it is
+/// unit-tested directly.
+pub fn parseArgs(args: []const []const u8) error{ Usage, Help }!RunConfig {
+    var command: ?Command = null;
+    var dialect: ?oliver.Dialect = null;
+    var cooklang = false;
+    var factor_num: ?u32 = null;
+    var factor_den: ?u32 = null;
+    var servings_target: ?u32 = null;
+    var profile: oliver.OutputProfile = .html;
     var saw_to = false;
+    var saw_from = false;
+
     var index: usize = 0;
     while (index < args.len) : (index += 1) {
         const arg = args[index];
-        if (std.mem.eql(u8, arg, "--from")) {
+        if (std.mem.eql(u8, arg, "render")) {
+            if (command != null) return error.Usage;
+            command = .render;
+        } else if (std.mem.eql(u8, arg, "serialize")) {
+            if (command != null) return error.Usage;
+            command = .serialize;
+        } else if (std.mem.eql(u8, arg, "scale")) {
+            if (command != null) return error.Usage;
+            command = .scale;
+        } else if (std.mem.eql(u8, arg, "menu")) {
+            if (command != null) return error.Usage;
+            command = .menu;
+        } else if (std.mem.eql(u8, arg, "--from")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
+            // A second `--from` would contradict the first (e.g. both
+            // `markdown` and `cooklang`), so reject duplicates instead
+            // of silently letting the last one win.
+            if (saw_from) return error.Usage;
+            saw_from = true;
             const value = args[index];
             if (std.mem.eql(u8, value, "markdown")) {
-                cfg.dialect = .markdown;
+                dialect = .markdown;
             } else if (std.mem.eql(u8, value, "textile")) {
-                cfg.dialect = .textile;
+                dialect = .textile;
             } else if (std.mem.eql(u8, value, "cooklang")) {
-                cfg.cooklang = true;
+                cooklang = true;
             } else return error.Usage;
         } else if (std.mem.eql(u8, arg, "--to")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
             const value = args[index];
             if (std.mem.eql(u8, value, "html")) {
-                cfg.profile = .html;
+                profile = .html;
             } else if (std.mem.eql(u8, value, "xhtml")) {
-                cfg.profile = .xhtml;
+                profile = .xhtml;
             } else return error.Usage;
             saw_to = true;
-        } else if (std.mem.eql(u8, arg, "render")) {
-            // Subcommand; the dialect flag is what matters.
-        } else if (std.mem.eql(u8, arg, "serialize")) {
-            cfg.serialize = true;
-        } else if (std.mem.eql(u8, arg, "scale")) {
-            cfg.scale = true;
-        } else if (std.mem.eql(u8, arg, "menu")) {
-            cfg.menu = true;
         } else if (std.mem.eql(u8, arg, "--factor")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
             const value = args[index];
             var parts = std.mem.splitScalar(u8, value, '/');
             const num = parts.next() orelse return error.Usage;
-            cfg.factor_num = std.fmt.parseUnsigned(u32, num, 10) catch return error.Usage;
+            factor_num = std.fmt.parseUnsigned(u32, num, 10) catch return error.Usage;
+            // A zero numerator scales everything to nothing and a zero
+            // denominator is division by zero; both are degenerate, so
+            // both are rejected here (symmetric with `--servings 0`; the
+            // library rejects them too, docs/COOKLANG.md §11).
+            if (factor_num.? == 0) return error.Usage;
             if (parts.next()) |den| {
-                cfg.factor_den = std.fmt.parseUnsigned(u32, den, 10) catch return error.Usage;
-                if (cfg.factor_den.? == 0) return error.Usage;
+                factor_den = std.fmt.parseUnsigned(u32, den, 10) catch return error.Usage;
+                if (factor_den.? == 0) return error.Usage;
             }
             if (parts.next() != null) return error.Usage;
         } else if (std.mem.eql(u8, arg, "--servings")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
             const value = args[index];
-            cfg.servings_target = std.fmt.parseUnsigned(u32, value, 10) catch return error.Usage;
-            if (cfg.servings_target.? == 0) return error.Usage;
+            servings_target = std.fmt.parseUnsigned(u32, value, 10) catch return error.Usage;
+            if (servings_target.? == 0) return error.Usage;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            return error.Usage;
+            return error.Help;
         } else return error.Usage;
     }
-    if (!cfg.cooklang and cfg.dialect == null) return error.Usage;
-    // Serialization, scaling, and the menu view are Cooklang
-    // capabilities only (Markdown/Textile have no canonical form; the
-    // shared renderer is the output for those). Scaling needs exactly
-    // one mode. `--to` selects the renderer profile, so it is invalid
-    // on the non-HTML Cooklang commands.
-    if ((cfg.serialize or cfg.scale or cfg.menu) and !cfg.cooklang) return error.Usage;
-    if (cfg.scale and (cfg.factor_num == null) == (cfg.servings_target == null)) return error.Usage;
-    if (saw_to and (cfg.serialize or cfg.scale or cfg.menu)) return error.Usage;
-    return cfg;
+
+    // Exactly one subcommand names the operation, and every command
+    // needs an input frontend.
+    const cmd = command orelse return error.Usage;
+    if (!cooklang and dialect == null) return error.Usage;
+    // Flags must belong to the command they are given with: `--to`
+    // selects the renderer profile (render only), `--factor` /
+    // `--servings` configure scaling (scale only), and serialize/scale/
+    // menu are Cooklang capabilities only (Markdown/Textile have no
+    // canonical form; the shared renderer is the output for those).
+    switch (cmd) {
+        .render => {
+            if (factor_num != null or servings_target != null) return error.Usage;
+        },
+        .serialize, .menu => {
+            if (!cooklang or saw_to or factor_num != null or servings_target != null) return error.Usage;
+        },
+        .scale => {
+            if (!cooklang or saw_to) return error.Usage;
+            // Scaling needs exactly one mode: factor or servings.
+            if ((factor_num == null) == (servings_target == null)) return error.Usage;
+        },
+    }
+    return .{
+        .command = cmd,
+        .dialect = dialect,
+        .cooklang = cooklang,
+        .factor_num = factor_num,
+        .factor_den = factor_den,
+        .servings_target = servings_target,
+        .profile = profile,
+    };
 }
 
 pub fn main(init: std.process.Init) !u8 {
@@ -115,7 +170,16 @@ pub fn main(init: std.process.Init) !u8 {
     defer args.deinit(gpa);
     while (it.next()) |arg| try args.append(gpa, arg);
 
-    const cfg = parseArgs(args.items) catch return usage();
+    // `--help`/`-h` is a requested outcome: print usage and exit 0.
+    // Anything else that `parseArgs` rejects is a real usage error and
+    // exits 1 with the same text on stderr.
+    const cfg = parseArgs(args.items) catch |err| switch (err) {
+        error.Help => {
+            printUsage();
+            return 0;
+        },
+        error.Usage => return usage(),
+    };
     const profile = cfg.profile;
 
     // Read all of stdin into memory.
@@ -142,40 +206,45 @@ pub fn main(init: std.process.Init) !u8 {
             return 1;
         };
         defer result.deinit();
-        if (cfg.serialize) {
-            oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
-                std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
-                return 1;
-            };
-        } else if (cfg.scale) {
-            const by: oliver.cooklang_scale.ScaleBy = if (cfg.factor_num) |n|
-                .{ .factor = .{ .num = n, .den = cfg.factor_den orelse 1 } }
-            else
-                .{ .servings = cfg.servings_target.? };
-            var scaled = oliver.cooklang_scale.scaleRecipe(gpa, &result.recipe, by) catch |err| {
-                std.debug.print("oliver: scale failed: {s}\n", .{@errorName(err)});
-                return 1;
-            };
-            defer scaled.deinit();
-            oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &scaled, .{}) catch |err| {
-                std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
-                return 1;
-            };
-        } else if (cfg.menu) {
-            var m = oliver.cooklang_menu.menuView(gpa, &result.recipe) catch |err| {
-                std.debug.print("oliver: menu view failed: {s}\n", .{@errorName(err)});
-                return 1;
-            };
-            defer m.deinit();
-            oliver.cooklang_menu.writeMenu(&out_writer.interface, &m) catch |err| {
-                std.debug.print("oliver: menu dump failed: {s}\n", .{@errorName(err)});
-                return 1;
-            };
-        } else {
-            oliver.cooklang_html.render(gpa, &out_writer.interface, &result.recipe, .{ .profile = profile }) catch |err| {
-                std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
-                return 1;
-            };
+        switch (cfg.command) {
+            .serialize => {
+                oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
+                    std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
+                    return 1;
+                };
+            },
+            .scale => {
+                const by: oliver.cooklang_scale.ScaleBy = if (cfg.factor_num) |n|
+                    .{ .factor = .{ .num = n, .den = cfg.factor_den orelse 1 } }
+                else
+                    .{ .servings = cfg.servings_target.? };
+                var scaled = oliver.cooklang_scale.scaleRecipe(gpa, &result.recipe, by) catch |err| {
+                    std.debug.print("oliver: scale failed: {s}\n", .{@errorName(err)});
+                    return 1;
+                };
+                defer scaled.deinit();
+                oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &scaled, .{}) catch |err| {
+                    std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
+                    return 1;
+                };
+            },
+            .menu => {
+                var m = oliver.cooklang_menu.menuView(gpa, &result.recipe) catch |err| {
+                    std.debug.print("oliver: menu view failed: {s}\n", .{@errorName(err)});
+                    return 1;
+                };
+                defer m.deinit();
+                oliver.cooklang_menu.writeMenu(&out_writer.interface, &m) catch |err| {
+                    std.debug.print("oliver: menu dump failed: {s}\n", .{@errorName(err)});
+                    return 1;
+                };
+            },
+            .render => {
+                oliver.cooklang_html.render(gpa, &out_writer.interface, &result.recipe, .{ .profile = profile }) catch |err| {
+                    std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
+                    return 1;
+                };
+            },
         }
     } else {
         const d = cfg.dialect.?;
@@ -200,7 +269,7 @@ pub fn main(init: std.process.Init) !u8 {
     return 0;
 }
 
-fn usage() u8 {
+fn printUsage() void {
     std.debug.print(
         \\usage: oliver render --from <markdown|textile|cooklang> [--to <html|xhtml>]
         \\       oliver serialize --from cooklang
@@ -212,6 +281,10 @@ fn usage() u8 {
         \\Cooklang text; menu writes the day/meal text dump.
         \\
     , .{});
+}
+
+fn usage() u8 {
+    printUsage();
     return 1;
 }
 
@@ -237,7 +310,36 @@ test "cli: --to xhtml reaches the cooklang render path" {
     const cfg = try parseArgs(&.{ "render", "--from", "cooklang", "--to", "xhtml" });
     try testing.expect(cfg.cooklang);
     try testing.expectEqual(oliver.OutputProfile.xhtml, cfg.profile);
-    try testing.expect(!cfg.serialize and !cfg.scale and !cfg.menu);
+    try testing.expectEqual(Command.render, cfg.command);
+}
+
+test "cli: missing, duplicated, or conflicting subcommands are rejected" {
+    // Regression (issue #57): a bare `--from cooklang` used to be
+    // accepted and silently dispatch to render; now the subcommand is
+    // required and may appear exactly once.
+    try testing.expectError(error.Usage, parseArgs(&.{ "--from", "cooklang" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "render" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "serialize" }));
+    try testing.expectError(error.Usage, parseArgs(&.{}));
+}
+
+test "cli: flags are scoped to the command that owns them" {
+    // `--factor`/`--servings` belong to `scale` only.
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "cooklang", "--factor", "2" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--factor", "2" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", "--servings", "4" }));
+}
+
+test "cli: --from must name a supported dialect and appear at most once" {
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "asciidoc" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--from", "cooklang" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "cooklang", "--from", "markdown" }));
+}
+
+test "cli: --help and -h are requested outcomes, not errors" {
+    try testing.expectError(error.Help, parseArgs(&.{"--help"}));
+    try testing.expectError(error.Help, parseArgs(&.{ "render", "--from", "markdown", "-h" }));
 }
 
 test "cli: invalid --to values and missing values fail clearly" {
@@ -258,4 +360,13 @@ test "cli: cooklang-only commands and scale modes keep their rules" {
     const ok = try parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "3/2" });
     try testing.expectEqual(@as(u32, 3), ok.factor_num.?);
     try testing.expectEqual(@as(u32, 2), ok.factor_den.?);
+}
+
+test "cli: zero scale factors are rejected, not passed to the library" {
+    // Regression (issue #55): a zero numerator used to reach
+    // `scaleRecipe` and panic with a division by zero. Reject it at the
+    // argument layer, symmetric with `--servings 0` and a zero `den`.
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "0" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "0/2" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2/0" }));
 }
