@@ -101,11 +101,17 @@ pub const RenderOptions = struct {
 const Footnotes = struct {
     numbers: std.StringHashMap(u32) = undefined,
     used: std.ArrayList([]const u8) = .empty,
+    /// label → number of references to that footnote rendered so far,
+    /// incremented as each reference renders (issue #44): the second
+    /// reference to a footnote gets id `fnref-N-2`, the third `fnref-N-3`,
+    /// and the footnote body emits one backref per reference.
+    ref_counts: std.StringHashMap(u32) = undefined,
 
     fn init(gpa: std.mem.Allocator, doc: *const document.Document) !Footnotes {
         var self = Footnotes{
             .numbers = std.StringHashMap(u32).init(gpa),
             .used = .empty,
+            .ref_counts = std.StringHashMap(u32).init(gpa),
         };
         var it = try document.Document.Iterator.init(gpa, doc.root);
         defer it.deinit();
@@ -122,6 +128,7 @@ const Footnotes = struct {
     fn deinit(self: *Footnotes, gpa: std.mem.Allocator) void {
         self.numbers.deinit();
         self.used.deinit(gpa);
+        self.ref_counts.deinit();
     }
 
     fn number(self: *const Footnotes, label: []const u8) ?u32 {
@@ -155,7 +162,7 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
     var fn_ctx = if (options.footnotes and doc.footnotes.items.len > 0)
         try Footnotes.init(gpa, doc)
     else
-        Footnotes{ .numbers = std.StringHashMap(u32).init(gpa) };
+        Footnotes{ .numbers = std.StringHashMap(u32).init(gpa), .ref_counts = std.StringHashMap(u32).init(gpa) };
     defer fn_ctx.deinit(gpa);
 
     try stack.append(gpa, .{ .enter = .{
@@ -173,7 +180,7 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
                 try pushChildren(gpa, &stack, f.node, f.tight_item);
             },
             .marker => |text| try writer.writeAll(text),
-            .backref => |n| try writeBackref(writer, n),
+            .backref => |n| try writeBackrefs(writer, &fn_ctx, n),
             .li_open => |n| {
                 var buf: [32]u8 = undefined;
                 const tag = try std.fmt.bufPrint(&buf, "<li id=\"fn-{d}\">\n", .{n});
@@ -186,7 +193,7 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
                 if (f.node.tag == .document and fn_ctx.used.items.len > 0) {
                     try pushFootnotesSection(gpa, &stack, doc, &fn_ctx);
                 }
-                try writeClose(writer, f.node, f.suppress_p, options, f.footnote_backref);
+                try writeClose(writer, f.node, f.suppress_p, options, f.footnote_backref, &fn_ctx);
             },
         }
     }
@@ -351,7 +358,7 @@ fn writeOpen(
     footnote_backref: u32,
     options: RenderOptions,
     src: []const u8,
-    fn_ctx: *const Footnotes,
+    fn_ctx: *Footnotes,
 ) !void {
     switch (node.tag) {
         .document => {
@@ -573,13 +580,25 @@ fn writeOpen(
                 try writer.writeAll("</a></sup>");
             } else if (fn_ctx.number(fr.label)) |n| {
                 // Markdown `[^label]` (extension), numbered in
-                // first-reference order.
-                var buf: [16]u8 = undefined;
-                const num = try std.fmt.bufPrint(&buf, "{d}", .{n});
+                // first-reference order. Repeated references to the same
+                // footnote get distinct ids: the first is `fnref-N`, the
+                // second `fnref-N-2`, the third `fnref-N-3`, and so on
+                // (issue #44) so each reference is individually
+                // addressable and duplicate ids are impossible.
+                const ord = (fn_ctx.ref_counts.get(fr.label) orelse 0) + 1;
+                try fn_ctx.ref_counts.put(fr.label, ord);
+                var num_buf: [16]u8 = undefined;
+                const num = try std.fmt.bufPrint(&num_buf, "{d}", .{n});
                 try writer.writeAll("<sup class=\"footnote-ref\"><a href=\"#fn-");
                 try writer.writeAll(num);
                 try writer.writeAll("\" id=\"fnref-");
-                try writer.writeAll(num);
+                if (ord == 1) {
+                    try writer.writeAll(num);
+                } else {
+                    var id_buf: [48]u8 = undefined;
+                    const id = try std.fmt.bufPrint(&id_buf, "{d}-{d}", .{ n, ord });
+                    try writer.writeAll(id);
+                }
                 try writer.writeAll("\" data-footnote-ref>");
                 try writer.writeAll(num);
                 try writer.writeAll("</a></sup>");
@@ -687,7 +706,7 @@ fn writeOpen(
     }
 }
 
-fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, options: RenderOptions, footnote_backref: u32) !void {
+fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, options: RenderOptions, footnote_backref: u32, fn_ctx: *const Footnotes) !void {
     _ = options;
     switch (node.tag) {
         .document, .footnote => {},
@@ -724,7 +743,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
                 // Tight-list paragraphs are inline content of `<li>`; a
                 // following block gets its own leading newline in its frame.
             } else {
-                if (footnote_backref > 0) try writeBackref(writer, footnote_backref);
+                if (footnote_backref > 0) try writeBackrefs(writer, fn_ctx, footnote_backref);
                 try writer.writeAll("</p>\n");
             }
         },
@@ -753,16 +772,32 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
     }
 }
 
-/// Writes a footnote back-reference anchor (with a leading space so it
-/// reads as `note body <a ...>↩</a>` inside a paragraph).
-fn writeBackref(writer: anytype, n: u32) !void {
-    var buf: [256]u8 = undefined;
-    const text = try std.fmt.bufPrint(
-        &buf,
-        " <a href=\"#fnref-{d}\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"{d}\" aria-label=\"Back to reference {d}\">↩</a>",
-        .{ n, n, n },
-    );
-    try writer.writeAll(text);
+/// Writes the footnote back-reference anchors for footnote `n` (each with
+/// a leading space so they read as `note body <a ...>↩</a>` inside a
+/// paragraph). One anchor per reference to the footnote, in reference
+/// order: the first points at `#fnref-N`, the second at `#fnref-N-2`, and
+/// so on (issue #44) — so a reader who followed any reference can get
+/// back to it, and each anchor has its own target.
+fn writeBackrefs(writer: anytype, fn_ctx: *const Footnotes, n: u32) !void {
+    const label = fn_ctx.used.items[n - 1]; // numbers are 1-based, used is 0-based
+    const count = fn_ctx.ref_counts.get(label) orelse 1;
+    var ord: u32 = 1;
+    while (ord <= count) : (ord += 1) {
+        var buf: [256]u8 = undefined;
+        const text = if (ord == 1)
+            try std.fmt.bufPrint(
+                &buf,
+                " <a href=\"#fnref-{d}\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"{d}\" aria-label=\"Back to reference {d}\">↩</a>",
+                .{ n, n, n },
+            )
+        else
+            try std.fmt.bufPrint(
+                &buf,
+                " <a href=\"#fnref-{d}-{d}\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"{d}-{d}\" aria-label=\"Back to reference {d}-{d}\">↩</a>",
+                .{ n, ord, n, ord, n, ord },
+            );
+        try writer.writeAll(text);
+    }
 }
 
 /// Finds the registered footnote definition for a label (linear scan;
@@ -1686,6 +1721,72 @@ test "html: footnote refs and section render in first-reference order" {
     var out2 = try renderDoc(&doc);
     defer out2.deinit(testing.allocator);
     try testing.expect(std.mem.indexOf(u8, out2.items, "footnote-ref") == null);
+}
+
+test "html: repeated footnote references get unique ids and one backref each" {
+    // Regression (issue #44): every reference to the same footnote used
+    // to emit the same `id="fnref-N"` (invalid HTML: duplicate ids break
+    // getElementById and fragment navigation), and only the first
+    // reference got a backref. The second reference to a footnote is now
+    // `fnref-N-2`, the third `fnref-N-3`, and the footnote body emits one
+    // backref per reference, each pointing at its own reference id.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(doc.root, p);
+    try addText(&doc, p, "Alpha claim ");
+    try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "a" } }));
+    try addText(&doc, p, ". Beta claim ");
+    try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "a" } }));
+    try addText(&doc, p, ". Gamma claim ");
+    try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "a" } }));
+    try addText(&doc, p, ".");
+
+    const p2 = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(doc.root, p2);
+    try addText(&doc, p2, "Delta claim ");
+    try doc.appendChild(p2, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "b" } }));
+    try addText(&doc, p2, ". Epsilon claim ");
+    try doc.appendChild(p2, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "b" } }));
+    try addText(&doc, p2, ".");
+
+    const def_a = try doc.createNode(.footnote, .{ .start = 0, .end = 0 }, .none);
+    const pa = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(def_a, pa);
+    try addText(&doc, pa, "First source");
+    try doc.footnotes.append(doc.allocator(), .{ .label = "a", .node = def_a });
+
+    const def_b = try doc.createNode(.footnote, .{ .start = 0, .end = 0 }, .none);
+    const pb = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(def_b, pb);
+    try addText(&doc, pb, "Second source");
+    try doc.footnotes.append(doc.allocator(), .{ .label = "b", .node = def_b });
+
+    var out = try renderDocOpts(&doc, .{ .footnotes = true });
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>Alpha claim <sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" data-footnote-ref>1</a></sup>. Beta claim <sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1-2\" data-footnote-ref>1</a></sup>. Gamma claim <sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1-3\" data-footnote-ref>1</a></sup>.</p>\n" ++
+            "<p>Delta claim <sup class=\"footnote-ref\"><a href=\"#fn-2\" id=\"fnref-2\" data-footnote-ref>2</a></sup>. Epsilon claim <sup class=\"footnote-ref\"><a href=\"#fn-2\" id=\"fnref-2-2\" data-footnote-ref>2</a></sup>.</p>\n" ++
+            "<section class=\"footnotes\" data-footnotes>\n" ++
+            "<ol>\n" ++
+            "<li id=\"fn-1\">\n" ++
+            "<p>First source <a href=\"#fnref-1\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1\" aria-label=\"Back to reference 1\">↩</a> <a href=\"#fnref-1-2\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1-2\" aria-label=\"Back to reference 1-2\">↩</a> <a href=\"#fnref-1-3\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1-3\" aria-label=\"Back to reference 1-3\">↩</a></p>\n" ++
+            "</li>\n" ++
+            "<li id=\"fn-2\">\n" ++
+            "<p>Second source <a href=\"#fnref-2\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"2\" aria-label=\"Back to reference 2\">↩</a> <a href=\"#fnref-2-2\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"2-2\" aria-label=\"Back to reference 2-2\">↩</a></p>\n" ++
+            "</li>\n" ++
+            "</ol>\n" ++
+            "</section>\n",
+        out.items,
+    );
+
+    // Every reference id is unique: the fnref- prefix never repeats.
+    var count: usize = 0;
+    for (out.items, 0..) |_, i| {
+        if (std.mem.startsWith(u8, out.items[i..], "id=\"fnref-")) count += 1;
+    }
+    try testing.expectEqual(@as(usize, 5), count);
 }
 
 test "html: render without footnote context never frees an uninitialized map" {

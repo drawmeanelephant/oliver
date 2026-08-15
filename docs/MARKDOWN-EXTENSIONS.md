@@ -57,6 +57,19 @@ Hi[^note].
 - Labels match **exactly** (case-sensitive byte equality).
 - Render-side numbering is first-reference order, so the numbers follow the
   order the author references the notes, not the order of the definitions.
+- **Repeated references are tracked per reference.** The first reference to
+  a footnote is `fnref-N`; the second is `fnref-N-2`, the third
+  `fnref-N-3`, and so on, so every reference has a unique id (a duplicate
+  `id` would be invalid HTML and break fragment navigation and
+  `getElementById`). The footnote body emits **one backref per reference**,
+  each pointing at its own reference id — the `data-footnote-backref-idx`
+  carries the `N`, `N-2`, `N-3`, … form. Example (three references to one
+  note):
+
+```html
+<p>The note body. <a href="#fnref-1" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="1" aria-label="Back to reference 1">↩</a> <a href="#fnref-1-2" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="1-2" aria-label="Back to reference 1-2">↩</a> <a href="#fnref-1-3" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="1-3" aria-label="Back to reference 1-3">↩</a></p>
+```
+
 - The back-reference anchor is appended inside the definition's last
   paragraph; a definition whose last block is not a paragraph gets the
   anchor on its own line before `</li>`.

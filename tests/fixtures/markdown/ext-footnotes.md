@@ -1,4 +1,6 @@
-Hi[^syntax] and more[^second].
+Alpha claim [^a]. Beta claim [^a]. Gamma claim [^a].
 
-[^syntax]: First note body.
-[^second]: Second note body.
+Delta claim [^b]. Epsilon claim [^b].
+
+[^a]: First source.
+[^b]: Second source.
