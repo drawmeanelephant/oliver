@@ -70,6 +70,33 @@ Hi[^note].
 <p>The note body. <a href="#fnref-1" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="1" aria-label="Back to reference 1">↩</a> <a href="#fnref-1-2" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="1-2" aria-label="Back to reference 1-2">↩</a> <a href="#fnref-1-3" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="1-3" aria-label="Back to reference 1-3">↩</a></p>
 ```
 
+**Convention provenance (checked against reference implementations).**
+Footnotes are not in CommonMark 0.31.2, and GitHub never added them to the
+GFM spec document (announced 2021-09-30), so GFM is the de facto — not
+specified — authority. Against the reference implementations, on source:
+
+- **GFM / GitHub** (`micromark-extension-gfm-footnote`, which states it
+  "matches github.com"; `dev/lib/html.js`): reference ids are
+  `fnref-<label>` for the first call and `fnref-<label>-2`, `-3`, … for
+  rereferences — the same `-N` counter this extension uses. Backrefs are
+  emitted one per reference, hrefs `#fnref-<label>` / `#fnref-<label>-2`,
+  with `aria-label` from its `defaultBackLabel(referenceIndex,
+  rereferenceIndex)` template: `Back to reference 1`, `Back to reference
+  1-2`, … — byte-identical to the `aria-label`s above. GFM keys the base
+  id on the *label* (`fnref-speed`); Oliver keys on the first-reference
+  *number* (`fnref-1`). For numeric labels the two coincide; for named
+  labels it is internal naming with no spec authority either way.
+- **Pandoc** (`src/Text/Pandoc/Writers/HTML.hs`, the `Note` case): ids are
+  number-based (`fnref1`, first-reference order) — the same base
+  philosophy as `fnref-N`. Pandoc emits the *same* `id="fnref1"` for
+  every reference to a note and a single backref, i.e. it has the
+  duplicate-id defect this extension deliberately fixes; the same defect
+  is reported for Hugo/Goldmark (hugo#9757) and Python-Markdown (#468).
+- **Presentation note:** GFM and Pandoc render a visible `↩<sup>2</sup>`
+  counter on the second and later backrefs; this extension carries the
+  same information in `data-footnote-backref-idx` (`N-2`, `N-3`, …) and
+  the `aria-label` instead, with no visible counter.
+
 - The back-reference anchor is appended inside the definition's last
   paragraph; a definition whose last block is not a paragraph gets the
   anchor on its own line before `</li>`.
