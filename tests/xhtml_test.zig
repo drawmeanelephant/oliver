@@ -445,6 +445,29 @@ test "xhtml: representative output is well-formed XML" {
     defer wrapped_ck_nul.deinit(std.testing.allocator);
     try wrapFragment(xhtml_ck_nul.items, &wrapped_ck_nul);
     try wellformed.check(wrapped_ck_nul.items);
+
+    // Footnote machinery must stay XML-well-formed: the valueless data-*
+    // attributes serialize with explicit empty values under XHTML
+    // (issue #60) — a bare attribute would fail the gate below. The
+    // repeated reference also exercises the `-2` backref-id format.
+    const footnote_input =
+        \\Reference[^1] and repeat[^1] and another[^2].
+        \\
+        \\[^1]: First body.
+        \\[^2]: Second body.
+        \\
+    ;
+    var fn_result = try oliver.parse(std.testing.allocator, footnote_input, .markdown, .{ .markdown = .{ .footnotes = true } });
+    defer fn_result.deinit();
+    var fn_aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer fn_aw.deinit();
+    try oliver.html.render(std.testing.allocator, &fn_aw.writer, &fn_result.document, .{ .profile = .xhtml, .footnotes = true });
+    var fn_frag = fn_aw.toArrayList();
+    defer fn_frag.deinit(std.testing.allocator);
+    var wrapped_fn = std.ArrayList(u8).empty;
+    defer wrapped_fn.deinit(std.testing.allocator);
+    try wrapFragment(fn_frag.items, &wrapped_fn);
+    try wellformed.check(wrapped_fn.items);
 }
 
 test "xhtml: wellformedness checker itself distinguishes clean from poisoned" {
