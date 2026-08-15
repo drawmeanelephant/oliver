@@ -35,10 +35,13 @@
 //! day/hour/minute/second form (case-insensitive); everything else keeps
 //! the `data-quantity`/`data-units` contract without `datetime`.
 //!
-//! Text and attribute values are HTML-escaped (`&`, `<`, `>`, `"`).
-//! Quantities render as their trimmed source text; `data-quantity` is
-//! emitted only when the token carried an explicit non-empty quantity,
-//! and `data-units` only when units are present. Recipe references stay
+//! Text and attribute values are HTML-escaped (`&`, `<`, `>`, `"`), and
+//! NUL (U+0000) is replaced with U+FFFD like the shared renderer
+//! (docs/ARCHITECTURE.md), so the XHTML profile stays well-formed even
+//! for hostile input. Quantities render as their trimmed source text;
+//! `data-quantity` is emitted only when the token carried an explicit
+//! non-empty quantity, and `data-units` only when units are present.
+//! Recipe references stay
 //! unresolvable data (`data-ref`) — Oliver never resolves paths. YAML
 //! front matter is not rendered here; metadata presentation is a
 //! consumer concern.
@@ -343,7 +346,12 @@ fn unitsEqual(a: []const u8, b: []const u8) bool {
     return true;
 }
 
-/// Escapes `&`, `<`, `>` (and `"` for attribute contexts) into `writer`.
+/// Escapes `&`, `<`, `>`, NUL (U+0000 → U+FFFD), and `"` for attribute
+/// contexts into `writer`. The NUL replacement mirrors the shared
+/// renderer's text-escaping policy (docs/ARCHITECTURE.md): the parser
+/// deliberately preserves NUL in payloads (docs/COOKLANG.md §4), so it
+/// must be neutralized here, and U+FFFD is a valid XML character, so the
+/// XHTML profile stays well-formed (docs/XHTML.md).
 fn escapeInto(writer: anytype, text: []const u8, attribute: bool) !void {
     var start: usize = 0;
     for (text, 0..) |c, i| {
@@ -352,6 +360,7 @@ fn escapeInto(writer: anytype, text: []const u8, attribute: bool) !void {
             '<' => "&lt;",
             '>' => "&gt;",
             '"' => if (attribute) "&quot;" else null,
+            0 => "\xEF\xBF\xBD", // U+FFFD
             else => null,
         };
         if (rep) |r| {
@@ -464,4 +473,32 @@ test "cooklang html: xhtml profile serializes line breaks with the XML void form
     const xhtml_with_br = try std.mem.replaceOwned(u8, std.testing.allocator, xhtml_out.items, "<br />", "<br>");
     defer std.testing.allocator.free(xhtml_with_br);
     try std.testing.expectEqualSlices(u8, html_out.items, xhtml_with_br);
+}
+
+test "cooklang html: NUL bytes render as U+FFFD in both profiles" {
+    // Regression (issue #56): escapeInto used to pass NUL (U+0000)
+    // through into the output — invalid HTML and, under `.xhtml`,
+    // non-well-formed XML (U+0000 is not a valid XML character). Both
+    // profiles must replace NUL with U+FFFD wherever a payload is
+    // written: step text, ingredient/cookware names, quantities, units,
+    // notes, and section titles. The parser deliberately preserves NUL
+    // in payloads (docs/COOKLANG.md §4), so this exercises every
+    // `escapeInto` call site.
+    const input = "Add @salt \x00 and @x{1\x00%g} to #pan\x00 for ~{5\x00%min}.\n" ++
+        "\n> Note \x00 text.\n" ++
+        "\n= Section\x00\nMore \x00 text.\n";
+    for ([_]OutputProfile{ .html, .xhtml }) |profile| {
+        var result = try cooklang.parse(std.testing.allocator, input, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try render(std.testing.allocator, &aw.writer, &result.recipe, .{ .profile = profile });
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+
+        // No raw NUL byte anywhere in the fragment.
+        try std.testing.expect(std.mem.indexOfScalar(u8, out.items, 0) == null);
+        // The replacement U+FFFD (UTF-8 EF BF BD) is present.
+        try std.testing.expect(std.mem.indexOf(u8, out.items, "\xEF\xBF\xBD") != null);
+    }
 }

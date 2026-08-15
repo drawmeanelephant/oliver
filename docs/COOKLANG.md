@@ -411,7 +411,9 @@ current count from the frontmatter `servings`/`serves`/`yield` key
 (leading number only, per the conventions; default 1 when absent,
 zero, or non-numeric). Oliver does not parse YAML — this is a
 conservative line-oriented read of the raw payload only. A zero
-`den` or a zero target is `error.InvalidScaleFactor`.
+`num`, a zero `den`, or a zero target is `error.InvalidScaleFactor`
+(scaling to nothing is degenerate, and a zero denominator is division
+by zero).
 
 Arithmetic and formatting policy:
 

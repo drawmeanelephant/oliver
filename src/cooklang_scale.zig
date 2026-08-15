@@ -45,8 +45,9 @@ pub const ScaleError = error{ OutOfMemory, InvalidScaleFactor };
 
 /// How to scale: by an exact rational factor `num/den`, or to a target
 /// serving count (the current count is read from the recipe's
-/// frontmatter per the conventions; `den` and the target must be
-/// non-zero).
+/// frontmatter per the conventions; `num`, `den`, and the target must
+/// be non-zero — a zero numerator or denominator is
+/// `error.InvalidScaleFactor`).
 pub const ScaleBy = union(enum) {
     factor: cooklang.Fraction,
     servings: u32,
@@ -62,8 +63,12 @@ const Rational = struct {
     }
 
     /// Fallible: an exact product that overflows u128 is null (callers
-    /// then keep the original quantity — never a wrong number).
+    /// then keep the original quantity — never a wrong number). A zero
+    /// numerator is rejected by `factorOf` before any scaling, so this
+    /// guard is defensive: it keeps the overflow precheck's division
+    /// below from dividing by zero regardless of future callers.
     fn mul(a: Rational, b: Rational) ?Rational {
+        if (b.num == 0) return null;
         if (a.num > std.math.maxInt(u128) / b.num) return null;
         if (a.den > std.math.maxInt(u128) / b.den) return null;
         return reduce(.{ .num = a.num * b.num, .den = a.den * b.den });
@@ -108,7 +113,11 @@ pub fn scaleRecipe(allocator: std.mem.Allocator, recipe: *const cooklang.Recipe,
 fn factorOf(recipe: *const cooklang.Recipe, by: ScaleBy) ScaleError!Rational {
     switch (by) {
         .factor => |f| {
+            // A zero denominator is division by zero and a zero
+            // numerator would scale everything to nothing — both are
+            // degenerate, so both are rejected (docs/COOKLANG.md §11).
             if (f.den == 0) return error.InvalidScaleFactor;
+            if (f.num == 0) return error.InvalidScaleFactor;
             return Rational.of(f.num, f.den);
         },
         .servings => |target| {
@@ -435,7 +444,13 @@ test "cooklang scale: sections recurse, notes and text untouched" {
 test "cooklang scale: invalid factors are rejected, not guessed" {
     var r = try cooklang.parse(std.testing.allocator, "", .{});
     defer r.deinit();
+    // Zero denominator (division by zero) and zero numerator (scaling to
+    // nothing) are both degenerate; zero servings is the same shape.
+    // Regression: a zero numerator used to panic with a division by zero
+    // inside `Rational.mul` (issue #55) instead of returning an error.
     try std.testing.expectError(error.InvalidScaleFactor, scaleRecipe(std.testing.allocator, &r.recipe, .{ .factor = .{ .num = 1, .den = 0 } }));
+    try std.testing.expectError(error.InvalidScaleFactor, scaleRecipe(std.testing.allocator, &r.recipe, .{ .factor = .{ .num = 0, .den = 1 } }));
+    try std.testing.expectError(error.InvalidScaleFactor, scaleRecipe(std.testing.allocator, &r.recipe, .{ .factor = .{ .num = 0, .den = 2 } }));
     try std.testing.expectError(error.InvalidScaleFactor, scaleRecipe(std.testing.allocator, &r.recipe, .{ .servings = 0 }));
 }
 

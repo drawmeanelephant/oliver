@@ -434,6 +434,17 @@ test "xhtml: representative output is well-formed XML" {
     defer wrapped_ck.deinit(std.testing.allocator);
     try wrapFragment(xhtml_ck.items, &wrapped_ck);
     try wellformed.check(wrapped_ck.items);
+
+    // NUL-bearing Cooklang: the renderer must replace NUL with U+FFFD
+    // (issue #56) — a raw NUL would be invalid XML, so this case would
+    // fail the well-formedness gate if the replacement regressed.
+    var xhtml_ck_nul = try renderCooklangProfile("Add @salt \x00 NUL in text.\n", .xhtml);
+    defer xhtml_ck_nul.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOfScalar(u8, xhtml_ck_nul.items, 0) == null);
+    var wrapped_ck_nul = std.ArrayList(u8).empty;
+    defer wrapped_ck_nul.deinit(std.testing.allocator);
+    try wrapFragment(xhtml_ck_nul.items, &wrapped_ck_nul);
+    try wellformed.check(wrapped_ck_nul.items);
 }
 
 test "xhtml: wellformedness checker itself distinguishes clean from poisoned" {
