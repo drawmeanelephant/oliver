@@ -80,6 +80,60 @@ pub const RenderOptions = struct {
     void_trailing_slash: bool = true,
     /// The output profile: `.html` (default) or `.xhtml`.
     profile: OutputProfile = .html,
+    /// Emit GFM-style auto-generated `id` attributes on headings (the
+    /// Markdown `heading_ids` extension, docs/MARKDOWN-EXTENSIONS.md): a
+    /// heading without an explicit IAL id gets a slug of its plain-text
+    /// content (lowercased ASCII, non-word bytes dropped, whitespace runs
+    /// collapsed to `-`, leading/trailing `-` trimmed). Off by default so
+    /// the CommonMark corpus stays byte-exact.
+    heading_ids: bool = false,
+    /// Render Markdown footnotes (the `footnotes` parse extension): each
+    /// `[^label]` reference becomes a footnote-ref link numbered in
+    /// first-reference order, and a `<section class="footnotes">` block is
+    /// appended at the end of the document with the used definitions and
+    /// their back-references. Off by default.
+    footnotes: bool = false,
+};
+
+/// Footnote rendering context: label → number (first-reference order) and
+/// the used labels in that order. Built by a pre-pass over the document
+/// when the `footnotes` render option is enabled.
+const Footnotes = struct {
+    numbers: std.StringHashMap(u32) = undefined,
+    used: std.ArrayList([]const u8) = .empty,
+    /// label → number of references to that footnote rendered so far,
+    /// incremented as each reference renders (issue #44): the second
+    /// reference to a footnote gets id `fnref-N-2`, the third `fnref-N-3`,
+    /// and the footnote body emits one backref per reference.
+    ref_counts: std.StringHashMap(u32) = undefined,
+
+    fn init(gpa: std.mem.Allocator, doc: *const document.Document) !Footnotes {
+        var self = Footnotes{
+            .numbers = std.StringHashMap(u32).init(gpa),
+            .used = .empty,
+            .ref_counts = std.StringHashMap(u32).init(gpa),
+        };
+        var it = try document.Document.Iterator.init(gpa, doc.root);
+        defer it.deinit();
+        while (try it.next()) |n| {
+            if (n.tag != .footnote_ref or n.data.footnote_ref.label.len == 0) continue;
+            const label = n.data.footnote_ref.label;
+            if (self.numbers.contains(label)) continue;
+            try self.numbers.put(label, @intCast(self.used.items.len + 1));
+            try self.used.append(gpa, label);
+        }
+        return self;
+    }
+
+    fn deinit(self: *Footnotes, gpa: std.mem.Allocator) void {
+        self.numbers.deinit();
+        self.used.deinit(gpa);
+        self.ref_counts.deinit();
+    }
+
+    fn number(self: *const Footnotes, label: []const u8) ?u32 {
+        return self.numbers.get(label);
+    }
 };
 
 /// A document contains verbatim source bytes (Markdown raw HTML leaves or
@@ -95,26 +149,52 @@ pub const RawHtmlNotXmlWellFormed = error.RawHtmlNotXmlWellFormed;
 /// pass a pointer to it. In Zig 0.16, `std.Io.Writer` values (e.g. from
 /// `std.Io.Writer.Allocating` or `std.Io.File.writer`) satisfy this.
 ///
-/// `gpa` is used only for the temporary traversal stack; nothing is retained.
+/// `gpa` is used only for the temporary traversal stack, footnote numbering
+/// tables, and heading-slug scratch; nothing is retained.
 pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Document, options: RenderOptions) !void {
     var stack = std.ArrayList(Frame).empty;
     defer stack.deinit(gpa);
+
+    // The footnote-numbering table is always allocated: `deinit` runs on
+    // every path, so an `undefined` map here would be freed while uninitialized
+    // (the managed HashMap's pointer-stability mutex is garbage) — a crash
+    // that only manifests on some platforms/stack states.
+    var fn_ctx = if (options.footnotes and doc.footnotes.items.len > 0)
+        try Footnotes.init(gpa, doc)
+    else
+        Footnotes{ .numbers = std.StringHashMap(u32).init(gpa), .ref_counts = std.StringHashMap(u32).init(gpa) };
+    defer fn_ctx.deinit(gpa);
 
     try stack.append(gpa, .{ .enter = .{
         .node = doc.root,
         .tight_item = false,
         .suppress_p = false,
         .prefix_newline = false,
+        .footnote_backref = 0,
     } });
     while (stack.pop()) |frame| {
         switch (frame) {
             .enter => |f| {
                 if (f.prefix_newline) try writer.writeByte('\n');
-                try writeOpen(gpa, writer, &stack, f.node, f.suppress_p, options, doc.src.bytes);
+                try writeOpen(gpa, writer, &stack, f.node, f.suppress_p, f.footnote_backref, options, doc.src.bytes, &fn_ctx);
                 try pushChildren(gpa, &stack, f.node, f.tight_item);
             },
             .marker => |text| try writer.writeAll(text),
-            .exit => |f| try writeClose(writer, f.node, f.suppress_p, options),
+            .backref => |n| try writeBackrefs(writer, &fn_ctx, n),
+            .li_open => |n| {
+                var buf: [32]u8 = undefined;
+                const tag = try std.fmt.bufPrint(&buf, "<li id=\"fn-{d}\">\n", .{n});
+                try writer.writeAll(tag);
+            },
+            .exit => |f| {
+                // The document's exit pops last: everything else is already
+                // rendered, so the footnotes section is pushed now and
+                // renders in document order after the body.
+                if (f.node.tag == .document and fn_ctx.used.items.len > 0) {
+                    try pushFootnotesSection(gpa, &stack, doc, &fn_ctx);
+                }
+                try writeClose(writer, f.node, f.suppress_p, options, f.footnote_backref, &fn_ctx);
+            },
         }
     }
 }
@@ -134,13 +214,25 @@ const Frame = union(enum) {
         /// a following nested block supplies that separator here; the first
         /// block in a loose item also starts on the line after `<li>`.
         prefix_newline: bool,
+        /// Footnote number whose back-reference anchor is appended inside
+        /// this paragraph's close (a footnote definition's last paragraph,
+        /// or 0 for none).
+        footnote_backref: u32,
     },
     /// Literal output emitted when popped, used for the `<thead>`/`<tbody>`
-    /// transitions between a table's header row and its body rows.
+    /// transitions between a table's header row and its body rows and for
+    /// the footnotes section scaffolding.
     marker: []const u8,
+    /// A footnote back-reference anchor, emitted when popped (the anchor is
+    /// not a static string).
+    backref: u32,
+    /// A footnote `<li id="fn-N">` opener, emitted when popped (the number
+    /// is not a static string).
+    li_open: u32,
     /// `suppress_p` mirrors the decision made at open time, so the close
-    /// tag matches.
-    exit: struct { node: *const document.Node, suppress_p: bool },
+    /// tag matches; `footnote_backref` carries the paragraph-attached
+    /// footnote back-reference to the close.
+    exit: struct { node: *const document.Node, suppress_p: bool, footnote_backref: u32 },
 };
 
 fn pushChildren(
@@ -167,6 +259,7 @@ fn pushChildren(
                     .tight_item = false,
                     .suppress_p = false,
                     .prefix_newline = false,
+                    .footnote_backref = 0,
                 } });
             }
             return;
@@ -180,6 +273,7 @@ fn pushChildren(
                 .tight_item = false,
                 .suppress_p = false,
                 .prefix_newline = false,
+                .footnote_backref = 0,
             } });
         }
         try stack.append(gpa, .{ .marker = if (has_body) "</thead>\n<tbody>\n" else "</thead>\n" });
@@ -188,8 +282,36 @@ fn pushChildren(
             .tight_item = false,
             .suppress_p = false,
             .prefix_newline = false,
+            .footnote_backref = 0,
         } });
         try stack.append(gpa, .{ .marker = "<thead>\n" });
+        return;
+    }
+    // A definition body renders its direct paragraphs like a tight list
+    // item: a single-paragraph body is `<dd>text</dd>` (no `<p>`), while a
+    // multi-block body keeps `<p>` wrappers (docs/MARKDOWN-EXTENSIONS.md).
+    if (node.tag == .definition_body) {
+        const tight = node.children.items.len == 1 and node.children.items[0].tag == .paragraph;
+        var di = node.children.items.len;
+        while (di > 0) {
+            di -= 1;
+            const c = node.children.items[di];
+            const suppress = tight and c.tag == .paragraph;
+            var prefix_newline = false;
+            if (c.tag == .paragraph) {
+                prefix_newline = !tight and di == 0;
+            } else {
+                prefix_newline = di == 0 or
+                    (tight and di > 0 and node.children.items[di - 1].tag == .paragraph);
+            }
+            try stack.append(gpa, .{ .enter = .{
+                .node = c,
+                .tight_item = false,
+                .suppress_p = suppress,
+                .prefix_newline = prefix_newline,
+                .footnote_backref = 0,
+            } });
+        }
         return;
     }
     var i = node.children.items.len;
@@ -222,6 +344,7 @@ fn pushChildren(
             .tight_item = tight,
             .suppress_p = suppress,
             .prefix_newline = prefix_newline,
+            .footnote_backref = 0,
         } });
     }
 }
@@ -232,12 +355,14 @@ fn writeOpen(
     stack: *std.ArrayList(Frame),
     node: *const document.Node,
     suppress_p: bool,
+    footnote_backref: u32,
     options: RenderOptions,
     src: []const u8,
+    fn_ctx: *Footnotes,
 ) !void {
     switch (node.tag) {
         .document => {
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .block_quote => {
             try writer.writeAll("<blockquote");
@@ -250,7 +375,7 @@ fn writeOpen(
             }
             try writeAttrs(writer, node.data.block_quote.attrs);
             try writer.writeAll(">\n");
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .table => {
             try writer.writeAll("<table");
@@ -258,13 +383,13 @@ fn writeOpen(
             try writer.writeAll(">\n");
             // Children (rows with thead/tbody markers) are pushed by
             // `pushChildren`; only the exit frame is set here.
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .table_row => {
             try writer.writeAll("<tr");
             try writeAttrs(writer, node.data.table_row.attrs);
             try writer.writeByte('>');
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .table_cell => {
             const cell = node.data.table_cell;
@@ -290,7 +415,7 @@ fn writeOpen(
                 .right => try writer.writeAll(" align=\"right\""),
             }
             try writer.writeByte('>');
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .list => {
             const list = node.data.list;
@@ -314,7 +439,7 @@ fn writeOpen(
                     try writer.writeAll(">\n");
                 },
             }
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .list_item => {
             // Textile definition-list items carry their role (term →
@@ -323,7 +448,7 @@ fn writeOpen(
                 .list_item => |li| try writer.writeAll(if (li.role == .definition) "<dd>" else "<dt>"),
                 else => try writer.writeAll("<li>"),
             }
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .paragraph => {
             // §5.3: a paragraph directly in a tight list's item renders
@@ -333,16 +458,58 @@ fn writeOpen(
                 try writeAttrs(writer, node.data.paragraph.attrs);
                 try writer.writeByte('>');
             }
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = suppress_p } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = suppress_p, .footnote_backref = footnote_backref } });
         },
         .heading => {
             const level = clampHeading(node.data.heading.level);
             var buf: [8]u8 = undefined;
             const tag = try std.fmt.bufPrint(&buf, "<h{d}", .{level});
             try writer.writeAll(tag);
-            try writeAttrs(writer, node.data.heading.attrs);
+            const h = node.data.heading;
+            if (h.id) |id| {
+                try writer.writeAll(" id=\"");
+                try writeEscaped(writer, id);
+                try writer.writeByte('"');
+            } else if (options.heading_ids) {
+                // GFM auto-id: a slug of the heading's plain-text content
+                // (its inline children).
+                var text_buf = std.ArrayList(u8).empty;
+                defer text_buf.deinit(gpa);
+                for (node.children.items) |c| try collectHeadingText(gpa, c, &text_buf);
+                const slug = try slugify(gpa, text_buf.items);
+                defer gpa.free(slug);
+                if (slug.len > 0) {
+                    try writer.writeAll(" id=\"");
+                    try writeEscaped(writer, slug);
+                    try writer.writeByte('"');
+                }
+            }
+            if (h.class) |cls| {
+                try writer.writeAll(" class=\"");
+                try writeEscaped(writer, cls);
+                try writer.writeByte('"');
+            }
+            try writeAttrs(writer, h.attrs);
             try writer.writeByte('>');
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
+        },
+        .definition_list => {
+            try writer.writeAll("<dl>\n");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
+        },
+        .definition_term => {
+            try writer.writeAll("<dt>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
+        },
+        .definition_body => {
+            try writer.writeAll("<dd>");
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
+        },
+        .footnote => {
+            // A footnote definition node is only rendered inside the
+            // footnotes section; a hand-built document that places one
+            // elsewhere renders nothing.
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .thematic_break => {
             try writer.writeAll(if (voidSlash(options)) "<hr />\n" else "<hr>\n");
@@ -397,19 +564,48 @@ fn writeOpen(
             try writer.writeAll(phraseTagName(node.tag));
             try writeAttrs(writer, phraseAttrs(node));
             try writer.writeByte('>');
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .footnote_ref => {
-            // Textile `[N]` reference (Textile 2 "Footnotes"):
-            // `<sup class="footnote"><a href="#fnN">N</a></sup>`.
-            const n = node.data.footnote_ref;
-            var buf: [16]u8 = undefined;
-            const num = try std.fmt.bufPrint(&buf, "{d}", .{n});
-            try writer.writeAll("<sup class=\"footnote\"><a href=\"#fn");
-            try writer.writeAll(num);
-            try writer.writeAll("\">");
-            try writer.writeAll(num);
-            try writer.writeAll("</a></sup>");
+            const fr = node.data.footnote_ref;
+            if (fr.label.len == 0) {
+                // Textile `[N]` reference (Textile 2 "Footnotes"):
+                // `<sup class="footnote"><a href="#fnN">N</a></sup>`.
+                var buf: [16]u8 = undefined;
+                const num = try std.fmt.bufPrint(&buf, "{d}", .{fr.number});
+                try writer.writeAll("<sup class=\"footnote\"><a href=\"#fn");
+                try writer.writeAll(num);
+                try writer.writeAll("\">");
+                try writer.writeAll(num);
+                try writer.writeAll("</a></sup>");
+            } else if (fn_ctx.number(fr.label)) |n| {
+                // Markdown `[^label]` (extension), numbered in
+                // first-reference order. Repeated references to the same
+                // footnote get distinct ids: the first is `fnref-N`, the
+                // second `fnref-N-2`, the third `fnref-N-3`, and so on
+                // (issue #44) so each reference is individually
+                // addressable and duplicate ids are impossible.
+                const ord = (fn_ctx.ref_counts.get(fr.label) orelse 0) + 1;
+                try fn_ctx.ref_counts.put(fr.label, ord);
+                var num_buf: [16]u8 = undefined;
+                const num = try std.fmt.bufPrint(&num_buf, "{d}", .{n});
+                try writer.writeAll("<sup class=\"footnote-ref\"><a href=\"#fn-");
+                try writer.writeAll(num);
+                try writer.writeAll("\" id=\"fnref-");
+                if (ord == 1) {
+                    try writer.writeAll(num);
+                } else {
+                    var id_buf: [48]u8 = undefined;
+                    const id = try std.fmt.bufPrint(&id_buf, "{d}-{d}", .{ n, ord });
+                    try writer.writeAll(id);
+                }
+                try writer.writeAll("\" data-footnote-ref>");
+                try writer.writeAll(num);
+                try writer.writeAll("</a></sup>");
+            } else {
+                // A hand-built document with an undefined label: literal.
+                try writeEscaped(writer, fr.label);
+            }
         },
         .span => {
             // Textile `%x%` renders `<span>`; the phrase-attribute forms
@@ -419,14 +615,14 @@ fn writeOpen(
             try writer.writeAll("<span");
             try writeAttrs(writer, node.data.span.attrs);
             try writer.writeByte('>');
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .code_span => {
             try writer.writeAll("<code>");
             // Leaf tag: the (normalized) content is escaped like text
             // (& < > " and NUL -> U+FFFD), written on enter.
             try writeEscaped(writer, node.data.code_span);
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .link => {
             try writer.writeAll("<a href=\"");
@@ -438,7 +634,7 @@ fn writeOpen(
                 try writer.writeByte('\"');
             }
             try writer.writeByte('>');
-            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false } });
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .autolink => {
             // Leaf tag: one <a> with the raw label as its text. The href
@@ -510,10 +706,10 @@ fn writeOpen(
     }
 }
 
-fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, options: RenderOptions) !void {
+fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, options: RenderOptions, footnote_backref: u32, fn_ctx: *const Footnotes) !void {
     _ = options;
     switch (node.tag) {
-        .document => {},
+        .document, .footnote => {},
         .block_quote => try writer.writeAll("</blockquote>\n"),
         .table => {
             // The thead/tbody split is emitted by marker frames between the
@@ -539,11 +735,15 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
                 else => try writer.writeAll("</li>\n"),
             }
         },
+        .definition_list => try writer.writeAll("</dl>\n"),
+        .definition_term => try writer.writeAll("</dt>\n"),
+        .definition_body => try writer.writeAll("</dd>\n"),
         .paragraph => {
             if (suppress_p) {
                 // Tight-list paragraphs are inline content of `<li>`; a
                 // following block gets its own leading newline in its frame.
             } else {
+                if (footnote_backref > 0) try writeBackrefs(writer, fn_ctx, footnote_backref);
                 try writer.writeAll("</p>\n");
             }
         },
@@ -570,6 +770,161 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         // These tags never push exit frames.
         .thematic_break, .code_block, .html_block, .text, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
     }
+}
+
+/// Writes the footnote back-reference anchors for footnote `n` (each with
+/// a leading space so they read as `note body <a ...>↩</a>` inside a
+/// paragraph). One anchor per reference to the footnote, in reference
+/// order: the first points at `#fnref-N`, the second at `#fnref-N-2`, and
+/// so on (issue #44) — so a reader who followed any reference can get
+/// back to it, and each anchor has its own target.
+fn writeBackrefs(writer: anytype, fn_ctx: *const Footnotes, n: u32) !void {
+    const label = fn_ctx.used.items[n - 1]; // numbers are 1-based, used is 0-based
+    const count = fn_ctx.ref_counts.get(label) orelse 1;
+    var ord: u32 = 1;
+    while (ord <= count) : (ord += 1) {
+        var buf: [256]u8 = undefined;
+        const text = if (ord == 1)
+            try std.fmt.bufPrint(
+                &buf,
+                " <a href=\"#fnref-{d}\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"{d}\" aria-label=\"Back to reference {d}\">↩</a>",
+                .{ n, n, n },
+            )
+        else
+            try std.fmt.bufPrint(
+                &buf,
+                " <a href=\"#fnref-{d}-{d}\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"{d}-{d}\" aria-label=\"Back to reference {d}-{d}\">↩</a>",
+                .{ n, ord, n, ord, n, ord },
+            );
+        try writer.writeAll(text);
+    }
+}
+
+/// Finds the registered footnote definition for a label (linear scan;
+/// definitions are few).
+fn findFootnoteDef(doc: *const document.Document, label: []const u8) ?document.FootnoteDef {
+    for (doc.footnotes.items) |fd| {
+        if (std.mem.eql(u8, fd.label, label)) return fd;
+    }
+    return null;
+}
+
+/// Pushes the frames for the footnotes `<section>` onto the stack. Called
+/// when the document's exit frame pops, so the whole body is already
+/// rendered; the pushed frames then render in document order after it.
+/// Frames are pushed in reverse pop order: the closing markers first, each
+/// `<li>`'s close before its blocks, and the section/ol markers last.
+fn pushFootnotesSection(
+    gpa: std.mem.Allocator,
+    stack: *std.ArrayList(Frame),
+    doc: *const document.Document,
+    fn_ctx: *const Footnotes,
+) !void {
+    try stack.append(gpa, .{ .marker = "</section>\n" });
+    try stack.append(gpa, .{ .marker = "</ol>\n" });
+    // Frames pop LIFO, so the last-used footnote is pushed first.
+    var u = fn_ctx.used.items.len;
+    while (u > 0) {
+        u -= 1;
+        const label = fn_ctx.used.items[u];
+        const n = fn_ctx.number(label) orelse continue;
+        const def = findFootnoteDef(doc, label) orelse continue;
+        const children = def.node.children.items;
+        try stack.append(gpa, .{ .marker = "</li>\n" });
+        var i = children.len;
+        while (i > 0) {
+            i -= 1;
+            const c = children[i];
+            const backref: u32 = if (i == children.len - 1 and c.tag == .paragraph) n else 0;
+            try stack.append(gpa, .{ .enter = .{
+                .node = c,
+                .tight_item = false,
+                .suppress_p = false,
+                .prefix_newline = false,
+                .footnote_backref = backref,
+            } });
+        }
+        if (children.len == 0 or children[children.len - 1].tag != .paragraph) {
+            // No trailing paragraph to carry the back-reference: emit the
+            // anchor on its own before the `</li>`.
+            try stack.append(gpa, .{ .backref = n });
+        }
+        try stack.append(gpa, .{ .li_open = n });
+    }
+    try stack.append(gpa, .{ .marker = "<ol>\n" });
+    try stack.append(gpa, .{ .marker = "<section class=\"footnotes\" data-footnotes>\n" });
+}
+
+/// Collects the plain-text projection of a heading's inline content: text
+/// (entity-decoded, escapes already split into their own text nodes),
+/// code-span content, image alt, autolink labels, and the text of nested
+/// inline containers. Soft/hard breaks become spaces; raw HTML is skipped.
+fn collectHeadingText(gpa: std.mem.Allocator, node: *const document.Node, out: *std.ArrayList(u8)) !void {
+    switch (node.tag) {
+        .text => try writeDecodedText(gpa, out, node.data.text),
+        .code_span => try out.appendSlice(gpa, node.data.code_span),
+        .image => try out.appendSlice(gpa, node.data.image.alt),
+        .autolink => try out.appendSlice(gpa, node.data.autolink.label),
+        .soft_break, .hard_break => try out.append(gpa, ' '),
+        .raw_html => {},
+        .link, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span => {
+            for (node.children.items) |c| try collectHeadingText(gpa, c, out);
+        },
+        else => {},
+    }
+}
+
+/// Appends the entity-decoded bytes of `text` (no HTML escaping) — the
+/// plain-text projection used for heading slugs. A backslash-escaped `&`
+/// is its own text node (the escape split), so it has no trailing `;` and
+/// stays literal here.
+fn writeDecodedText(gpa: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] == '&') {
+            if (entities.decodeAt(text, i)) |dec| {
+                try out.appendSlice(gpa, text[start..i]);
+                try out.appendSlice(gpa, dec.bytes[0..dec.len]);
+                i = dec.next;
+                start = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    try out.appendSlice(gpa, text[start..]);
+}
+
+/// GFM-style heading slug (docs/MARKDOWN-EXTENSIONS.md): lowercase ASCII
+/// letters; keep `a-z 0-9 _ -`; collapse every whitespace run into one `-`;
+/// drop everything else (including non-ASCII bytes); trim leading/trailing
+/// `-`. This is the §5.3 algorithm applied byte-wise, which reproduces the
+/// observed GitHub behavior for `Café résumé` → `caf-rsum` (accented bytes
+/// are not ASCII letters and are dropped).
+fn slugify(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).empty;
+    var pending_space = false;
+    for (text) |b| {
+        const c: u8 = switch (b) {
+            'A'...'Z' => b + 32,
+            'a'...'z', '0'...'9', '_', '-' => b,
+            ' ', '\t', '\n', '\r' => {
+                pending_space = true;
+                continue;
+            },
+            else => continue,
+        };
+        if (pending_space) {
+            if (buf.items.len > 0) try buf.append(gpa, '-');
+            pending_space = false;
+        }
+        try buf.append(gpa, c);
+    }
+    var end = buf.items.len;
+    while (end > 0 and buf.items[end - 1] == '-') end -= 1;
+    buf.shrinkRetainingCapacity(end);
+    return buf.toOwnedSlice(gpa);
 }
 
 /// Heading levels are clamped to 1..6 so hand-built documents with invalid
@@ -1266,4 +1621,237 @@ test "html: code block escapes content and uses the first info word" {
         "<pre><code class=\"language-zig&amp;lang\">&lt;x&gt;\u{FFFD}\n</code></pre>\n",
         out.items,
     );
+}
+
+fn renderDocOpts(doc: *document.Document, options: RenderOptions) !std.ArrayList(u8) {
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try render(testing.allocator, &aw.writer, doc, options);
+    return aw.toArrayList();
+}
+
+fn addHeadingText(doc: *document.Document, h: *document.Node, text: []const u8) !void {
+    try addText(doc, h, text);
+}
+
+test "html: heading ids slug the plain-text content and honor IAL ids" {
+    {
+        // Auto id from the heading's text (a code span contributes its
+        // content; an entity decodes before slugging).
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const h = try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = .{ .level = 1 } });
+        try doc.appendChild(doc.root, h);
+        try addText(&doc, h, "Hello, ");
+        try doc.appendChild(h, try doc.createNode(.code_span, .{ .start = 0, .end = 0 }, .{ .code_span = "World" }));
+        try addText(&doc, h, " &amp; Co!");
+        var out = try renderDocOpts(&doc, .{ .heading_ids = true });
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<h1 id=\"hello-world-co\">Hello, <code>World</code> &amp; Co!</h1>\n", out.items);
+    }
+    {
+        // An explicit IAL id wins over the slug; class is emitted.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const h = try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{
+            .heading = .{ .level = 2, .id = "explicit", .class = "cls" },
+        });
+        try doc.appendChild(doc.root, h);
+        try addHeadingText(&doc, h, "Whatever");
+        var out = try renderDocOpts(&doc, .{ .heading_ids = true });
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<h2 id=\"explicit\" class=\"cls\">Whatever</h2>\n", out.items);
+    }
+    {
+        // Without the option, no ids at all.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const h = try doc.createNode(.heading, .{ .start = 0, .end = 0 }, .{ .heading = .{ .level = 1 } });
+        try doc.appendChild(doc.root, h);
+        try addHeadingText(&doc, h, "Hello");
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<h1>Hello</h1>\n", out.items);
+    }
+}
+
+test "html: footnote refs and section render in first-reference order" {
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(doc.root, p);
+    try addText(&doc, p, "Hi");
+    try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "second" } }));
+    try addText(&doc, p, " and ");
+    try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "syntax" } }));
+    try addText(&doc, p, ".");
+
+    // Definitions, in definition order (rendered in first-reference order).
+    const def1 = try doc.createNode(.footnote, .{ .start = 0, .end = 0 }, .none);
+    const p1 = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(def1, p1);
+    try addText(&doc, p1, "First body");
+    try doc.footnotes.append(doc.allocator(), .{ .label = "syntax", .node = def1 });
+
+    const def2 = try doc.createNode(.footnote, .{ .start = 0, .end = 0 }, .none);
+    const p2 = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(def2, p2);
+    try addText(&doc, p2, "Second body");
+    try doc.footnotes.append(doc.allocator(), .{ .label = "second", .node = def2 });
+
+    var out = try renderDocOpts(&doc, .{ .footnotes = true });
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>Hi<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" data-footnote-ref>1</a></sup> and <sup class=\"footnote-ref\"><a href=\"#fn-2\" id=\"fnref-2\" data-footnote-ref>2</a></sup>.</p>\n" ++
+            "<section class=\"footnotes\" data-footnotes>\n" ++
+            "<ol>\n" ++
+            "<li id=\"fn-1\">\n" ++
+            "<p>Second body <a href=\"#fnref-1\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1\" aria-label=\"Back to reference 1\">↩</a></p>\n" ++
+            "</li>\n" ++
+            "<li id=\"fn-2\">\n" ++
+            "<p>First body <a href=\"#fnref-2\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"2\" aria-label=\"Back to reference 2\">↩</a></p>\n" ++
+            "</li>\n" ++
+            "</ol>\n" ++
+            "</section>\n",
+        out.items,
+    );
+
+    // Without the option, refs with labels render literally.
+    var out2 = try renderDoc(&doc);
+    defer out2.deinit(testing.allocator);
+    try testing.expect(std.mem.indexOf(u8, out2.items, "footnote-ref") == null);
+}
+
+test "html: repeated footnote references get unique ids and one backref each" {
+    // Regression (issue #44): every reference to the same footnote used
+    // to emit the same `id="fnref-N"` (invalid HTML: duplicate ids break
+    // getElementById and fragment navigation), and only the first
+    // reference got a backref. The second reference to a footnote is now
+    // `fnref-N-2`, the third `fnref-N-3`, and the footnote body emits one
+    // backref per reference, each pointing at its own reference id.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(doc.root, p);
+    try addText(&doc, p, "Alpha claim ");
+    try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "a" } }));
+    try addText(&doc, p, ". Beta claim ");
+    try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "a" } }));
+    try addText(&doc, p, ". Gamma claim ");
+    try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "a" } }));
+    try addText(&doc, p, ".");
+
+    const p2 = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(doc.root, p2);
+    try addText(&doc, p2, "Delta claim ");
+    try doc.appendChild(p2, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "b" } }));
+    try addText(&doc, p2, ". Epsilon claim ");
+    try doc.appendChild(p2, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "b" } }));
+    try addText(&doc, p2, ".");
+
+    const def_a = try doc.createNode(.footnote, .{ .start = 0, .end = 0 }, .none);
+    const pa = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(def_a, pa);
+    try addText(&doc, pa, "First source");
+    try doc.footnotes.append(doc.allocator(), .{ .label = "a", .node = def_a });
+
+    const def_b = try doc.createNode(.footnote, .{ .start = 0, .end = 0 }, .none);
+    const pb = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(def_b, pb);
+    try addText(&doc, pb, "Second source");
+    try doc.footnotes.append(doc.allocator(), .{ .label = "b", .node = def_b });
+
+    var out = try renderDocOpts(&doc, .{ .footnotes = true });
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>Alpha claim <sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" data-footnote-ref>1</a></sup>. Beta claim <sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1-2\" data-footnote-ref>1</a></sup>. Gamma claim <sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1-3\" data-footnote-ref>1</a></sup>.</p>\n" ++
+            "<p>Delta claim <sup class=\"footnote-ref\"><a href=\"#fn-2\" id=\"fnref-2\" data-footnote-ref>2</a></sup>. Epsilon claim <sup class=\"footnote-ref\"><a href=\"#fn-2\" id=\"fnref-2-2\" data-footnote-ref>2</a></sup>.</p>\n" ++
+            "<section class=\"footnotes\" data-footnotes>\n" ++
+            "<ol>\n" ++
+            "<li id=\"fn-1\">\n" ++
+            "<p>First source <a href=\"#fnref-1\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1\" aria-label=\"Back to reference 1\">↩</a> <a href=\"#fnref-1-2\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1-2\" aria-label=\"Back to reference 1-2\">↩</a> <a href=\"#fnref-1-3\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1-3\" aria-label=\"Back to reference 1-3\">↩</a></p>\n" ++
+            "</li>\n" ++
+            "<li id=\"fn-2\">\n" ++
+            "<p>Second source <a href=\"#fnref-2\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"2\" aria-label=\"Back to reference 2\">↩</a> <a href=\"#fnref-2-2\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"2-2\" aria-label=\"Back to reference 2-2\">↩</a></p>\n" ++
+            "</li>\n" ++
+            "</ol>\n" ++
+            "</section>\n",
+        out.items,
+    );
+
+    // Every reference id is unique: the fnref- prefix never repeats.
+    var count: usize = 0;
+    for (out.items, 0..) |_, i| {
+        if (std.mem.startsWith(u8, out.items[i..], "id=\"fnref-")) count += 1;
+    }
+    try testing.expectEqual(@as(usize, 5), count);
+}
+
+test "html: render without footnote context never frees an uninitialized map" {
+    // Regression: the footnote-numbering table was left `undefined` whenever
+    // the footnotes option was off (or on with no definitions), yet `deinit`
+    // ran unconditionally. Freeing an uninitialized managed HashMap reads the
+    // garbage `pointer_stability` mutex and aborts on platforms/stack states
+    // where that garbage is non-zero (observed on Linux CI; benign on macOS).
+    // Every render path must construct the map with a real allocator.
+    {
+        // Default options, no footnotes anywhere.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+        try doc.appendChild(doc.root, p);
+        try addText(&doc, p, "No footnotes here.");
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>No footnotes here.</p>\n", out.items);
+    }
+    {
+        // Option enabled but the document defines no footnotes.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+        try doc.appendChild(doc.root, p);
+        try addText(&doc, p, "Plain paragraph.");
+        var out = try renderDocOpts(&doc, .{ .footnotes = true });
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>Plain paragraph.</p>\n", out.items);
+    }
+    {
+        // Definitions present but the option off: refs render literally and
+        // the numbering table is still the empty-initialized path.
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+        try doc.appendChild(doc.root, p);
+        try doc.appendChild(p, try doc.createNode(.footnote_ref, .{ .start = 0, .end = 0 }, .{ .footnote_ref = .{ .label = "x" } }));
+        const def = try doc.createNode(.footnote, .{ .start = 0, .end = 0 }, .none);
+        try doc.footnotes.append(doc.allocator(), .{ .label = "x", .node = def });
+        var out = try renderDoc(&doc);
+        defer out.deinit(testing.allocator);
+        try testing.expect(std.mem.indexOf(u8, out.items, "footnote-ref") == null);
+    }
+}
+
+test "html: definition lists render dl/dt/dd with tight single paragraphs" {
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+
+    const dl = try doc.createNode(.definition_list, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(doc.root, dl);
+
+    const dt = try doc.createNode(.definition_term, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(dl, dt);
+    try addText(&doc, dt, "Term");
+
+    const dd = try doc.createNode(.definition_body, .{ .start = 0, .end = 0 }, .none);
+    try doc.appendChild(dl, dd);
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(dd, p);
+    try addText(&doc, p, "Definition");
+
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<dl>\n<dt>Term</dt>\n<dd>Definition</dd>\n</dl>\n", out.items);
 }

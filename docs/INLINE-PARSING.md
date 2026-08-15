@@ -25,7 +25,11 @@ stack: unescaped `[`/`]` become scan items, a `]` whose nearest `[` is
 followed by a valid `(...)` splices the range into a `link` item, every
 earlier `[` dies (links cannot contain links), and link text is matched as
 a fresh inline scope (the spec's "process emphasis with the `[` opener as
-stack_bottom"). Reference links required a two-phase restructure: link
+stack_bottom"). When the spliced range's last item extends past the
+closing paren/`]` (e.g. `[foo](/uri) and more`), its tail is re-appended
+as literal text **after** the shrink that consumes the construct — a bug
+that previously dropped all inline content after a link (`table-inline-content`
+and `link-trailing-text` fixtures lock this). Reference links required a two-phase restructure: link
 reference definitions (§4.7) are collected during the block pass (before
 any inline parsing, since a use may precede its definition), and the
 inline pass then resolves the full `[text][label]`, collapsed `[text][]`,

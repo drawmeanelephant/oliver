@@ -153,10 +153,24 @@ pub const Tag = enum {
     /// "Acronyms"): renders `<acronym title="…">CSS</acronym>`. Leaf:
     /// `data.acronym` holds the letters and the definition title.
     acronym,
+    /// A Markdown definition list (Pandoc-style extension): container whose
+    /// children are alternating `.definition_term` and `.definition_body`
+    /// nodes, rendered as `<dl><dt>…</dt><dd>…</dd>…</dl>`.
+    definition_list,
+    /// A definition list term: container whose children are inlines (like a
+    /// heading).
+    definition_term,
+    /// A definition list body: container whose children are blocks (the
+    /// definition content).
+    definition_body,
+    /// A footnote definition body (Markdown `[^label]:` extension): a
+    /// container whose children are blocks. Never a document child — the
+    /// renderer emits it inside the footnotes section.
+    footnote,
 
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
-            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => true,
+            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => true,
             .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
         };
     }
@@ -164,7 +178,7 @@ pub const Tag = enum {
     pub fn isInline(self: Tag) bool {
         return switch (self) {
             .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
-            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell => false,
+            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => false,
         };
     }
 };
@@ -182,8 +196,10 @@ pub const Data = union(enum) {
     /// `.heading`: level, 1..6, plus the Textile block attributes
     /// (`hN(...).`/`hN{...}.` signatures); Markdown headings carry none.
     heading: Heading,
-    /// `.footnote_ref`: the footnote number (Textile `[N]` references).
-    footnote_ref: u16,
+    /// `.footnote_ref`: the footnote reference payload. Textile `[N]`
+    /// references carry a `number`; Markdown `[^label]` references carry
+    /// the label (numbered at render time in first-reference order).
+    footnote_ref: FootnoteRef,
     /// `.acronym`: the Textile acronym (`CSS(Cascading Style Sheets)`, Hobix
     /// "Acronyms"): the uppercase letters (a source slice, verbatim) and
     /// the definition as the `title` (arena-owned, like link/image
@@ -291,10 +307,39 @@ pub const BlockQuote = struct {
 };
 
 /// The payload of a `.heading` node: the level (1..6) and the Textile
-/// block attributes.
+/// block attributes, plus the optional Markdown heading-attribute-list
+/// (IAL) `id` and `class` (`## Heading {#id .class}` extension). When
+/// `heading_ids` rendering is enabled, an absent explicit `id` is replaced
+/// by the GFM-style slug of the heading's text.
 pub const Heading = struct {
     level: u8,
     attrs: []const Attribute = &.{},
+    /// Markdown IAL `{#id}`; null when absent. Raw source slice (escapes
+    /// and entities are not resolved).
+    id: ?[]const u8 = null,
+    /// Markdown IAL `{.class}`; null when absent. Raw source slice.
+    class: ?[]const u8 = null,
+};
+
+/// The payload of a `.footnote_ref` node.
+pub const FootnoteRef = struct {
+    /// Markdown `[^label]` reference label, or empty for a Textile `[N]`
+    /// reference. The renderer numbers Markdown references in
+    /// first-reference order.
+    label: []const u8 = "",
+    /// Textile footnote number (`[N]`, rendered directly). Unused for
+    /// Markdown references.
+    number: u16 = 0,
+};
+
+/// A Markdown footnote definition (`[^label]:` extension): the (exact,
+/// case-sensitive) label and the `.footnote` container node holding the
+/// definition's blocks. Definitions never appear in the document body;
+/// they are registered here and rendered at the end of the document when
+/// the `footnotes` render option is enabled.
+pub const FootnoteDef = struct {
+    label: []const u8,
+    node: *Node,
 };
 
 /// The payload of a `.code_block` leaf. `content` uses `\n` line endings and
@@ -482,6 +527,9 @@ pub const Document = struct {
     /// Borrowed input; text payloads slice into it.
     src: source.Source,
     root: *Node,
+    /// Markdown footnote definitions, in definition order. Arena-owned;
+    /// the arena reset releases them with everything else.
+    footnotes: std.ArrayList(FootnoteDef) = .empty,
 
     pub fn init(backing: std.mem.Allocator, src: source.Source) !Document {
         var arena = std.heap.ArenaAllocator.init(backing);

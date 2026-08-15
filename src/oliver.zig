@@ -68,9 +68,18 @@ pub const Dialect = enum {
     textile,
 };
 
-/// Parse options. Empty in the vertical slice; grows with later milestones
-/// (raw HTML policy, reference links, tab handling, ...).
-pub const ParseOptions = struct {};
+/// Markdown dialect extensions. All are **off by default**: the Markdown
+/// frontend is byte-exact CommonMark 0.31.2 unless a consumer opts in, so
+/// the CommonMark conformance corpus stays green. Each extension is a
+/// documented, principled addition with its own contract doc and tests
+/// (footnotes, definition lists, heading attribute lists, GFM
+/// strikethrough; see `markdown.Options` and docs/MARKDOWN-EXTENSIONS.md).
+pub const MarkdownOptions = markdown.Options;
+
+/// Parse options. Markdown extensions are off by default.
+pub const ParseOptions = struct {
+    markdown: MarkdownOptions = .{},
+};
 
 /// Failures that are not markup interpretation: the caller's problem.
 pub const ParseError = error{
@@ -105,7 +114,6 @@ pub fn parse(
     dialect: Dialect,
     options: ParseOptions,
 ) ParseError!ParseResult {
-    _ = options;
     if (input.len > source.max_input_len) return error.InputTooLarge;
 
     var result = try ParseResult.init(allocator, input);
@@ -115,7 +123,7 @@ pub fn parse(
     defer diags.deinit(result.document.allocator());
 
     switch (dialect) {
-        .markdown => try markdown.parse(&result.document, &diags),
+        .markdown => try markdown.parse(&result.document, &diags, options.markdown),
         .textile => try textile.parse(&result.document, &diags),
     }
     result.diagnostics = diags.items;
