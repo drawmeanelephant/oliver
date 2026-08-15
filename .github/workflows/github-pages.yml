@@ -76,6 +76,10 @@ jobs:
           path: boris
           fetch-depth: 1
 
+      # GitHub emits a Node 20 deprecation warning for this action: v2.2.1
+      # is the latest release and still declares a node20 runtime (GitHub
+      # force-runs it on Node 24). Benign until mlugg publishes a node24
+      # release; do not chase the warning by switching actions.
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
@@ -361,6 +365,8 @@ jobs:
           path: boris
           fetch-depth: 1
 
+      # Same pinned action and same benign Node 20 deprecation warning as
+      # the build job's Install Zig step (see comment above).
       - name: Install Zig for deployment observer
         if: ${{ inputs.audit_deployment == true }}
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
