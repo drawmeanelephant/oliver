@@ -186,7 +186,7 @@ pub fn main(init: std.process.Init) !u8 {
         },
         // `--version` is a requested outcome like `--help`: print the
         // version and the embedded source commit, then exit 0.
-        error.Version => return version(),
+        error.Version => return version(init),
         error.Usage => return usage(),
     };
     const profile = cfg.profile;
@@ -301,12 +301,15 @@ fn usage() u8 {
 
 /// `--version` is a requested outcome: print the package version and, for
 /// CI builds that embedded one, the exact source commit, then exit 0.
-fn version() u8 {
-    if (build_options.commit.len == 0) {
-        std.debug.print("oliver {s}\n", .{build_options.version});
-    } else {
-        std.debug.print("oliver {s} (commit {s})\n", .{ build_options.version, build_options.commit });
-    }
+/// Written to stdout (not stderr) so a consumer can parse it: an
+/// installer asserts the reported commit equals its pin.
+fn version(init: std.process.Init) u8 {
+    const text = if (build_options.commit.len == 0)
+        std.fmt.allocPrint(init.gpa, "oliver {s}\n", .{build_options.version}) catch return 1
+    else
+        std.fmt.allocPrint(init.gpa, "oliver {s} (commit {s})\n", .{ build_options.version, build_options.commit }) catch return 1;
+    defer init.gpa.free(text);
+    std.Io.File.stdout().writeStreamingAll(init.io, text) catch return 1;
     return 0;
 }
 
