@@ -38,6 +38,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      # GitHub emits a Node 20 deprecation warning for this action: v2.2.1
+      # is the latest release and still declares a node20 runtime (GitHub
+      # force-runs it on Node 24). Benign until mlugg publishes a node24
+      # release; do not chase the warning by switching actions.
       - name: Install Zig 0.16.0
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:

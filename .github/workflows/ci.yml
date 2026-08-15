@@ -16,6 +16,11 @@ jobs:
       # ziglang/setup-zig was deleted in the Zig org's GitHub->Codeberg
       # migration (Nov 2025); mlugg/setup-zig is its maintained successor
       # and a drop-in replacement supporting the same `version` input.
+      #
+      # GitHub emits a Node 20 deprecation warning for this action: v2.2.1
+      # is the latest release and still declares a node20 runtime (GitHub
+      # force-runs it on Node 24). Benign until mlugg publishes a node24
+      # release; do not chase the warning by switching actions.
       - name: Install Zig 0.16.0
         uses: mlugg/setup-zig@v2
         with:
