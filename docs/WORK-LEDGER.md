@@ -49,7 +49,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Markdown extension worker | E1 modular wikilinks | `Options.wikilinks` inline scan → `.wikilink` leaf (`target`/`label`) + resolver-aware render arm (default: target percent-encoded as the href, `label orelse target` as text; docs/WIKILINKS.md); Markdown fixtures; Textile and the CommonMark corpus untouched | after F1 (v0.5) | implemented on main (issue #64) |
 | Markdown extension worker | E2 callouts/admonitions | `Options.callouts` recognition on the container-block quote path; `.block_quote` callout payload (`type`/`title`/`title_nodes`) + `<div class="callout callout-<type>">` render arm (docs/CALLOUTS.md); Markdown fixtures; corpus untouched | after E1 (v0.6) | implemented on main (issue #65) |
 | shared worker | E3 smart typography | extract Textile's `replaceChars`/`hasCharMacroTrigger` machinery into one shared module (`src/typography.zig`; two callers, Textile byte-identical); `Options.smartypants` text pass with the Textile exemption set (docs/SMARTY.md); Markdown fixtures | after F1/E1 (v1.0) | implemented on main (issue #67) |
-| shared worker | E4 CLI extension surface | `oliver render --from markdown` exposes the full extension surface as flags (`--wikilinks`, `--callouts`, `--smartypants`, `--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough` — scoped to render + Markdown) plus `--frontmatter yaml|toml` on any render frontend (threaded into the shared `markdownParseOptions` / `cooklangParseOptions` / `renderOptionsFor` seams; `renderWith` is the one render path shared by `main` and the tests); 5 new CLI tests (flag scoping, frontmatter validation, one end-to-end render per extension incl. the legacy four and cooklang frontmatter); usage text + README + TESTS + CAPABILITIES + MARKDOWN-EXTENSIONS | after the extension wave (issue #74) | this PR |
+| shared worker | E4 CLI extension surface | `oliver render --from markdown` exposes the full extension surface as flags (`--wikilinks`, `--callouts`, `--smartypants`, `--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--heading-ids` — scoped to render + Markdown) plus `--frontmatter yaml|toml` on any render frontend (threaded into the shared `markdownParseOptions` / `cooklangParseOptions` / `renderOptionsFor` seams; `renderWith` is the one render path shared by `main` and the tests); 6 new CLI tests (flag scoping, frontmatter validation, one end-to-end render per extension incl. the legacy four, heading ids, and cooklang frontmatter); usage text + README + TESTS + CAPABILITIES + MARKDOWN-EXTENSIONS | after the extension wave (issue #74) | merged (PR #83) |
 | Cooklang worker | CK6 string-quantity classify/scale + mixed numbers | public `classifyQuantity` / `parseFactor` / `scaleAmount` over authored amount strings (the exact-rational path, not `parseQuantity`'s f64 decimal arm); `scaleRecipe` becomes a caller of `scaleAmount` on ingredient quantities only; mixed `1 1/2` is a canonical scalable input (emits integer / fraction / terminating decimal); timers/cookware/refs still never scale; `scale-mixed` fixture; docs/COOKLANG.md §11 | after CK3 (issue #76; lets consumers delete a forked string scale) | merged (PR #77) |
 | Cooklang worker | CK7 scale edge-case hardening | review findings on the merged CK6 surface (issues #79–#81): `parseMixedNumber` trims leading/trailing ASCII space/tab (issue #79); `familyOfAmount` reads the decimal family from the source form exactly — no f64/i64 probe, terminating decimals at any magnitude (issue #80); `ScaledAmount.changed` distinguishes a rewrite from an overflow passthrough (issue #81); 3 unit tests pin the whitespace battery, the >i64 terminating cases, and the changed/passthrough triggers; docs/COOKLANG.md §11 + FEATURE-MATRIX + ARCHITECTURE + CLEANROOM session 29 | after CK6 | this PR |
 
@@ -1416,9 +1416,10 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 
 - **Objective:** expose the Markdown extension surface through
   `oliver render` — the four new extensions (wikilinks, callouts,
-  smartypants, frontmatter) and the four older parse options
-  (footnotes, definition lists, heading attributes, strikethrough) —
-  which all shipped library-only.
+  smartypants, frontmatter), the four older parse options (footnotes,
+  definition lists, heading attributes, strikethrough), and the
+  render-side `--heading-ids` (GFM-style auto heading ids) — which
+  all shipped library-only.
 - **Normative sources:** the extensions' own contracts
   (docs/WIKILINKS.md, CALLOUTS.md, SMARTY.md, FRONTMATTER.md,
   MARKDOWN-EXTENSIONS.md); no new markup semantics.
@@ -1431,13 +1432,14 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   is the one markdown/textile render path shared by `main` and the
   tests, so the tested path is the shipped path.
 - **Acceptance:** `render --from markdown --wikilinks --callouts
-  --smartypants` renders all three; `--frontmatter yaml` strips the
-  fence on any frontend; the flags are rejected on textile/cooklang
-  render and on serialize/scale/menu; `--frontmatter json` and a
-  duplicate `--frontmatter` are rejected.
-- **Tests:** 5 CLI tests (flag scoping, frontmatter validation, one
-  end-to-end render per extension, the legacy four, cooklang
-  frontmatter). 365/365, 652/652, 60/60 re-verified.
+  --smartypants` renders all three; `--heading-ids` slugs every
+  heading; `--frontmatter yaml` strips the fence on any frontend; the
+  flags are rejected on textile/cooklang render and on
+  serialize/scale/menu; `--frontmatter json` and a duplicate
+  `--frontmatter` are rejected.
+- **Tests:** 6 CLI tests (flag scoping, frontmatter validation, one
+  end-to-end render per extension, the legacy four, heading ids,
+  cooklang frontmatter). 366/366, 652/652, 60/60 re-verified.
 - **Parallelism:** yes; parser and renderer untouched.
 - **Integration:** after the extension wave; gates re-verified.
 - **State:** this PR (issue #74).

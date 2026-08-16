@@ -1179,7 +1179,7 @@ against `oliver render --from textile` during this wrap-up.
 | `notextile.` raw block | 2 | implemented (T25) | §23 |
 | inline composition (mixed families) | 1 | implemented (T4) | §3 |
 
-**105 fixture pairs, 365/365 tests, 652/652 CommonMark.** The
+**105 fixture pairs, 366/366 tests, 652/652 CommonMark.** The
 convergence pairs in `tests/fixtures_test.zig` additionally prove the
 shared renderer is byte-identical across dialects (Textile `*x*` ↔
 Markdown `**x**`, `_x_` ↔ `*x*`, `"x":u` ↔ `[x](u)`, `!img.png!` ↔
