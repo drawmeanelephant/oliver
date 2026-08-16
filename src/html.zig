@@ -308,6 +308,39 @@ fn pushChildren(
         try stack.append(gpa, .{ .marker = "<thead>\n" });
         return;
     }
+    // A callout (extension): the title's inline nodes render first
+    // (wrapped by the `<div class="callout-title">` opened in `writeOpen`
+    // and closed by the marker), then the body blocks — the quote's
+    // `children` are pure blocks (docs/CALLOUTS.md §4–§5).
+    if (node.tag == .block_quote and node.data.block_quote.callout_type != null) {
+        const bq = node.data.block_quote;
+        var i = node.children.items.len;
+        while (i > 0) {
+            i -= 1;
+            try stack.append(gpa, .{ .enter = .{
+                .node = node.children.items[i],
+                .tight_item = false,
+                .suppress_p = false,
+                .prefix_newline = false,
+                .footnote_backref = 0,
+            } });
+        }
+        if (bq.callout_title_nodes.len > 0) {
+            try stack.append(gpa, .{ .marker = "</div>\n" });
+            var ti = bq.callout_title_nodes.len;
+            while (ti > 0) {
+                ti -= 1;
+                try stack.append(gpa, .{ .enter = .{
+                    .node = bq.callout_title_nodes[ti],
+                    .tight_item = false,
+                    .suppress_p = false,
+                    .prefix_newline = false,
+                    .footnote_backref = 0,
+                } });
+            }
+        }
+        return;
+    }
     // A definition body renders its direct paragraphs like a tight list
     // item: a single-paragraph body is `<dd>text</dd>` (no `<p>`), while a
     // multi-block body keeps `<p>` wrappers (docs/MARKDOWN-EXTENSIONS.md).
@@ -386,16 +419,33 @@ fn writeOpen(
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .block_quote => {
-            try writer.writeAll("<blockquote");
-            if (node.data.block_quote.cite) |cite| {
-                // `bq.:URL` citation: the cite attribute follows the link
-                // href policy (percent-encode + HTML-escape).
-                try writer.writeAll(" cite=\"");
-                try writeEscapedHref(writer, cite);
-                try writer.writeByte('\"');
+            const bq = node.data.block_quote;
+            if (bq.callout_type) |ctype| {
+                // Callout (extension, docs/CALLOUTS.md §5): a deliberate
+                // element change from `<blockquote>` to the
+                // Obsidian/admonition `<div class="callout callout-<type>">`
+                // convention; `<div>` is a valid XHTML container. The
+                // title, when present, opens inline here; its close is
+                // emitted by a marker frame between the title nodes and
+                // the body children (`pushChildren`).
+                try writer.writeAll("<div class=\"callout callout-");
+                try writeEscaped(writer, ctype);
+                try writer.writeAll("\">\n");
+                if (bq.callout_title_nodes.len > 0) {
+                    try writer.writeAll("<div class=\"callout-title\">");
+                }
+            } else {
+                try writer.writeAll("<blockquote");
+                if (bq.cite) |cite| {
+                    // `bq.:URL` citation: the cite attribute follows the
+                    // link href policy (percent-encode + HTML-escape).
+                    try writer.writeAll(" cite=\"");
+                    try writeEscapedHref(writer, cite);
+                    try writer.writeByte('\"');
+                }
+                try writeAttrs(writer, bq.attrs);
+                try writer.writeAll(">\n");
             }
-            try writeAttrs(writer, node.data.block_quote.attrs);
-            try writer.writeAll(">\n");
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .table => {
@@ -750,7 +800,15 @@ fn writeOpen(
 fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, options: RenderOptions, footnote_backref: u32, fn_ctx: *const Footnotes) !void {
     switch (node.tag) {
         .document, .footnote => {},
-        .block_quote => try writer.writeAll("</blockquote>\n"),
+        .block_quote => {
+            // Callout close: the wrapper div (the title div was closed by
+            // its marker frame; docs/CALLOUTS.md §5).
+            if (node.data.block_quote.callout_type != null) {
+                try writer.writeAll("</div>\n");
+            } else {
+                try writer.writeAll("</blockquote>\n");
+            }
+        },
         .table => {
             // The thead/tbody split is emitted by marker frames between the
             // rows; only the tail (tbody close, table close) is written here

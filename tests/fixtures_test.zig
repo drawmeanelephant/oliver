@@ -1503,6 +1503,26 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .input = @embedFile("fixtures/markdown/wikilink-escapes.md"),
         .expected = @embedFile("fixtures/markdown/wikilink-escapes.html"),
     },
+    .{
+        .name = "callout-basic",
+        .input = @embedFile("fixtures/markdown/callout-basic.md"),
+        .expected = @embedFile("fixtures/markdown/callout-basic.html"),
+    },
+    .{
+        .name = "callout-types",
+        .input = @embedFile("fixtures/markdown/callout-types.md"),
+        .expected = @embedFile("fixtures/markdown/callout-types.html"),
+    },
+    .{
+        .name = "callout-body",
+        .input = @embedFile("fixtures/markdown/callout-body.md"),
+        .expected = @embedFile("fixtures/markdown/callout-body.html"),
+    },
+    .{
+        .name = "callout-literal",
+        .input = @embedFile("fixtures/markdown/callout-literal.md"),
+        .expected = @embedFile("fixtures/markdown/callout-literal.html"),
+    },
 };
 
 const TextileFixture = struct {
@@ -2490,6 +2510,7 @@ fn renderExtHtml(input: []const u8) !std.ArrayList(u8) {
             .heading_attributes = true,
             .strikethrough = true,
             .wikilinks = true,
+            .callouts = true,
         },
     });
     defer result.deinit();

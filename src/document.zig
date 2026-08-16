@@ -315,6 +315,18 @@ pub const Paragraph = struct {
 pub const BlockQuote = struct {
     attrs: []const Attribute = &.{},
     cite: ?[]const u8 = null,
+    /// Callout (extension, docs/CALLOUTS.md): the normalized lowercase
+    /// type (`[!NOTE]` → `note`), an arena-owned copy; null for ordinary
+    /// blockquotes. Markdown sets it; Textile never does.
+    callout_type: ?[]const u8 = null,
+    /// The callout title's raw source bytes — the first content line's
+    /// remainder after `[!type] `, trimmed; null when there is no title.
+    /// Borrowed source slice.
+    callout_title: ?[]const u8 = null,
+    /// The title's inline-parsed nodes, arena-owned (`callout_title` is
+    /// the source; these are the parsed form, so emphasis/wikilinks work
+    /// in titles). Empty for ordinary blockquotes and titleless callouts.
+    callout_title_nodes: []*Node = &.{},
 };
 
 /// The payload of a `.heading` node: the level (1..6) and the Textile

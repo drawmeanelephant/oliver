@@ -596,3 +596,16 @@ docs/FRONTMATTER.md before any code and follow the documented,
 bounded-subset discipline — Oliver never fakes a reference YAML/TOML
 parser, and everything outside the subset stays raw with a diagnostic.
 No YAML or TOML parser implementation source was consulted.
+
+Session 26 (E2 callouts extension) provenance record: the
+`> [!type] Title` callout syntax is modeled on Obsidian's published,
+user-facing callout documentation (a user-facing syntax doc,
+clean-room allowed). The behavior contract was written before any code
+(docs/CALLOUTS.md) and pins the chosen shapes — recognition only on a
+blockquote's first content line with the `[!type]` marker immediately
+after the quote marker, the non-empty ASCII letters/digits/`-` type
+normalized to lowercase, the required separator, the inline-parsed
+title, and the deliberate `<div class="callout callout-<type>">`
+element change from `<blockquote>` (the Obsidian/admonition
+convention, with `<div>` a valid XHTML container). No Markdown or
+Textile parser implementation source was consulted.

@@ -247,6 +247,37 @@ wikilinks, per the contract in docs/WIKILINKS.md:
 
 ---
 
+## 7. Callouts (`parse: callouts`)
+
+Obsidian-style `> [!note] Title` callout blockquotes, per the contract
+in docs/CALLOUTS.md:
+
+- A leading `[!type]` immediately after the quote marker on a
+  blockquote's **first content line** turns the blockquote into a
+  semantic callout: the `.block_quote` node gains the payload
+  (`callout_type` normalized lowercase, `callout_title` source slice,
+  `callout_title_nodes` inline-parsed).
+- Rendering replaces the `<blockquote>` element with
+  `<div class="callout callout-<type>">` and, when a title is present,
+  emits `<div class="callout-title">` first — a deliberate element
+  change per the Obsidian/admonition convention (`<div>` is a valid
+  XHTML container, gate-verified). Byte-identical `<blockquote>` when
+  the payload is absent.
+- The type is a non-empty run of ASCII letters/digits/`-`, case-
+  insensitive; after the `]` a space/tab (or end of line) is required.
+  Unknown types still render as `callout-<type>` boxes.
+- The title is inline-parsed (emphasis and wikilinks work in titles);
+  the body is the rest of the blockquote through the container stack —
+  lists, code, nested containers, and callout-in-callout all work.
+- Malformed shapes (`[!note]x`, `[!]`, `[!no close`, a mid-line
+  `[!note]`, and any `[!type]` on a non-first line) stay literal.
+- Example: `> [!note] Title\n> body` →
+  `<div class="callout callout-note">\n<div class="callout-title">Title</div>\n<p>body</p>\n</div>\n`.
+- Fixtures: `tests/fixtures/markdown/callout-*.md`; unit tests in
+  `src/markdown.zig` and `tests/xhtml_test.zig`.
+
+---
+
 ## Interaction and precedence
 
 - Extensions compose: a heading with an IAL id renders that id even when
@@ -254,13 +285,16 @@ wikilinks, per the contract in docs/WIKILINKS.md:
   reference definitions and footnote definitions can lead the same
   paragraph (footnote definitions are tried first); a `[[x]]` wikilink
   wins over the `[x]` shortcut reference, and a heading containing a
-  wikilink slugs on the wikilink's label (or target).
-- Fenced code, code spans, HTML blocks, and raw HTML are opaque to all six
-  extensions (a `[^x]:` line inside a fence is code, not a definition; a
+  wikilink slugs on the wikilink's label (or target); a `[!type]` on a
+  blockquote's first content line turns it into a callout, and a `[[x]]`
+  in the callout title or body is a normal inline.
+- Fenced code, code spans, HTML blocks, and raw HTML are opaque to all
+  seven extensions (a `[^x]:` line inside a fence is code, not a
+  definition; a `[!note]` line inside a fence is code, not a callout; a
   `~~` pair inside a code span or fence is literal; a `[[x]]` inside a
   code span or autolink is literal).
 - In GFM table cells an unescaped `|` is a cell separator (GFM §4.10), so
   a pipe-label wikilink inside a cell needs `\|` (docs/WIKILINKS.md §7).
-- Fixtures: `tests/fixtures/markdown/ext-*.md` and
-  `tests/fixtures/markdown/wikilink-*.md` (parsed with all extensions
-  enabled) plus unit tests in `src/markdown.zig` and `src/html.zig`.
+- Fixtures: `tests/fixtures/markdown/ext-*.md`, `wikilink-*.md`, and
+  `callout-*.md` (parsed with all extensions enabled) plus unit tests in
+  `src/markdown.zig` and `src/html.zig`.
