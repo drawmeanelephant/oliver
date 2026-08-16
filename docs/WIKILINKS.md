@@ -121,7 +121,7 @@ policy (docs/ARCHITECTURE.md).
 - Both output profiles (`html`/`xhtml`) render identical structure: no
   void elements, no valueless attributes.
 
-## 7. Interaction with the other planned extensions
+## 7. Interaction with the other extensions
 
 - `smartypants`: the wikilink payloads are plain text and sit inside the
   exemption set (docs/SMARTY.md) — the label is not re-scanned.

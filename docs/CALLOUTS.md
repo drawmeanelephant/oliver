@@ -119,7 +119,7 @@ When the payload is set:
 - `[!note]` not at the start of the line content (leading whitespace
   after the marker).
 
-## 7. Interaction with the other planned extensions
+## 7. Interaction with the other extensions
 
 - `wikilinks`: a `[[x]]` in the title or body is a normal inline (the
   title is inline-parsed in the same inline pass).

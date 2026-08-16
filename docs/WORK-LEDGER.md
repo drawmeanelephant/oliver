@@ -48,7 +48,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | shared worker | F1 frontmatter extraction | `src/frontmatter.zig` sniff/strip pre-pass (YAML `---` / TOML `+++` at index 0) + documented bounded YAML/TOML subsets (docs/FRONTMATTER.md); `ParseResult.metadata` / `Recipe.metadata`; Cooklang `tryFrontmatter` convergence (raw/span contract intact); opt-in `ParseOptions.frontmatter` (default off — an index-0 `---` is today a §4.1 thematic break); out-of-subset payloads stay raw with a diagnostic; fixtures + docs; Markdown/Textile/Cooklang all receive the clean body | first of the extension wave (v0.5) | implemented on main (issue #66) |
 | Markdown extension worker | E1 modular wikilinks | `Options.wikilinks` inline scan → `.wikilink` leaf (`target`/`label`) + resolver-aware render arm (default: target percent-encoded as the href, `label orelse target` as text; docs/WIKILINKS.md); Markdown fixtures; Textile and the CommonMark corpus untouched | after F1 (v0.5) | implemented on main (issue #64) |
 | Markdown extension worker | E2 callouts/admonitions | `Options.callouts` recognition on the container-block quote path; `.block_quote` callout payload (`type`/`title`/`title_nodes`) + `<div class="callout callout-<type>">` render arm (docs/CALLOUTS.md); Markdown fixtures; corpus untouched | after E1 (v0.6) | implemented on main (issue #65) |
-| shared worker | E3 smart typography | extract Textile's `replaceChars`/`hasCharMacroTrigger` machinery into one shared module (two callers, Textile byte-identical); `Options.smartypants` text pass with the Textile exemption set (docs/SMARTY.md); Markdown fixtures | after F1/E1 (v1.0) | planned — issue #67 |
+| shared worker | E3 smart typography | extract Textile's `replaceChars`/`hasCharMacroTrigger` machinery into one shared module (`src/typography.zig`; two callers, Textile byte-identical); `Options.smartypants` text pass with the Textile exemption set (docs/SMARTY.md); Markdown fixtures | after F1/E1 (v1.0) | implemented on main (issue #67) |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1288,7 +1288,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   full suite, the 652/652 gate, and the Cooklang 60/60 gate are all
   re-verified.
 
-## E3 — Smart typography (`smartypants`) — planned
+## E3 — Smart typography (`smartypants`) — implemented
 
 - **Objective:** opt-in `smartypants` for CommonMark — the Textile
   character-replacement passes, one shared implementation, per issue #67
@@ -1296,32 +1296,44 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Normative source:** the already-documented Textile character-
   replacement contract (docs/TEXTILE-PARITY.md §13 + the T20 `{...}`
   macro table; clean-room sessions 10/13) — no new upstream material;
-  the extraction and chosen scope are recorded in a new clean-room
-  session.
+  the extraction and chosen scope are recorded in clean-room session 27
+  (docs/CLEANROOM.md).
 - **Dependencies:** the Textile `replaceChars`/`hasCharMacroTrigger`
   machinery (the borrow-or-copy contract), the inline text-node seam,
   the exemption set.
-- **Seams:** extraction into a shared module (`src/typography.zig`
-  proposal) with `src/textile.zig` as a caller (byte-identical output —
-  the Textile wall is the regression net); `src/markdown.zig`
-  (`Options.smartypants: bool = false`, applied to plain `.text` nodes
-  with the Textile exemption set: code spans/blocks, autolinks, link
-  destinations/titles, image src/alt/title, raw HTML / HTML-looking
-  `<...>`); Markdown fixtures `smartypants-*`; docs/SMARTY.md + nav.json;
-  FEATURE-MATRIX row.
+- **Seams:** the shared module `src/typography.zig` (extracted;
+  `typography.replace(doc, span, char_macros)` — the macro table is
+  enabled only by the Textile caller) with `src/textile.zig` as a
+  caller (byte-identical output — the Textile wall is the regression
+  net); `src/markdown.zig` (`Options.smartypants: bool = false`, applied
+  in `emitText` to plain `.text` nodes — the escape split exempts
+  `\"`/`\'`; code spans/blocks, autolinks, link destinations/titles,
+  image src/alt/title, raw HTML tags, wikilink payloads, and image alt
+  are exempt by construction); Markdown fixtures `smartypants-*`;
+  docs/SMARTY.md + nav.json; FEATURE-MATRIX row.
 - **Acceptance:** `"Hello," -- she said...` → `“Hello,” — she said…`;
   `2 x 4` → `2 × 4`; `(c)` → ©; apostrophes by position; exemptions
   pinned; the literal fallbacks (`---`, `....`, `(1/3)`, letter-touching
   hyphens) pinned; off by default — 652/652 + full suite green; Textile
   fixtures byte-identical after the extraction.
-- **Tests:** unit tests (replacement battery, exemptions, fallbacks,
-  borrow-vs-copy), 3+ Markdown fixture pairs, the Textile wall
+- **Tests:** unit tests (the replacement battery, braces-literal, escaped
+  quotes, exemptions, scopes, fallbacks, default-off), 3 Markdown
+  fixture pairs (`smartypants-basic`/`exempt`/`scopes`), an XHTML
+  well-formedness case under both profiles, the Textile wall
   re-verified.
 - **Parallelism:** no during the extraction (shared module);
   Markdown-side work may proceed once the module contract is fixed.
 - **Integration:** after F1/E1; the 652/652 gate and the Textile wall
   are re-verified.
-- **State:** planned — tracked as issue #67 (milestone v1.0).
+- **State:** implemented on main (issue #67). `src/typography.zig` now
+  owns the shared pass; the Textile machinery moved onto it with
+  byte-identical output (the fixture wall passed unchanged).
+  `markdown.Options.smartypants` lands the same pass on plain text in
+  every inline scope — headings (slug-safe: the non-ASCII replacement
+  bytes are dropped by slugify), link display text, list items, GFM
+  table cells, and callout titles/bodies — with the exemption set and
+  the borrow-or-copy contract intact; the full suite, the 652/652 gate,
+  and the Cooklang 60/60 gate are all re-verified.
 
 ## Deferred architectural cards
 
