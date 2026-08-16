@@ -326,5 +326,6 @@ in docs/SMARTY.md:
 - In GFM table cells an unescaped `|` is a cell separator (GFM §4.10), so
   a pipe-label wikilink inside a cell needs `\|` (docs/WIKILINKS.md §7).
 - Fixtures: `tests/fixtures/markdown/ext-*.md`, `wikilink-*.md`,
-  `callout-*.md`, and `smartypants-*.md` (parsed with all extensions
-  enabled) plus unit tests in `src/markdown.zig` and `src/html.zig`.
+  `callout-*.md`, `smartypants-*.md`, and the cross-extension
+  `cross-*.md` composition pairs (parsed with all extensions enabled)
+  plus unit tests in `src/markdown.zig` and `src/html.zig`.

@@ -148,7 +148,11 @@ policy (docs/ARCHITECTURE.md).
   trimming, labels), `wikilink-literal` (the §3 battery + the greedy
   closer `[[a]]]`), `wikilink-precedence` (`[[x]]` vs the `[x]` def,
   `[[foo]](/url)`, link-text demotion, code-span/autolink opacity),
-  `wikilink-escapes` (`\[[x]]`, `[[a\]b]]`).
+  `wikilink-escapes` (`\[[x]]`, `[[a\]b]]`). Cross-extension
+  compositions are pinned by `cross-callout-title` (a `[[x]]` inside a
+  callout title and body) and `cross-smartypants-scopes` (a heading
+  containing a wikilink slugs on the label: `# See [[Page Name]] now` →
+  `id="see-page-name-now"`).
 - Unit tests: node structure/spans, disabled behavior, malformed battery,
   greedy closer, link-text demotion, default + consumer resolver
   rendering, and a 10,000-wikilink determinism storm.

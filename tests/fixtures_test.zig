@@ -1538,6 +1538,21 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .input = @embedFile("fixtures/markdown/smartypants-scopes.md"),
         .expected = @embedFile("fixtures/markdown/smartypants-scopes.html"),
     },
+    .{
+        .name = "cross-callout-title",
+        .input = @embedFile("fixtures/markdown/cross-callout-title.md"),
+        .expected = @embedFile("fixtures/markdown/cross-callout-title.html"),
+    },
+    .{
+        .name = "cross-smartypants-scopes",
+        .input = @embedFile("fixtures/markdown/cross-smartypants-scopes.md"),
+        .expected = @embedFile("fixtures/markdown/cross-smartypants-scopes.html"),
+    },
+    .{
+        .name = "cross-callout-edges",
+        .input = @embedFile("fixtures/markdown/cross-callout-edges.md"),
+        .expected = @embedFile("fixtures/markdown/cross-callout-edges.html"),
+    },
 };
 
 const TextileFixture = struct {
