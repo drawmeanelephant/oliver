@@ -45,6 +45,10 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Cooklang worker | CK4 richer HTML policy | `src/cooklang_html.zig` grows from the bare article/steps vocabulary into the richer generic policy: an **ingredients index** (one `<li>` per distinct ingredient — exact case-sensitive name, first occurrence's quantity/units/preparation, first-appearance order, recipe-ref items, cookware/timers excluded, omitted when empty), timers as `<time class="timer" datetime="PT25M">` (ISO-8601 duration for whole-number quantities with recognized day/hour/minute/second units, case-insensitive; named timers render `name (3 minutes)`), unnamed sections omit the empty `<h2>`, preparations surfaced in the index; 2 unit tests (ISO durations, richer-policy structure); the 4 HTML fixture pairs regenerated under the new vocabulary; Markdown/Textile untouched | after CK3 (third stretch goal) | merged (PR #47) |
 | Cooklang worker | CK5 `.menu` view | `src/cooklang_menu.zig` — the explicit convenience layer: `.menu` files are valid Cooklang (no second parser), and `menuView` exposes the day/meal structure semantically (`Menu{ days }`, `Day{ name, date, references }`, `Reference{ path, quantity, units }`); trailing `(YYYY-MM-DD)` title dates (valid month/day), reference directives preserved as source text and never deduplicated/resolved, non-section top-level blocks ignored; `writeMenu` text dump shared by `oliver menu --from cooklang` and the `menu-basic` fixture (the conventions' own example); 6 unit tests; no meal-planning logic (shopping/scheduling/filesystem stay consumer-owned) | after CK4 (fourth stretch goal) | merged (PR #48) |
 | serializer worker | X1 XHTML output profile | an explicit XML-compatible serializer profile over the existing renderers (docs/XHTML.md): `OutputProfile` (`html` default, `xhtml`) in `src/html.zig` and `src/cooklang_html.zig` — same IR, same semantics, different serialization bytes (voids always XML-form under `.xhtml`; Cooklang forced line breaks become `<br />`); fail-closed raw-content policy (`.raw_html`, `.html_block`, Textile `pre.` → `error.RawHtmlNotXmlWellFormed`, with an actionable CLI hint); `--to html|xhtml` on `render` (rejected on serialize/scale/menu), testable `parseArgs`; public `oliver.OutputProfile`; paired fixtures, HTML-mode guard against the committed fixture wall, determinism checks, and a hermetic test-only well-formedness gate (`tests/xhtml_wellformed.zig` + `tests/xhtml_test.zig`) wired into `zig build test`; CommonMark 652/652 and Cooklang 60/60 unchanged; docs (XHTML.md, ARCHITECTURE, README, TESTS, CAPABILITIES, COOKLANG, index/nav) | after the Textile audit (T1–T25) + Cooklang wave | PR in review |
+| shared worker | F1 frontmatter extraction | new `src/frontmatter.zig` sniff/strip pre-pass (YAML `---` / TOML `+++` at index 0) + documented bounded YAML/TOML subsets (docs/FRONTMATTER.md); `ParseResult.metadata`; Cooklang `tryFrontmatter` convergence; opt-in `ParseOptions.frontmatter` (default off — an index-0 `---` is today a §4.1 thematic break); out-of-subset payloads stay raw with a diagnostic; fixtures + docs; Markdown/Textile/Cooklang all receive the clean body | first of the extension wave (v0.5) | planned — issue #66 |
+| Markdown extension worker | E1 modular wikilinks | `Options.wikilinks` inline scan → `.wikilink` leaf (`target`/`label`) + resolver-aware render arm (default: target percent-encoded as the href, `label orelse target` as text; docs/WIKILINKS.md); Markdown fixtures; Textile and the CommonMark corpus untouched | after F1 (v0.5) | implemented on main (issue #64) |
+| Markdown extension worker | E2 callouts/admonitions | `Options.callouts` recognition on the container-block quote path; `.block_quote` callout payload (`type`/`title`) + `<div class="callout callout-<type>">` render arm (docs/CALLOUTS.md); Markdown fixtures; corpus untouched | after E1 (v0.6) | planned — issue #65 |
+| shared worker | E3 smart typography | extract Textile's `replaceChars`/`hasCharMacroTrigger` machinery into one shared module (two callers, Textile byte-identical); `Options.smartypants` text pass with the Textile exemption set (docs/SMARTY.md); Markdown fixtures | after F1/E1 (v1.0) | planned — issue #67 |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1148,6 +1152,150 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   M5 to 651 supported / 1 not-yet / 0 divergences, and M6 to 652 supported /
   0 not-yet / 0 divergences (full conformance)
   (see the M4/M5/M6 cards below).
+
+## F1 — Frontmatter extraction (YAML / TOML) — planned
+
+- **Objective:** add a shared frontmatter pre-pass — sniff a `---` (YAML)
+  or `+++` (TOML) fence at index 0, strip it before dispatch, and expose
+  a parsed `metadata` object on the parse result for all three frontends
+  (Markdown, Textile, Cooklang), per issue #66 (v0.5, "The Green Pastures
+  Release").
+- **Normative source:** the user's specification (issue #66); the existing
+  Cooklang boundary contract (docs/COOKLANG.md §4, `tryFrontmatter`, the
+  `unclosed-frontmatter` diagnostic) and its "never faked as parsed YAML"
+  rule; the parsing is a **documented, bounded Oliver-chosen subset**, not
+  a reference YAML/TOML implementation (clean-room session to be
+  recorded).
+- **Dependencies:** `source.Lines` iteration; the Cooklang
+  `Frontmatter { raw, span }` model as the convergence target;
+  `ParseResult` gains `metadata`.
+- **Seams:** new `src/frontmatter.zig` (sniff, strip, subset parsers,
+  diagnostics); `oliver.parse` + `ParseResult` (markdown/textile);
+  `src/cooklang.zig` `tryFrontmatter` convergence; option plumbing
+  (`ParseOptions.frontmatter: enum { none, yaml, toml } = .none` — off by
+  default, because an index-0 `---` is today a §4.1 thematic break);
+  fixtures `frontmatter-*` across all three frontends; docs/FRONTMATTER.md
+  + nav.json; FEATURE-MATRIX rows (Markdown "front matter (extension)";
+  the Cooklang row updated from "boundary only").
+- **Acceptance:** `---\ntitle: Hello\n---\n\n# Doc` →
+  `metadata.title == "Hello"` with the body exactly `# Doc` →
+  `<h1>Doc</h1>`, across markdown, textile, and cooklang; the YAML subset
+  (scalars, quoted strings, lists, indented maps, empty `---\n---` without
+  panic); the TOML subset (`key = value`, tables, array-of-tables);
+  out-of-subset payloads stay raw with a structured diagnostic; an
+  unclosed opener degrades per the extended `unclosed-frontmatter`
+  contract; default options byte-identical — 652/652 + full suite green.
+- **Tests:** unit tests per subset + boundary shapes; fixture pairs per
+  frontend; a Cooklang convergence pair; determinism checks.
+- **Parallelism:** no while the shared pre-pass lands (it touches
+  `oliver.parse`); fixture prep may proceed independently.
+- **Integration:** first of the extension wave; after X1; the 652/652
+  gate is re-verified.
+- **State:** planned — tracked as issue #66 (milestone v0.5).
+
+## E1 — Modular wikilinks
+
+- **Objective:** opt-in `[[Page Name]]` / `[[Page Name|Custom Label]]`
+  inline wikilinks in the Markdown frontend, per issue #64 (v0.5).
+- **Normative source:** Obsidian's de-facto wikilink syntax (user-facing
+  documentation; clean-room session to be recorded) — no CommonMark/GFM/
+  Textile reference carries the syntax, so this is a consumer-driven
+  extension like footnotes/strikethrough.
+- **Dependencies:** the extensions seam (`markdown.Options`), the inline
+  scan → match → emit machinery, the link-bracket/autolink precedence
+  rules.
+- **Seams:** `src/markdown.zig` (`Options.wikilinks: bool = false`,
+  `[[` discovery ahead of link brackets), `src/document.zig` (new
+  `.wikilink` leaf, `data.wikilink = { target, label }`),
+  `src/html.zig` (optional comptime resolver + default percent-encoded
+  href; text = `label orelse target`), Markdown fixtures `wikilink-*`,
+  docs/WIKILINKS.md + nav.json, FEATURE-MATRIX row.
+- **Acceptance:** `[[Page Name]]` →
+  `<a href="Page%20Name">Page Name</a>` (default resolver) byte-pinned;
+  the label wins for visible text; a consumer resolver changes
+  href/text deterministically; opaque in code spans/blocks, autolinks,
+  link destinations/titles, image src/alt/title; every malformed shape
+  (unterminated, empty target, extra pipes, trailing bracket, nested
+  `[[`) stays literal and pinned; both resolver paths pass the XHTML
+  well-formedness gate; off by default — 652/652 + full suite green.
+- **Tests:** unit tests (node structure/spans, resolver paths, the
+  literal battery); 3+ fixture pairs; a 10,000-link storm.
+- **Parallelism:** yes; Markdown + model/renderer, Textile untouched.
+- **Integration:** after F1 (shares the extension seam); the 652/652
+  gate is re-verified.
+- **State:** implemented on main (issue #64). `markdown.Options.wikilinks`,
+  the `.wikilink` inline leaf, and the resolver-aware render arm
+  (`html.RenderOptions.wikilink_resolver` + `wikilink_resolver_ctx`)
+  landed with 4 fixture pairs (`wikilink-basic`/`literal`/`precedence`/
+  `escapes`) and unit tests for structure, disabled behavior, the
+  malformed battery, the greedy closer, link-text demotion, default +
+  consumer resolver rendering, and a 10,000-wikilink determinism storm;
+  the XHTML well-formedness gate covers both resolver paths
+  (tests/xhtml_test.zig). The 652/652 gate is re-verified (off by
+  default).
+
+## E2 — Callouts / admonitions — planned
+
+- **Objective:** opt-in `> [!note] Title` callout blockquotes in the
+  Markdown frontend, per issue #65 (v0.6, "The Obsidian Run").
+- **Normative source:** Obsidian's published callout syntax (user-facing
+  documentation; clean-room session to be recorded); the fallback
+  behavior is an ordinary §5.1 blockquote.
+- **Dependencies:** the container-block stack (§5.1), the extension
+  seam, the model/renderer attribute machinery.
+- **Seams:** `src/markdown.zig` (`Options.callouts: bool = false`;
+  `[!type]` recognition on the blockquote's first content line),
+  `src/document.zig` + `src/html.zig` (proposal: `.block_quote` gains
+  optional `callout_type`/`callout_title`, rendered
+  `<div class="callout callout-<type>">` + `<div class="callout-title">`
+  only when set — byte-identical `<blockquote>` otherwise), fixtures
+  `callout-*`, docs/CALLOUTS.md + nav.json, FEATURE-MATRIX row.
+- **Acceptance:** the `> [!note] Title` example byte-pinned;
+  case-insensitive types; unknown types as `note`; titleless callouts;
+  multi-paragraph bodies, lazy continuation, nested callouts, lists/code
+  inside bodies; non-callout shapes stay literal (extension off,
+  mid-line, non-first-line, no separating space, `[!]`/`[!two words]`);
+  the XHTML gate passes; off by default — 652/652 + full suite green.
+- **Tests:** unit tests (model payload, nesting, the literal battery);
+  3+ fixture pairs.
+- **Parallelism:** yes; Markdown + model/renderer, Textile untouched.
+- **Integration:** after E1; the 652/652 gate is re-verified.
+- **State:** planned — tracked as issue #65 (milestone v0.6).
+
+## E3 — Smart typography (`smartypants`) — planned
+
+- **Objective:** opt-in `smartypants` for CommonMark — the Textile
+  character-replacement passes, one shared implementation, per issue #67
+  (v1.0, "The Goodest Boy").
+- **Normative source:** the already-documented Textile character-
+  replacement contract (docs/TEXTILE-PARITY.md §13 + the T20 `{...}`
+  macro table; clean-room sessions 10/13) — no new upstream material;
+  the extraction and chosen scope are recorded in a new clean-room
+  session.
+- **Dependencies:** the Textile `replaceChars`/`hasCharMacroTrigger`
+  machinery (the borrow-or-copy contract), the inline text-node seam,
+  the exemption set.
+- **Seams:** extraction into a shared module (`src/typography.zig`
+  proposal) with `src/textile.zig` as a caller (byte-identical output —
+  the Textile wall is the regression net); `src/markdown.zig`
+  (`Options.smartypants: bool = false`, applied to plain `.text` nodes
+  with the Textile exemption set: code spans/blocks, autolinks, link
+  destinations/titles, image src/alt/title, raw HTML / HTML-looking
+  `<...>`); Markdown fixtures `smartypants-*`; docs/SMARTY.md + nav.json;
+  FEATURE-MATRIX row.
+- **Acceptance:** `"Hello," -- she said...` → `“Hello,” — she said…`;
+  `2 x 4` → `2 × 4`; `(c)` → ©; apostrophes by position; exemptions
+  pinned; the literal fallbacks (`---`, `....`, `(1/3)`, letter-touching
+  hyphens) pinned; off by default — 652/652 + full suite green; Textile
+  fixtures byte-identical after the extraction.
+- **Tests:** unit tests (replacement battery, exemptions, fallbacks,
+  borrow-vs-copy), 3+ Markdown fixture pairs, the Textile wall
+  re-verified.
+- **Parallelism:** no during the extraction (shared module);
+  Markdown-side work may proceed once the module contract is fixed.
+- **Integration:** after F1/E1; the 652/652 gate and the Textile wall
+  are re-verified.
+- **State:** planned — tracked as issue #67 (milestone v1.0).
 
 ## Deferred architectural cards
 

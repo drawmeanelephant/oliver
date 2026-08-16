@@ -64,7 +64,10 @@ their matching terminator, plus block-tag lines and whole-line tags
 ending at a blank line — all verbatim), GFM pipe tables (the §4.10
 extension in the Markdown frontend: header + delimiter rows, alignment
 colons, escaped `\|`, inline-parsed cells, `<table><thead><tbody>`
-output — docs/TABLES.md), entity and numeric character
+output — docs/TABLES.md), opt-in Markdown extensions (Pandoc-style
+footnotes, definition lists, heading attribute lists, GFM
+strikethrough, and Obsidian-style `[[wikilinks]]` — docs/MARKDOWN-EXTENSIONS.md,
+docs/WIKILINKS.md), entity and numeric character
 references (§2.5,
 named via the WHATWG entities table, decoded in text, link
 destinations/titles, info strings, and autolinks but never in code
@@ -135,6 +138,8 @@ attributes, and image modifiers — is
 [docs/TEXTILE-PARITY.md](docs/TEXTILE-PARITY.md).
 The GFM tables extension contract is
 [docs/TABLES.md](docs/TABLES.md).
+The wikilinks extension contract is
+[docs/WIKILINKS.md](docs/WIKILINKS.md).
 The Cooklang frontend's design contract, source hierarchy, provenance,
 model, diagnostics policy, and the Oliver/Boris boundary is
 [docs/COOKLANG.md](docs/COOKLANG.md).

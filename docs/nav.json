@@ -131,6 +131,30 @@
           "summary": "The GFM pipe-table extension."
         },
         {
+          "file": "WIKILINKS.md",
+          "title": "Wikilinks (extension)",
+          "audience": "dev",
+          "summary": "The opt-in `[[wikilinks]]` extension: shape, precedence, fallbacks, and the renderer resolver policy (issue #64, v0.5)."
+        },
+        {
+          "file": "CALLOUTS.md",
+          "title": "Callouts (extension)",
+          "audience": "dev",
+          "summary": "Pre-implementation contract for the opt-in `> [!note]` callout blockquote extension: recognition, model, rendering (issue #65)."
+        },
+        {
+          "file": "FRONTMATTER.md",
+          "title": "Front matter (extension)",
+          "audience": "dev",
+          "summary": "Pre-implementation contract for YAML/TOML front matter: detection, the bounded subset, the metadata model, Cooklang convergence (issue #66)."
+        },
+        {
+          "file": "SMARTY.md",
+          "title": "Smart typography (extension)",
+          "audience": "dev",
+          "summary": "Pre-implementation contract for the opt-in `smartypants` pass: the Textile replacement set, exemptions, CommonMark pins (issue #67)."
+        },
+        {
           "file": "IMAGES-MISSION.md",
           "title": "Images mission brief",
           "audience": "dev",

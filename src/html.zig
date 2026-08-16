@@ -73,6 +73,19 @@ pub const OutputProfile = enum {
     xhtml,
 };
 
+/// The result of a wikilink resolution (docs/WIKILINKS.md §5): the href
+/// and the visible text. Memory must outlive the render call (the caller's
+/// arena or static data); the renderer never frees it.
+pub const ResolvedWikilink = struct {
+    href: []const u8,
+    text: []const u8,
+};
+
+/// A wikilink resolver: a pure function of (target, label, ctx) with no
+/// hidden state, passed an opaque context value (the freestanding core has
+/// no closures). See `RenderOptions.wikilink_resolver`.
+pub const WikilinkResolver = *const fn (target: []const u8, label: ?[]const u8, ctx: ?*const anyopaque) ResolvedWikilink;
+
 pub const RenderOptions = struct {
     /// Emit void elements with a trailing slash (`<br />`) instead of the
     /// HTML5 form (`<br>`). Defaults to the CommonMark reference style.
@@ -93,6 +106,14 @@ pub const RenderOptions = struct {
     /// appended at the end of the document with the used definitions and
     /// their back-references. Off by default.
     footnotes: bool = false,
+    /// Resolve `.wikilink` nodes (the `wikilinks` parse extension,
+    /// docs/WIKILINKS.md §5). Null uses the default policy: the href is
+    /// the target through the standard href percent-encoding and the text
+    /// is `label orelse target`. A resolver is a pure function of its
+    /// inputs and returns memory that outlives the render call.
+    wikilink_resolver: ?WikilinkResolver = null,
+    /// The opaque context passed unchanged to `wikilink_resolver`.
+    wikilink_resolver_ctx: ?*const anyopaque = null,
 };
 
 /// Footnote rendering context: label → number (first-reference order) and
@@ -649,6 +670,24 @@ fn writeOpen(
             try writeEscaped(writer, node.data.autolink.label);
             try writer.writeAll("</a>");
         },
+        .wikilink => {
+            // Leaf tag (extension): one <a> with the resolved text.
+            // Resolution is a renderer policy (docs/WIKILINKS.md §5): the
+            // default percent-encodes the target as the href with `label
+            // orelse target` as the text; a consumer resolver overrides
+            // both. The href follows the link href policy; the text is
+            // HTML-escaped like text. No title, fixed attribute order.
+            const w = node.data.wikilink;
+            const resolved: ResolvedWikilink = if (options.wikilink_resolver) |res|
+                res(w.target, w.label, options.wikilink_resolver_ctx)
+            else
+                .{ .href = w.target, .text = w.label orelse w.target };
+            try writer.writeAll("<a href=\"");
+            try writeEscapedHref(writer, resolved.href);
+            try writer.writeAll("\">");
+            try writeEscaped(writer, resolved.text);
+            try writer.writeAll("</a>");
+        },
         .image => {
             // Void element: the whole tag is written on enter and no exit
             // frame is pushed (leaf tag, no children). `src` follows the
@@ -769,7 +808,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
+        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .wikilink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
     }
 }
 
@@ -874,6 +913,7 @@ fn collectHeadingText(gpa: std.mem.Allocator, node: *const document.Node, out: *
         .code_span => try out.appendSlice(gpa, node.data.code_span),
         .image => try out.appendSlice(gpa, node.data.image.alt),
         .autolink => try out.appendSlice(gpa, node.data.autolink.label),
+        .wikilink => try out.appendSlice(gpa, node.data.wikilink.label orelse node.data.wikilink.target),
         .soft_break, .hard_break => try out.append(gpa, ' '),
         .raw_html => {},
         .link, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span => {

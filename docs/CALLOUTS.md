@@ -1,0 +1,143 @@
+---
+published_at: 2026-08-16T00:00:00Z
+summary: Pre-implementation contract for the opt-in Obsidian-style callout extension (> [!note]) in the Markdown frontend.
+---
+
+# Callouts (extension) — contract
+
+**Status:** planned — contract only; nothing is parsed or rendered yet.
+Implementation is tracked as issue #65 (milestone v0.6, "The Obsidian
+Run"), ledger card E2, and the "callouts (extension)" row of the
+feature matrix (docs/FEATURE-MATRIX.md).  \
+**Modules:** `src/markdown.zig` (parse), `src/document.zig` (model),
+`src/html.zig` (render)  \
+**Options (proposed):** `markdown.Options.callouts: bool = false`
+
+Callouts are not part of CommonMark 0.31.2, GFM, or Textile. They are a
+consumer-driven extension modeled on Obsidian's published callout syntax
+(`> [!note] Title`), which is user-facing documentation and clean-room
+allowed; the provenance record is added to docs/CLEANROOM.md when the
+feature lands. With the extension **off** (default), `> [!note]` is an
+ordinary §5.1 blockquote whose first paragraph starts with the literal
+text `[!note]` — the corpus is untouched.
+
+## 1. Shape
+
+```markdown
+> [!note] Title here
+> Body line.
+> Another body line.
+```
+
+- A **leading `[!type]`** immediately after the blockquote marker on the
+  blockquote's **first content line** turns the blockquote into a
+  callout.
+- The **type** is a non-empty run of ASCII letters, digits, and `-`,
+  case-insensitive (`[!NOTE]`, `[!Note]`). `[!]` (empty) and `[!two
+  words]` (space) are not types → literal.
+- After the `]`, a space or tab (or end of line) is required; `[!note]x`
+  with no separator is not a callout → literal.
+- The **title** is the inline-parsed content of the remainder of the
+  first line after the separator (`Title here`); a line that is only
+  whitespace after `]` has no title.
+- The **body** is the rest of the blockquote: subsequent `>` lines, lazy
+  continuation, nested containers — exactly the §5.1 container-stack
+  extent. A truly blank line ends the callout (it ends the blockquote);
+  no new blank-line semantics are introduced.
+
+## 2. Recognition
+
+- Recognition happens only on the **first content line** of a blockquote,
+  after the §5.1 marker consumption (the `>` and its one following
+  column, which may be the space in `> [!note]` or the `[` itself in
+  `>[!note]` — both forms work).
+- The remaining line content must then start with `[!` — no leading
+  whitespace between the marker and the `[`.
+- `[!note]` on any non-first line of a blockquote is ordinary text.
+- A nested blockquote whose own first line is `[!type]` is a nested
+  callout (works through the container stack; callout-in-callout).
+- The `[!type]` marker bytes are consumed — never rendered as text.
+
+## 3. Unknown types
+
+- An unknown type is still a callout and renders the default
+  (note-styled) box. The normalized (lowercased) type is preserved in the
+  class `callout-<type>` (Obsidian's behavior), and the model keeps the
+  source type bytes, so consumers can style or detect any type.
+
+## 4. Model
+
+The `.block_quote` container gains an optional callout payload (the
+chosen approach: reusing the §5.1 container stack keeps nesting,
+laziness, list/quote composition, and nested callouts free):
+
+```zig
+data.block_quote = .{
+    .callout_type: ?[]const u8 = null,  // normalized lowercase type
+    .callout_title: ?[]const u8 = null, // inline content, arena-owned
+}
+```
+
+- `callout_type`/`callout_title` are null for ordinary blockquotes —
+  Markdown and Textile output is byte-identical.
+- A dedicated `.callout` tag was considered and rejected in this
+  contract: the container machinery is the same, and the payload keeps
+  the shared model convergent.
+
+## 5. Rendering
+
+When the payload is set:
+
+```html
+<div class="callout callout-note"><div class="callout-title">Title here</div><p>Body line.</p></div>
+```
+
+- The wrapper becomes `<div class="callout callout-<type>">` — a
+  deliberate element change from `<blockquote>` (the Obsidian/admonition
+  convention); `<div>` is a valid XHTML container.
+- The title, when present, renders as `<div class="callout-title">` as
+  the first child; when absent, no title div is emitted.
+- The body children render exactly as blockquote children do today
+  (paragraphs, lists, code, nested containers).
+- When the payload is absent: byte-identical `<blockquote>…</blockquote>`.
+- Both output profiles are identical in structure; no valueless
+  attributes (the XHTML well-formedness gate must pass).
+
+## 6. Fallbacks (all literal, pinned by fixtures)
+
+- The extension is off (default): `> [!note]` is an ordinary blockquote,
+  `[!note]` literal text in its first paragraph.
+- `[!note]` mid-line (`> text [!note]`), on a non-first line, or without
+  a separator after `]` (`[!note]x`).
+- Malformed types: `[!]`, `[!two words]`, `[!note!]`, `[!note` (no `]`).
+- `[!note]` not at the start of the line content (leading whitespace
+  after the marker).
+
+## 7. Interaction with the other planned extensions
+
+- `wikilinks`: a `[[x]]` in the title or body is a normal inline (the
+  title is inline-parsed in the same inline pass).
+- `smartypants`: applies to title and body plain text like any inline
+  scope.
+- `front matter`: stripped before the body parses; never inside a
+  callout.
+
+## 8. Acceptance and fixtures
+
+- `> [!note] Title\n> body` →
+  `<div class="callout callout-note"><div class="callout-title">Title</div><p>body</p></div>`
+  — byte-pinned.
+- Case-insensitive types (`[!TIP]` → `callout-tip`); unknown types
+  (`[!warning]`-style) → `callout-<type>` box; titleless callouts;
+  multi-paragraph bodies; lazy continuation; nested callouts; lists and
+  code inside bodies; both marker-adjacency forms (`> [!note]` and
+  `>[!note]`).
+- The §6 literal battery pinned by `callout-literal`.
+- XHTML well-formedness gate passes for every fixture.
+- Off by default: 652/652 + full suite green.
+
+## 9. Conformance status
+
+Extension, off by default: the CommonMark 0.31.2 corpus is untouched
+(re-verified at integration). The fixture wall lives at
+`tests/fixtures/markdown/callout-*`.

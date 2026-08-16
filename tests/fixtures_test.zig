@@ -1483,6 +1483,26 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .input = @embedFile("fixtures/markdown/ext-strikethrough.md"),
         .expected = @embedFile("fixtures/markdown/ext-strikethrough.html"),
     },
+    .{
+        .name = "wikilink-basic",
+        .input = @embedFile("fixtures/markdown/wikilink-basic.md"),
+        .expected = @embedFile("fixtures/markdown/wikilink-basic.html"),
+    },
+    .{
+        .name = "wikilink-literal",
+        .input = @embedFile("fixtures/markdown/wikilink-literal.md"),
+        .expected = @embedFile("fixtures/markdown/wikilink-literal.html"),
+    },
+    .{
+        .name = "wikilink-precedence",
+        .input = @embedFile("fixtures/markdown/wikilink-precedence.md"),
+        .expected = @embedFile("fixtures/markdown/wikilink-precedence.html"),
+    },
+    .{
+        .name = "wikilink-escapes",
+        .input = @embedFile("fixtures/markdown/wikilink-escapes.md"),
+        .expected = @embedFile("fixtures/markdown/wikilink-escapes.html"),
+    },
 };
 
 const TextileFixture = struct {
@@ -2405,6 +2425,7 @@ fn renderExtHtml(input: []const u8) !std.ArrayList(u8) {
             .definition_lists = true,
             .heading_attributes = true,
             .strikethrough = true,
+            .wikilinks = true,
         },
     });
     defer result.deinit();
