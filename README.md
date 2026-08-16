@@ -66,8 +66,9 @@ extension in the Markdown frontend: header + delimiter rows, alignment
 colons, escaped `\|`, inline-parsed cells, `<table><thead><tbody>`
 output — docs/TABLES.md), opt-in Markdown extensions (Pandoc-style
 footnotes, definition lists, heading attribute lists, GFM
-strikethrough, and Obsidian-style `[[wikilinks]]` — docs/MARKDOWN-EXTENSIONS.md,
-docs/WIKILINKS.md), shared front matter (YAML `---` / TOML `+++`
+strikethrough, Obsidian-style `[[wikilinks]]`, and `> [!note]` callouts —
+docs/MARKDOWN-EXTENSIONS.md, docs/WIKILINKS.md, docs/CALLOUTS.md),
+shared front matter (YAML `---` / TOML `+++`
 sniffed at index 0, stripped before dispatch, parsed into
 `ParseResult.metadata` under a bounded, never-faked subset —
 docs/FRONTMATTER.md), entity and numeric character
@@ -143,6 +144,8 @@ The GFM tables extension contract is
 [docs/TABLES.md](docs/TABLES.md).
 The wikilinks extension contract is
 [docs/WIKILINKS.md](docs/WIKILINKS.md).
+The callouts extension contract is
+[docs/CALLOUTS.md](docs/CALLOUTS.md).
 The front matter extension contract is
 [docs/FRONTMATTER.md](docs/FRONTMATTER.md).
 The Cooklang frontend's design contract, source hierarchy, provenance,

@@ -64,9 +64,10 @@ consume directly. The map below mirrors it.
 - [Emphasis and strong](INLINE-PARSING.html) · [Autolinks](AUTOLINKS.html) ·
   [Raw HTML](RAW-HTML.html) · [Images](IMAGES-PARSING.html) ·
   [Reference images](REFERENCE-IMAGES.html) · [Tables (GFM)](TABLES.html) ·
-  [Wikilinks](WIKILINKS.html) · [Front matter](FRONTMATTER.html)
-- Pre-implementation contracts (planned, issues #65 and #67):
-  [Callouts](CALLOUTS.html) · [Smart typography](SMARTY.html)
+  [Wikilinks](WIKILINKS.html) · [Callouts](CALLOUTS.html) ·
+  [Front matter](FRONTMATTER.html)
+- Pre-implementation contracts (planned, issue #67):
+  [Smart typography](SMARTY.html)
 
 ### Textile frontend
 

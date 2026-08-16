@@ -1,17 +1,16 @@
 ---
 published_at: 2026-08-16T00:00:00Z
-summary: Pre-implementation contract for the opt-in Obsidian-style callout extension (> [!note]) in the Markdown frontend.
+summary: Contract for the opt-in Obsidian-style callout extension (> [!note]) in the Markdown frontend — implemented (issue #65).
 ---
 
 # Callouts (extension) — contract
 
-**Status:** planned — contract only; nothing is parsed or rendered yet.
-Implementation is tracked as issue #65 (milestone v0.6, "The Obsidian
-Run"), ledger card E2, and the "callouts (extension)" row of the
-feature matrix (docs/FEATURE-MATRIX.md).  \
+**Status:** implemented — shipped via issue #65 (milestone v0.6, "The
+Obsidian Run"); the provenance record is in docs/CLEANROOM.md session
+26.  \
 **Modules:** `src/markdown.zig` (parse), `src/document.zig` (model),
 `src/html.zig` (render)  \
-**Options (proposed):** `markdown.Options.callouts: bool = false`
+**Options:** `markdown.Options.callouts: bool = false`
 
 Callouts are not part of CommonMark 0.31.2, GFM, or Textile. They are a
 consumer-driven extension modeled on Obsidian's published callout syntax
@@ -74,12 +73,16 @@ laziness, list/quote composition, and nested callouts free):
 ```zig
 data.block_quote = .{
     .callout_type: ?[]const u8 = null,  // normalized lowercase type
-    .callout_title: ?[]const u8 = null, // inline content, arena-owned
+    .callout_title: ?[]const u8 = null, // raw title bytes, trimmed
+    .callout_title_nodes: []*Node = &.{}, // title, inline-parsed
 }
 ```
 
 - `callout_type`/`callout_title` are null for ordinary blockquotes —
   Markdown and Textile output is byte-identical.
+- `callout_title` is a borrowed source slice (trimmed); the parsed form
+  lives in `callout_title_nodes` (arena-owned), so emphasis/wikilinks
+  work in titles. Empty for ordinary blockquotes and titleless callouts.
 - A dedicated `.callout` tag was considered and rejected in this
   contract: the container machinery is the same, and the payload keeps
   the shared model convergent.
@@ -89,7 +92,10 @@ data.block_quote = .{
 When the payload is set:
 
 ```html
-<div class="callout callout-note"><div class="callout-title">Title here</div><p>Body line.</p></div>
+<div class="callout callout-note">
+<div class="callout-title">Title here</div>
+<p>Body line.</p>
+</div>
 ```
 
 - The wrapper becomes `<div class="callout callout-<type>">` — a
@@ -125,13 +131,16 @@ When the payload is set:
 ## 8. Acceptance and fixtures
 
 - `> [!note] Title\n> body` →
-  `<div class="callout callout-note"><div class="callout-title">Title</div><p>body</p></div>`
+  `<div class="callout callout-note">\n<div class="callout-title">Title</div>\n<p>body</p>\n</div>\n`
   — byte-pinned.
 - Case-insensitive types (`[!TIP]` → `callout-tip`); unknown types
-  (`[!warning]`-style) → `callout-<type>` box; titleless callouts;
-  multi-paragraph bodies; lazy continuation; nested callouts; lists and
-  code inside bodies; both marker-adjacency forms (`> [!note]` and
-  `>[!note]`).
+  (`[!custom-unknown]`-style) → `callout-<type>` box (the type name is
+  preserved in the class, Obsidian's behavior); titleless callouts;
+  multi-paragraph bodies; lazy continuation; nested callouts; lists,
+  links, and emphasis inside bodies; both marker-adjacency forms
+  (`> [!note]` and `>[!note]`).
+- The §6 literal battery — `[!note]x`, `[!]`, `[!no close`, and a
+  mid-line `[!note]` — pinned by `callout-literal`.
 - The §6 literal battery pinned by `callout-literal`.
 - XHTML well-formedness gate passes for every fixture.
 - Off by default: 652/652 + full suite green.
@@ -139,5 +148,9 @@ When the payload is set:
 ## 9. Conformance status
 
 Extension, off by default: the CommonMark 0.31.2 corpus is untouched
-(re-verified at integration). The fixture wall lives at
-`tests/fixtures/markdown/callout-*`.
+(re-verified at integration: 652/652 with the `--gate` harness).
+Fixture wall: `callout-basic` (title + body + lazy continuation),
+`callout-types` (case-insensitivity, titleless, unknown types),
+`callout-body` (inline title, links, lists, nested callouts, multi-block
+bodies), `callout-literal` (§6 battery + mid-line rule). The XHTML
+well-formedness gate covers the div wrapper under both profiles.

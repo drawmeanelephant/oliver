@@ -555,3 +555,30 @@ test "xhtml: frontmatter body is well-formed under both profiles (extension)" {
     try wrapFragment(xhtml.items, &wrapped);
     try wellformed.check(wrapped.items);
 }
+
+fn renderCalloutProfile(input: []const u8, profile: oliver.OutputProfile) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
+        .markdown = .{ .callouts = true },
+    });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{ .profile = profile });
+    return aw.toArrayList();
+}
+
+test "xhtml: callouts are well-formed under both profiles (extension)" {
+    // The `<div class="callout ...">` wrapper replaces the blockquote
+    // element, so it must stay balanced and well-formed under `.xhtml`
+    // like any other container (docs/CALLOUTS.md §5).
+    const input = "\n> [!note] A & B title\n> Body with *emphasis* and [a & b](/x?a=1&b=2).\n";
+    var html = try renderCalloutProfile(input, .html);
+    defer html.deinit(std.testing.allocator);
+    var xhtml = try renderCalloutProfile(input, .xhtml);
+    defer xhtml.deinit(std.testing.allocator);
+    try expectRender(xhtml.items, html.items, "callout xhtml vs html");
+    var wrapped = std.ArrayList(u8).empty;
+    defer wrapped.deinit(std.testing.allocator);
+    try wrapFragment(xhtml.items, &wrapped);
+    try wellformed.check(wrapped.items);
+}

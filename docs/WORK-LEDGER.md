@@ -47,7 +47,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | serializer worker | X1 XHTML output profile | an explicit XML-compatible serializer profile over the existing renderers (docs/XHTML.md): `OutputProfile` (`html` default, `xhtml`) in `src/html.zig` and `src/cooklang_html.zig` — same IR, same semantics, different serialization bytes (voids always XML-form under `.xhtml`; Cooklang forced line breaks become `<br />`); fail-closed raw-content policy (`.raw_html`, `.html_block`, Textile `pre.` → `error.RawHtmlNotXmlWellFormed`, with an actionable CLI hint); `--to html|xhtml` on `render` (rejected on serialize/scale/menu), testable `parseArgs`; public `oliver.OutputProfile`; paired fixtures, HTML-mode guard against the committed fixture wall, determinism checks, and a hermetic test-only well-formedness gate (`tests/xhtml_wellformed.zig` + `tests/xhtml_test.zig`) wired into `zig build test`; CommonMark 652/652 and Cooklang 60/60 unchanged; docs (XHTML.md, ARCHITECTURE, README, TESTS, CAPABILITIES, COOKLANG, index/nav) | after the Textile audit (T1–T25) + Cooklang wave | PR in review |
 | shared worker | F1 frontmatter extraction | `src/frontmatter.zig` sniff/strip pre-pass (YAML `---` / TOML `+++` at index 0) + documented bounded YAML/TOML subsets (docs/FRONTMATTER.md); `ParseResult.metadata` / `Recipe.metadata`; Cooklang `tryFrontmatter` convergence (raw/span contract intact); opt-in `ParseOptions.frontmatter` (default off — an index-0 `---` is today a §4.1 thematic break); out-of-subset payloads stay raw with a diagnostic; fixtures + docs; Markdown/Textile/Cooklang all receive the clean body | first of the extension wave (v0.5) | implemented on main (issue #66) |
 | Markdown extension worker | E1 modular wikilinks | `Options.wikilinks` inline scan → `.wikilink` leaf (`target`/`label`) + resolver-aware render arm (default: target percent-encoded as the href, `label orelse target` as text; docs/WIKILINKS.md); Markdown fixtures; Textile and the CommonMark corpus untouched | after F1 (v0.5) | implemented on main (issue #64) |
-| Markdown extension worker | E2 callouts/admonitions | `Options.callouts` recognition on the container-block quote path; `.block_quote` callout payload (`type`/`title`) + `<div class="callout callout-<type>">` render arm (docs/CALLOUTS.md); Markdown fixtures; corpus untouched | after E1 (v0.6) | planned — issue #65 |
+| Markdown extension worker | E2 callouts/admonitions | `Options.callouts` recognition on the container-block quote path; `.block_quote` callout payload (`type`/`title`/`title_nodes`) + `<div class="callout callout-<type>">` render arm (docs/CALLOUTS.md); Markdown fixtures; corpus untouched | after E1 (v0.6) | implemented on main (issue #65) |
 | shared worker | E3 smart typography | extract Textile's `replaceChars`/`hasCharMacroTrigger` machinery into one shared module (two callers, Textile byte-identical); `Options.smartypants` text pass with the Textile exemption set (docs/SMARTY.md); Markdown fixtures | after F1/E1 (v1.0) | planned — issue #67 |
 
 ## M1 — Thematic-break / Setext precedence rung
@@ -1250,33 +1250,43 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   (tests/xhtml_test.zig). The 652/652 gate is re-verified (off by
   default).
 
-## E2 — Callouts / admonitions — planned
+## E2 — Callouts / admonitions — implemented
 
 - **Objective:** opt-in `> [!note] Title` callout blockquotes in the
   Markdown frontend, per issue #65 (v0.6, "The Obsidian Run").
 - **Normative source:** Obsidian's published callout syntax (user-facing
-  documentation; clean-room session to be recorded); the fallback
-  behavior is an ordinary §5.1 blockquote.
+  documentation; clean-room session 26 recorded in docs/CLEANROOM.md);
+  the fallback behavior is an ordinary §5.1 blockquote.
 - **Dependencies:** the container-block stack (§5.1), the extension
   seam, the model/renderer attribute machinery.
 - **Seams:** `src/markdown.zig` (`Options.callouts: bool = false`;
   `[!type]` recognition on the blockquote's first content line),
-  `src/document.zig` + `src/html.zig` (proposal: `.block_quote` gains
-  optional `callout_type`/`callout_title`, rendered
+  `src/document.zig` + `src/html.zig` (`.block_quote` gains optional
+  `callout_type`/`callout_title`/`callout_title_nodes`, rendered
   `<div class="callout callout-<type>">` + `<div class="callout-title">`
   only when set — byte-identical `<blockquote>` otherwise), fixtures
   `callout-*`, docs/CALLOUTS.md + nav.json, FEATURE-MATRIX row.
 - **Acceptance:** the `> [!note] Title` example byte-pinned;
-  case-insensitive types; unknown types as `note`; titleless callouts;
-  multi-paragraph bodies, lazy continuation, nested callouts, lists/code
-  inside bodies; non-callout shapes stay literal (extension off,
-  mid-line, non-first-line, no separating space, `[!]`/`[!two words]`);
-  the XHTML gate passes; off by default — 652/652 + full suite green.
-- **Tests:** unit tests (model payload, nesting, the literal battery);
-  3+ fixture pairs.
+  case-insensitive types; unknown types keep their name in
+  `callout-<type>`; titleless callouts; multi-paragraph bodies, lazy
+  continuation, nested callouts, lists/code/links inside bodies;
+  non-callout shapes stay literal (extension off, mid-line,
+  non-first-line, no separating space, `[!]`/`[!no close`); the XHTML
+  gate passes; off by default — 652/652 + full suite green.
+- **Tests:** unit tests (model payload, case-insensitivity, inline
+  titles, the literal battery, default-off); 4 fixture pairs
+  (`callout-basic`/`types`/`body`/`literal`); the XHTML well-formedness
+  gate covers the div wrapper under both profiles.
 - **Parallelism:** yes; Markdown + model/renderer, Textile untouched.
 - **Integration:** after E1; the 652/652 gate is re-verified.
-- **State:** planned — tracked as issue #65 (milestone v0.6).
+- **State:** implemented on main (issue #65). `markdown.Options.callouts`
+  and the `tryTakeCallout` recognition on the blockquote's first content
+  line landed with the `.block_quote` payload (`callout_type` normalized
+  lowercase, `callout_title` source slice, `callout_title_nodes`
+  inline-parsed — emphasis and wikilinks work in titles) and the div
+  render arm; malformed shapes and mid-line `[!note]` stay literal; the
+  full suite, the 652/652 gate, and the Cooklang 60/60 gate are all
+  re-verified.
 
 ## E3 — Smart typography (`smartypants`) — planned
 

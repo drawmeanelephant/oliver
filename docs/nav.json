@@ -140,7 +140,7 @@
           "file": "CALLOUTS.md",
           "title": "Callouts (extension)",
           "audience": "dev",
-          "summary": "Pre-implementation contract for the opt-in `> [!note]` callout blockquote extension: recognition, model, rendering (issue #65)."
+          "summary": "The opt-in `> [!note]` callout blockquote extension: recognition, model, and the callout div render arm (shipped, issue #65, v0.6)."
         },
         {
           "file": "FRONTMATTER.md",

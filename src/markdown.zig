@@ -133,6 +133,18 @@ pub const Options = struct {
     /// the target) stay literal. Off by default so the CommonMark corpus
     /// stays byte-exact.
     wikilinks: bool = false,
+    /// Obsidian-style callouts: a `[!type]` immediately after the quote
+    /// marker on a blockquote's first content line (`> [!note] Title`)
+    /// turns the blockquote into a semantic callout (docs/CALLOUTS.md):
+    /// the marker is consumed, the remainder of the line is the
+    /// inline-parsed title, and the rest of the quote is the body. The
+    /// type is ASCII letters/digits/`-`, case-insensitive, unknown types
+    /// render as a `callout-<type>` box. Malformed shapes (empty or
+    /// space-containing types, a missing `]`, no separator, mid-line or
+    /// non-first-line markers, leading whitespace after the quote marker)
+    /// stay literal. Off by default so the CommonMark corpus stays
+    /// byte-exact.
+    callouts: bool = false,
 };
 
 const tab_stop: u32 = 4;
@@ -640,6 +652,12 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 try doc.appendChild(leafParent(doc, &containers), node);
                 try containers.append(doc.allocator(), .{ .node = node });
                 view = stripped;
+                // Callout (extension): the first content line of a
+                // blockquote may open a callout. The `[!type] ` marker and
+                // the inline title consume the whole line, so the empty
+                // remainder is a blank line inside the quote (no body
+                // content on this line; docs/CALLOUTS.md §1–§2).
+                if (options.callouts) _ = try tryTakeCallout(doc, node, &view, &pending);
                 continue;
             }
             if (isThematicBreak(view, &thematic_facts) or
@@ -837,6 +855,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             .heading => |hh| try parseHeadingInlines(doc, hh.node, hh.span, &defs, options),
             .setext_heading => |hh| try parseSetextHeadingInlines(doc, hh.node, hh.lines, &defs, options),
             .table_cell => |tc| try parseTableCellInlines(doc, tc.node, tc.span, &defs, options),
+            .callout_title => |ct| try parseCalloutTitleInlines(doc, ct.node, ct.span, &defs, options),
         }
     }
 }
@@ -907,6 +926,61 @@ fn tryStripBlockQuoteMarker(view: View) ?View {
         }
     }
     return view.after(i, col);
+}
+
+/// Callout recognition on a blockquote's first content line (extension,
+/// docs/CALLOUTS.md §1–§3): if `view` starts with a `[!type]` marker
+/// immediately after the quote marker (no leading whitespace), consumes
+/// the marker and the inline title, sets the blockquote's callout
+/// payload, and points `view` past the whole line. Returns false when the
+/// line is not a callout shape — the bytes stay literal. The type is a
+/// non-empty run of ASCII letters/digits/`-`, case-insensitive; after the
+/// `]` a space/tab (or end of line) is required; the title is the trimmed
+/// remainder.
+fn tryTakeCallout(
+    doc: *document.Document,
+    node: *document.Node,
+    view: *View,
+    pending: *std.ArrayList(PendingInline),
+) ParseError!bool {
+    const t = view.line.text;
+    if (t.len < 3 or t[0] != '[' or t[1] != '!') return false;
+    var close: usize = 2;
+    while (close < t.len and t[close] != ']') : (close += 1) {
+        const c = t[close];
+        if (!((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '-')) return false;
+    }
+    if (close >= t.len or close == 2) return false; // `[!note` (no `]`) or `[!]`
+    if (close + 1 < t.len and t[close + 1] != ' ' and t[close + 1] != '\t') return false; // `[!note]x`
+
+    // Normalized lowercase type: an arena-owned copy.
+    const raw_type = t[2..close];
+    const ctype = try doc.allocator().dupe(u8, raw_type);
+    for (ctype) |*c| {
+        if (c.* >= 'A' and c.* <= 'Z') c.* += 32;
+    }
+    node.data.block_quote.callout_type = ctype;
+
+    // The title: the trimmed remainder of the line after `]` and the
+    // separator. Only whitespace (or end of line) means no title.
+    var s: usize = close + 1;
+    while (s < t.len and (t[s] == ' ' or t[s] == '\t')) : (s += 1) {}
+    var e = t.len;
+    while (e > s and (t[e - 1] == ' ' or t[e - 1] == '\t')) : (e -= 1) {}
+    if (s < e) {
+        node.data.block_quote.callout_title = t[s..e];
+        try pending.append(doc.allocator(), .{
+            .callout_title = .{
+                .node = node,
+                .span = .{ .start = @intCast(view.line.start + s), .end = @intCast(view.line.start + e) },
+            },
+        });
+    }
+
+    // Consume the whole line: the empty remainder is a blank line inside
+    // the quote, so no body content starts on the callout's first line.
+    view.* = view.after(t.len, view.col + @as(u32, @intCast(t.len)));
+    return true;
 }
 
 /// Recognizes a definition-list marker line (extension): `:` or `~`
@@ -1232,6 +1306,10 @@ const PendingInline = union(enum) {
     heading: struct { node: *document.Node, span: source.Span },
     setext_heading: struct { node: *document.Node, lines: []const Paragraph.LineRef },
     table_cell: struct { node: *document.Node, span: source.Span },
+    /// A callout title (extension): the first content line's remainder
+    /// after `[!type] `, inline-parsed in phase 2 into
+    /// `node.data.block_quote.callout_title_nodes` (docs/CALLOUTS.md §4).
+    callout_title: struct { node: *document.Node, span: source.Span },
 };
 
 /// A paragraph under construction. `content` is the full raw line span
@@ -2778,6 +2856,24 @@ fn parseHeadingInlines(
     try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
     try matchInlines(doc, node, items.items);
+}
+
+/// Phase 2 inline pass for a callout title (extension): the title parses
+/// like a heading's inline content (single span, same pass — so
+/// emphasis, links, and wikilinks work in titles, docs/CALLOUTS.md §7).
+/// The parsed nodes are collected into a temporary container and stored
+/// in `node.data.block_quote.callout_title_nodes`, keeping the
+/// blockquote's `children` a pure block list (the body).
+fn parseCalloutTitleInlines(
+    doc: *document.Document,
+    node: *document.Node,
+    content: source.Span,
+    defs: *Definitions,
+    options: Options,
+) ParseError!void {
+    var temp = try doc.createNode(.paragraph, content, .none);
+    try parseHeadingInlines(doc, temp, content, defs, options);
+    node.data.block_quote.callout_title_nodes = try temp.children.toOwnedSlice(doc.allocator());
 }
 
 // ---------------------------------------------------------------------------
@@ -7439,4 +7535,128 @@ test "markdown: a 10,000-wikilink storm renders deterministically (extension)" {
     defer b.deinit(testing.allocator);
     try testing.expectEqualSlices(u8, a.items, b.items);
     try testing.expect(std.mem.count(u8, a.items, "<a href=\"Page%20") == 10_000);
+}
+
+test "markdown: callout parses type and title onto the blockquote (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "> [!note] Title here\n> Body line.\n",
+        .markdown,
+        ext_parse(.{ .callouts = true }),
+    );
+    defer result.deinit();
+    const bq = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.block_quote, bq.tag);
+    try testing.expectEqualStrings("note", bq.data.block_quote.callout_type.?);
+    try testing.expectEqualStrings("Title here", bq.data.block_quote.callout_title.?);
+    // The title is inline-parsed into its own node list (docs/CALLOUTS.md §4).
+    try testing.expectEqual(@as(usize, 1), bq.data.block_quote.callout_title_nodes.len);
+    try testing.expectEqualStrings("Title here", bq.data.block_quote.callout_title_nodes[0].data.text);
+    // The body is a normal paragraph inside the quote.
+    try testing.expectEqual(@as(usize, 1), bq.children.items.len);
+    try testing.expectEqual(document.Tag.paragraph, bq.children.items[0].tag);
+    try testing.expectEqualStrings("Body line.", bq.children.items[0].children.items[0].data.text);
+}
+
+test "markdown: callout type is case-insensitive and trimmed (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "> [!TIP]\n> Do it.\n",
+        .markdown,
+        ext_parse(.{ .callouts = true }),
+    );
+    defer result.deinit();
+    const bq = result.document.root.children.items[0];
+    try testing.expectEqualStrings("tip", bq.data.block_quote.callout_type.?);
+    // A titleless callout: no title source, no title nodes.
+    try testing.expectEqual(@as(?[]const u8, null), bq.data.block_quote.callout_title);
+    try testing.expectEqual(@as(usize, 0), bq.data.block_quote.callout_title_nodes.len);
+}
+
+test "markdown: callout title parses emphasis inlines (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "> [!warn] **Heads up**\n> Body.\n",
+        .markdown,
+        ext_parse(.{ .callouts = true }),
+    );
+    defer result.deinit();
+    const bq = result.document.root.children.items[0];
+    try testing.expectEqualStrings("warn", bq.data.block_quote.callout_type.?);
+    const tn = bq.data.block_quote.callout_title_nodes;
+    try testing.expectEqual(@as(usize, 1), tn.len);
+    try testing.expectEqual(document.Tag.strong, tn[0].tag);
+    try testing.expectEqualStrings("Heads up", tn[0].children.items[0].data.text);
+}
+
+test "markdown: malformed callout shapes stay literal (extension)" {
+    const oliver = @import("oliver.zig");
+    // No separator after `]`, empty type, and unclosed marker all stay
+    // literal text inside an ordinary blockquote (docs/CALLOUTS.md §6).
+    var result = try oliver.parse(
+        testing.allocator,
+        "> [!note]x\n> [!]\n> [!no close\n",
+        .markdown,
+        ext_parse(.{ .callouts = true }),
+    );
+    defer result.deinit();
+    const bq = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.block_quote, bq.tag);
+    try testing.expectEqual(@as(?[]const u8, null), bq.data.block_quote.callout_type);
+    // The three lines are one paragraph joined by soft breaks; the marker
+    // bytes stay literal.
+    const p = bq.children.items[0];
+    try testing.expectEqual(@as(usize, 5), p.children.items.len);
+    try testing.expectEqualStrings("[!note]x", p.children.items[0].data.text);
+    try testing.expectEqualStrings("[!]", p.children.items[2].data.text);
+    try testing.expectEqualStrings("[!no close", p.children.items[4].data.text);
+}
+
+test "markdown: callouts are off by default (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "> [!note] Title\n> Body.\n",
+        .markdown,
+        .{},
+    );
+    defer result.deinit();
+    const bq = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.block_quote, bq.tag);
+    try testing.expectEqual(@as(?[]const u8, null), bq.data.block_quote.callout_type);
+    try testing.expectEqualStrings(
+        "[!note] Title",
+        bq.children.items[0].children.items[0].data.text,
+    );
+}
+
+fn renderCalloutsHtml(input: []const u8) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{ .callouts = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "markdown: callout renders the div box, title, and body (extension)" {
+    var out = try renderCalloutsHtml("> [!note] Title here\n> Body line.\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<div class=\"callout callout-note\">\n<div class=\"callout-title\">Title here</div>\n<p>Body line.</p>\n</div>\n",
+        out.items,
+    );
+}
+
+test "markdown: a titleless callout renders without the title div (extension)" {
+    var out = try renderCalloutsHtml("> [!warning]\n> Body.\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<div class=\"callout callout-warning\">\n<p>Body.</p>\n</div>\n",
+        out.items,
+    );
 }
