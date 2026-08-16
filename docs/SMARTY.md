@@ -47,9 +47,14 @@ the macro table (pinned — `{c|}` stays literal under smartypants).
 ## 2. Where the pass applies
 
 - Applied to plain `.text` nodes in every Markdown inline scope:
-  paragraphs, ATX/Setext headings, list items, table cells (GFM), and
-  link **display text** (matching Textile, which replaces inside link
-  text).
+  paragraphs, ATX/Setext headings, list items, table cells (GFM), link
+  **display text** (matching Textile, which replaces inside link text),
+  footnote bodies, definition-list terms and definitions, and callout
+  titles/bodies (pinned by `cross-smartypants-scopes`: a footnote body
+  and a definition term both curl and dash). A heading containing a
+  wikilink slugs on the label, and the non-ASCII replacement bytes are
+  dropped by `slugify`, so heading ids are unaffected (also pinned by
+  `cross-smartypants-scopes`).
 - **Exempt (verbatim):** code spans, code blocks (fenced and indented),
   autolink labels, link destinations and titles, image src/alt/title,
   raw HTML and inline HTML, and HTML-looking `<...>` regions — the same
@@ -106,7 +111,11 @@ the macro table (pinned — `{c|}` stays literal under smartypants).
 - Fixture wall: `smartypants-basic` (the replacement set, runs, symbols),
   `smartypants-exempt` (the §2 exemption battery), `smartypants-scopes`
   (headings incl. the heading-id slug, link display text, list items,
-  GFM table cells, callout title/body, wikilink exemption).
+  GFM table cells, callout title/body, wikilink exemption), plus the
+  cross-extension `cross-smartypants-scopes` (footnote bodies,
+  definition-list terms, heading slug on a wikilink) and
+  `cross-callout-title` (wikilink + typography composing in a callout
+  title).
 - Textile fixtures byte-identical before/after the extraction refactor
   (the wall is the regression net).
 - Off by default: quotes/dashes stay literal — 652/652 + full suite

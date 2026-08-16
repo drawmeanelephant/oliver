@@ -43,6 +43,12 @@ text `[!note]` — the corpus is untouched.
   continuation, nested containers — exactly the §5.1 container-stack
   extent. A truly blank line ends the callout (it ends the blockquote);
   no new blank-line semantics are introduced.
+- **Lazy-continuation boundary (pinned by `cross-callout-edges`):**
+  lazy continuation continues an *open* body paragraph only. A line
+  immediately after the title line — before any body paragraph is open
+  — is not part of the callout: it becomes a sibling block. Once a body
+  paragraph exists (`> Body one.`), a non-marker line lazily continues
+  it inside the callout, exactly as §5.1 does for ordinary blockquotes.
 
 ## 2. Recognition
 
@@ -115,7 +121,9 @@ When the payload is set:
   `[!note]` literal text in its first paragraph.
 - `[!note]` mid-line (`> text [!note]`), on a non-first line, or without
   a separator after `]` (`[!note]x`).
-- Malformed types: `[!]`, `[!two words]`, `[!note!]`, `[!note` (no `]`).
+- Malformed types: `[!]` (empty), `[!two words]` (space in the type),
+  `[!note!]` (punctuation in the type), `[!note` (no `]`) — all pinned
+  literal by `cross-callout-edges`.
 - `[!note]` not at the start of the line content (leading whitespace
   after the marker).
 
@@ -136,12 +144,19 @@ When the payload is set:
 - Case-insensitive types (`[!TIP]` → `callout-tip`); unknown types
   (`[!custom-unknown]`-style) → `callout-<type>` box (the type name is
   preserved in the class, Obsidian's behavior); titleless callouts;
-  multi-paragraph bodies; lazy continuation; nested callouts; lists,
-  links, and emphasis inside bodies; both marker-adjacency forms
-  (`> [!note]` and `>[!note]`).
-- The §6 literal battery — `[!note]x`, `[!]`, `[!no close`, and a
-  mid-line `[!note]` — pinned by `callout-literal`.
-- The §6 literal battery pinned by `callout-literal`.
+  multi-paragraph bodies; lazy continuation (with the §1 boundary);
+  nested callouts; lists, links, and emphasis inside bodies; both
+  marker-adjacency forms (`> [!note]` and `>[!note]`, pinned by
+  `cross-callout-title`).
+- Cross-extension: a `[[x]]` wikilink in the title or body is a normal
+  inline, and smartypants applies to title/body plain text around it
+  (pinned by `cross-callout-title`: `> [!note] See [[Page Name]] and
+  "quoted" -- text` renders the resolved link, curly quotes, and em
+  dash in the title).
+- The §6 literal battery — `[!note]x`, `[!]`, `[!no close`, a mid-line
+  `[!note]` (pinned by `callout-literal`), and `[!two words]`/`[!note!]`
+  (pinned by `cross-callout-edges`, with the lazy-continuation boundary
+  in both directions).
 - XHTML well-formedness gate passes for every fixture.
 - Off by default: 652/652 + full suite green.
 
@@ -152,5 +167,8 @@ Extension, off by default: the CommonMark 0.31.2 corpus is untouched
 Fixture wall: `callout-basic` (title + body + lazy continuation),
 `callout-types` (case-insensitivity, titleless, unknown types),
 `callout-body` (inline title, links, lists, nested callouts, multi-block
-bodies), `callout-literal` (§6 battery + mid-line rule). The XHTML
-well-formedness gate covers the div wrapper under both profiles.
+bodies), `callout-literal` (§6 battery + mid-line rule), and the
+cross-extension `cross-callout-title` (wikilinks + smartypants in
+titles, the no-space `>[!note]` form) and `cross-callout-edges`
+(`[!two words]`/`[!note!]`, the §1 lazy-continuation boundary). The
+XHTML well-formedness gate covers the div wrapper under both profiles.
