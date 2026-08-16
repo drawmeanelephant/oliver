@@ -2405,6 +2405,12 @@ const cooklang_scale_fixtures = [_]CooklangScaleFixture{
         .input = @embedFile("fixtures/cooklang/scale-servings.cook"),
         .expected = @embedFile("fixtures/cooklang/scale-servings.out.cook"),
     },
+    .{
+        .name = "scale-mixed",
+        .by = .{ .factor = .{ .num = 2, .den = 1 } },
+        .input = @embedFile("fixtures/cooklang/scale-mixed.cook"),
+        .expected = @embedFile("fixtures/cooklang/scale-mixed.out.cook"),
+    },
 };
 
 fn scaleCooklang(input: []const u8, by: oliver.cooklang_scale.ScaleBy) !std.ArrayList(u8) {

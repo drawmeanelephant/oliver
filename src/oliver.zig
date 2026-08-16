@@ -44,7 +44,8 @@ pub const cooklang_html = @import("cooklang_html.zig");
 /// docs/COOKLANG.md §10).
 pub const cooklang_serialize = @import("cooklang_serialize.zig");
 /// The pure Cooklang scaling operation (semantic Recipe -> scaled
-/// Recipe; docs/COOKLANG.md §11).
+/// Recipe) plus the public string primitives `classifyQuantity` /
+/// `parseFactor` / `scaleAmount` (docs/COOKLANG.md §11).
 pub const cooklang_scale = @import("cooklang_scale.zig");
 /// The Cooklang `.menu` convenience view (semantic day/meal structure
 /// over a parsed Recipe; docs/COOKLANG.md §12).

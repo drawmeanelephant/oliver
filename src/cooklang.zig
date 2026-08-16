@@ -61,8 +61,10 @@ pub const ParseError = error{ OutOfMemory, InputTooLarge };
 
 /// A derived numeric view of a quantity. The source text is always
 /// preserved (`quantity`); this exists only for pure canonical numeric
-/// forms (`2`, `1.5`, `1/2`) so the conformance harness and future
-/// scaling can compare numerically without ever coercing the text.
+/// forms (`2`, `1.5`, `1/2`, mixed `1 1/2`) so the conformance harness
+/// and scaling can compare numerically without ever coercing the text.
+/// A mixed number is stored as its equivalent (not necessarily
+/// reduced) improper fraction — there is no mixed-number output form.
 pub const Quantity = union(enum) {
     int: i64,
     decimal: f64,
@@ -971,12 +973,111 @@ fn findScalar(bytes: []const u8, from: usize, to: usize, c: u8) ?usize {
     return null;
 }
 
+/// Classification of an amount string for scaling (docs/COOKLANG.md §11).
+/// Closed, after trimming ASCII space/tab: `empty` is `""`; `scalable`
+/// is a canonical unsigned integer, `a/b` (`b ≠ 0`; spaces around `/`
+/// allowed), decimal `a.b`, or mixed `a b/c`; everything else —
+/// including a leading `=`, ranges (`1-2`), words (`some`), and `1/0`
+/// — is `fixed`. This is the exact-rational grammar, not
+/// `parseQuantity`'s f64 decimal arm.
+pub const QuantityClass = enum { empty, scalable, fixed };
+
+/// Classifies an authored quantity string. Leading and trailing ASCII
+/// space/tab are ignored. A leading `=` is `fixed` even when the rest
+/// would parse (`=1`, `=1/2`).
+pub fn classifyQuantity(amount: []const u8) QuantityClass {
+    const text = std.mem.trim(u8, amount, " \t");
+    if (text.len == 0) return .empty;
+    if (text[0] == '=') return .fixed;
+    if (isScalableQuantity(text)) return .scalable;
+    return .fixed;
+}
+
+/// The parts of a mixed number `a b/c` (whole + proper fraction).
+/// `den ≠ 0` and `num < den`; the separator is one or more ASCII
+/// space/tab (the same trim set used elsewhere). Spaces around the
+/// slash are allowed, matching `parseQuantity`'s fraction arm.
+pub const MixedNumber = struct {
+    whole: u64,
+    num: u64,
+    den: u64,
+};
+
+/// Parses a mixed number. Null when `text` is not `whole` + space/tab
+/// + a proper fraction of two canonical integers. Shared by
+/// `parseQuantity`, `classifyQuantity`, and the exact scale path.
+pub fn parseMixedNumber(text: []const u8) ?MixedNumber {
+    const parts = splitMixed(text) orelse return null;
+    const whole = parseCanonicalU64(parts.whole) orelse return null;
+    const num = parseCanonicalU64(parts.num) orelse return null;
+    const den = parseCanonicalU64(parts.den) orelse return null;
+    if (den == 0 or num >= den) return null;
+    return .{ .whole = whole, .num = num, .den = den };
+}
+
+const MixedParts = struct {
+    whole: []const u8,
+    num: []const u8,
+    den: []const u8,
+};
+
+/// Splits `whole<space/tab>+num[/]den` without validating the numbers.
+fn splitMixed(text: []const u8) ?MixedParts {
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        if (text[i] != ' ' and text[i] != '\t') continue;
+        const rest = std.mem.trim(u8, text[i + 1 ..], " \t");
+        const slash = findScalar(rest, 0, rest.len, '/') orelse return null;
+        return .{
+            .whole = text[0..i],
+            .num = std.mem.trim(u8, rest[0..slash], " \t"),
+            .den = std.mem.trim(u8, rest[slash + 1 ..], " \t"),
+        };
+    }
+    return null;
+}
+
+fn isScalableQuantity(text: []const u8) bool {
+    if (parseCanonicalU64(text) != null) return true;
+    if (isCanonicalDecimal(text)) return true;
+    if (isCanonicalFraction(text)) return true;
+    if (parseMixedNumber(text) != null) return true;
+    return false;
+}
+
+fn isCanonicalDecimal(text: []const u8) bool {
+    const d = findScalar(text, 0, text.len, '.') orelse return false;
+    if (findScalar(text, d + 1, text.len, '.') != null) return false;
+    return parseCanonicalU64(text[0..d]) != null and isDigits(text[d + 1 ..]);
+}
+
+fn isCanonicalFraction(text: []const u8) bool {
+    const s = findScalar(text, 0, text.len, '/') orelse return false;
+    if (findScalar(text, s + 1, text.len, '/') != null) return false;
+    _ = parseCanonicalU64(std.mem.trim(u8, text[0..s], " \t")) orelse return false;
+    const den = parseCanonicalU64(std.mem.trim(u8, text[s + 1 ..], " \t")) orelse return false;
+    return den != 0;
+}
+
+/// `"0"` or `[1-9][0-9]*` as u64, when it fits. Leading zeros other
+/// than a lone `0` are rejected (the same canonical-integer rule as
+/// `parseQuantity`).
+fn parseCanonicalU64(text: []const u8) ?u64 {
+    if (text.len == 0) return null;
+    if (text[0] == '0') return if (text.len == 1) 0 else null;
+    if (!isDigits(text)) return null;
+    return std.fmt.parseUnsigned(u64, text, 10) catch null;
+}
+
 /// The numeric view of a quantity: only canonical forms — an integer
-/// (`0` or no leading zero), a decimal, or a fraction of two canonical
+/// (`0` or no leading zero), a decimal, a fraction of two canonical
 /// integers with a non-zero denominator (so `01/2` stays text, per the
-/// corpus). Everything else stays a string; the source text is always
+/// corpus), or a mixed number `1 1/2` (whole + proper fraction).
+/// Everything else stays a string; the source text is always
 /// preserved by the model. Public so derived operations (scaling,
-/// conformance comparisons) share one acceptance rule.
+/// conformance comparisons) share one acceptance rule. The decimal
+/// arm still uses f64; scaling must go through the exact path in
+/// `cooklang_scale` instead.
 pub fn parseQuantity(text: []const u8) ?Quantity {
     if (canonicalInt(text)) |v| return .{ .int = v };
     if (findScalar(text, 0, text.len, '.')) |d| {
@@ -986,6 +1087,14 @@ pub fn parseQuantity(text: []const u8) ?Quantity {
             return .{ .decimal = std.fmt.parseFloat(f64, text) catch return null };
         }
         return null;
+    }
+    // Mixed before the simple-fraction arm: `1 1/2` contains `/`, and
+    // the left-hand side `1 1` is not a canonical integer.
+    if (parseMixedNumber(text)) |m| {
+        const whole_part = std.math.mul(u64, m.whole, m.den) catch return null;
+        const combined = std.math.add(u64, whole_part, m.num) catch return null;
+        if (combined > std.math.maxInt(u32) or m.den > std.math.maxInt(u32)) return null;
+        return .{ .fraction = .{ .num = @intCast(combined), .den = @intCast(m.den) } };
     }
     if (findScalar(text, 0, text.len, '/')) |s| {
         // Spaces around the slash are allowed (`1 / 2` -> `1/2`, per the
@@ -1446,4 +1555,38 @@ test "cooklang: structured diagnostics for malformed structure" {
     var res6 = try parseT(std.testing.allocator, "Message @ example{} and ~ {5} and ~ 5");
     defer res6.deinit();
     try std.testing.expectEqual(@as(usize, 0), res6.diagnostics.len);
+}
+
+test "cooklang: classifyQuantity closed forms" {
+    try std.testing.expectEqual(QuantityClass.empty, classifyQuantity(""));
+    try std.testing.expectEqual(QuantityClass.empty, classifyQuantity("   "));
+    try std.testing.expectEqual(QuantityClass.empty, classifyQuantity("\t"));
+    try std.testing.expectEqual(QuantityClass.scalable, classifyQuantity("2"));
+    try std.testing.expectEqual(QuantityClass.scalable, classifyQuantity("1/2"));
+    try std.testing.expectEqual(QuantityClass.scalable, classifyQuantity("1 / 2"));
+    try std.testing.expectEqual(QuantityClass.scalable, classifyQuantity("1.5"));
+    try std.testing.expectEqual(QuantityClass.scalable, classifyQuantity("1 1/2"));
+    try std.testing.expectEqual(QuantityClass.scalable, classifyQuantity("  1 1/2  "));
+    try std.testing.expectEqual(QuantityClass.fixed, classifyQuantity("=1"));
+    try std.testing.expectEqual(QuantityClass.fixed, classifyQuantity("=1/2"));
+    try std.testing.expectEqual(QuantityClass.fixed, classifyQuantity("1-2"));
+    try std.testing.expectEqual(QuantityClass.fixed, classifyQuantity("some"));
+    try std.testing.expectEqual(QuantityClass.fixed, classifyQuantity("1/0"));
+    try std.testing.expectEqual(QuantityClass.fixed, classifyQuantity("02"));
+    try std.testing.expectEqual(QuantityClass.fixed, classifyQuantity("1 3/2"));
+}
+
+test "cooklang: parseQuantity accepts mixed numbers" {
+    try std.testing.expectEqual(Quantity{ .fraction = .{ .num = 3, .den = 2 } }, parseQuantity("1 1/2").?);
+    try std.testing.expectEqual(Quantity{ .fraction = .{ .num = 5, .den = 2 } }, parseQuantity("2 1/2").?);
+    try std.testing.expectEqual(Quantity{ .fraction = .{ .num = 5, .den = 4 } }, parseQuantity("1 1 / 4").?);
+    try std.testing.expectEqual(Quantity{ .fraction = .{ .num = 3, .den = 2 } }, parseQuantity("1\t1/2").?);
+    try std.testing.expect(parseQuantity("1 3/2") == null);
+    try std.testing.expect(parseQuantity("1 1/0") == null);
+    try std.testing.expect(parseQuantity("01 1/2") == null);
+    var res = try parseT(std.testing.allocator, "@flour{1 1/2%cup}");
+    defer res.deinit();
+    const ig = res.recipe.blocks[0].step.parts[0].ingredient;
+    try std.testing.expectEqualStrings("1 1/2", ig.quantity.?);
+    try std.testing.expectEqual(Quantity{ .fraction = .{ .num = 3, .den = 2 } }, ig.numeric.?);
 }

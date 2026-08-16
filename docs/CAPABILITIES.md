@@ -62,8 +62,11 @@ YAML). Derived operations over the same model:
 
 - **serialize** — canonical `.cook` output (semantic, idempotent;
   not byte-identical round-tripping)
-- **scale** — exact-rational scaling by factor or servings; fixed
-  (`=`) quantities, timers, cookware, and recipe references untouched
+- **scale** — exact-rational scaling by factor or servings, plus the
+  public string primitives `classifyQuantity` / `parseFactor` /
+  `scaleAmount` for authored amount text; mixed `1 1/2` is a
+  canonical scalable input; fixed (`=`) quantities, timers, cookware,
+  and recipe references untouched
 - **render** — a deterministic HTML policy: ingredients index,
   timers as `<time>` with ISO-8601 durations, section-aware layout
   (with `--to xhtml` for the XML-compatible fragment profile,
