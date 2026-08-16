@@ -2,7 +2,7 @@
 
 **Status:** implemented — opt-in Markdown dialect extensions  \
 **Modules:** `src/markdown.zig` (parse), `src/html.zig` (render), `src/document.zig` (model)  \
-**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
+**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
 
 The Markdown frontend is byte-exact CommonMark 0.31.2 by default (the
 652/652 conformance corpus is green with default options). The extensions

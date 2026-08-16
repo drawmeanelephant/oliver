@@ -88,8 +88,9 @@ YAML). Derived operations over the same model:
   selects the XML-compatible fragment serialization. Markdown render
   also exposes the extension surface as flags (`--wikilinks`,
   `--callouts`, `--smartypants`, `--footnotes`, `--definition-lists`,
-  `--heading-attributes`, `--strikethrough`) and `--frontmatter
-  yaml|toml` on any render frontend — all off by default.
+  `--heading-attributes`, `--strikethrough`, `--heading-ids`) and
+  `--frontmatter yaml|toml` on any render frontend — all off by
+  default.
 
 ## Go deeper
 

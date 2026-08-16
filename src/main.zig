@@ -44,8 +44,9 @@ pub const RunConfig = struct {
     profile: oliver.OutputProfile = .html,
     /// Markdown extension surface (`render --from markdown` only; all off
     /// by default). `parseArgs` scopes them to the Markdown frontend;
-    /// `renderDocument` threads them into `markdown.Options` / the
-    /// footnotes render option (docs/MARKDOWN-EXTENSIONS.md).
+    /// `markdownParseOptions` / `renderOptionsFor` thread them into
+    /// `markdown.Options` and the footnotes / heading-ids render options
+    /// (docs/MARKDOWN-EXTENSIONS.md).
     footnotes: bool = false,
     definition_lists: bool = false,
     heading_attributes: bool = false,
@@ -53,6 +54,7 @@ pub const RunConfig = struct {
     wikilinks: bool = false,
     callouts: bool = false,
     smartypants: bool = false,
+    heading_ids: bool = false,
     /// Front matter mode (`render` with any frontend; null = default
     /// off). Shared by all three frontends (docs/FRONTMATTER.md §3).
     frontmatter: ?oliver.frontmatter.Option = null,
@@ -80,6 +82,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var wikilinks = false;
     var callouts = false;
     var smartypants = false;
+    var heading_ids = false;
     var frontmatter: ?oliver.frontmatter.Option = null;
     var saw_to = false;
     var saw_from = false;
@@ -163,6 +166,8 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             heading_attributes = true;
         } else if (std.mem.eql(u8, arg, "--strikethrough")) {
             strikethrough = true;
+        } else if (std.mem.eql(u8, arg, "--heading-ids")) {
+            heading_ids = true;
         } else if (std.mem.eql(u8, arg, "--frontmatter")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -194,7 +199,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     // Markdown-frontend options, and `--frontmatter` is a render
     // option shared by every frontend.
     const ext_flags = footnotes or definition_lists or heading_attributes or
-        strikethrough or wikilinks or callouts or smartypants;
+        strikethrough or wikilinks or callouts or smartypants or heading_ids;
     switch (cmd) {
         .render => {
             if (factor_num != null or servings_target != null) return error.Usage;
@@ -227,6 +232,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .wikilinks = wikilinks,
         .callouts = callouts,
         .smartypants = smartypants,
+        .heading_ids = heading_ids,
         .frontmatter = frontmatter,
     };
 }
@@ -376,6 +382,7 @@ fn renderOptionsFor(cfg: RunConfig) oliver.html.RenderOptions {
     return .{
         .profile = cfg.profile,
         .footnotes = cfg.footnotes,
+        .heading_ids = cfg.heading_ids,
     };
 }
 
@@ -408,6 +415,7 @@ fn printUsage() void {
         \\Markdown extensions (render --from markdown, all off by default):
         \\  --wikilinks  --callouts  --smartypants  --footnotes
         \\  --definition-lists  --heading-attributes  --strikethrough
+        \\  --heading-ids  (GFM-style auto ids on headings)
         \\Front matter (render with any frontend, off by default):
         \\  --frontmatter yaml|toml
         \\
@@ -528,12 +536,15 @@ test "cli: markdown extension flags are scoped to render --from markdown" {
     try testing.expect(co.callouts);
     const sp = try parseArgs(&.{ "render", "--from", "markdown", "--smartypants" });
     try testing.expect(sp.smartypants);
+    const hi = try parseArgs(&.{ "render", "--from", "markdown", "--heading-ids" });
+    try testing.expect(hi.heading_ids);
     const all = try parseArgs(&.{ "render", "--from", "markdown", "--footnotes", "--definition-lists", "--heading-attributes", "--strikethrough" });
     try testing.expect(all.footnotes and all.definition_lists and all.heading_attributes and all.strikethrough);
 
     // A flag that cannot apply is an error (the --to-on-serialize rule).
     try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "textile", "--wikilinks" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "cooklang", "--smartypants" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "textile", "--heading-ids" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--callouts" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", "--footnotes" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", "--wikilinks" }));
@@ -617,6 +628,15 @@ test "cli: the legacy markdown extensions render end to end" {
     defer allocator.free(fn_out);
     try testing.expect(std.mem.indexOf(u8, fn_out, "class=\"footnote-ref\"") != null);
     try testing.expect(std.mem.indexOf(u8, fn_out, "<section class=\"footnotes\"") != null);
+}
+
+test "cli: --heading-ids renders GFM-style heading ids end to end" {
+    const allocator = std.testing.allocator;
+    const hi = try parseArgs(&.{ "render", "--from", "markdown", "--heading-ids" });
+    const hi_out = try renderWith(allocator, hi, "# Head\n\n## A \"quoted\" -- heading!\n");
+    defer allocator.free(hi_out);
+    try testing.expect(std.mem.indexOf(u8, hi_out, "<h1 id=\"head\">Head</h1>") != null);
+    try testing.expect(std.mem.indexOf(u8, hi_out, "<h2 id=\"a-quoted----heading\">") != null);
 }
 
 test "cli: --frontmatter reaches the cooklang render path" {
