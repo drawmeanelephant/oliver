@@ -424,15 +424,28 @@ Closed classify rules (after trimming ASCII space/tab):
 
 A mixed number is a whole part plus a proper fraction (`num < den`,
 `den ≠ 0`), separated by one or more ASCII space/tab (the same trim
-set used elsewhere). `1 1/2` is scalable; `1 3/2` is not. A leading
-`=` is `fixed` even if the rest would parse (`=1`, `=1/2`).
+set used elsewhere). Leading and trailing space/tab around the whole
+are ignored — `parseMixedNumber` trims like `classifyQuantity`, so
+`" 1 1/2 "` parses and is scalable. `1 1/2` is scalable; `1 3/2` is
+not. A leading `=` is `fixed` even if the rest would parse (`=1`,
+`=1/2`).
 
 `scaleAmount`:
 
 - `scalable` → exact rational product, same formatting policy as
   `scaleRecipe` (whole → integer; decimal-family + terminating den →
-  decimal; else reduced `num/den`; overflow → leave original).
+  decimal; else reduced `num/den`; overflow → leave original). The
+  decimal family is read from the source form exactly (never through
+  f64 or an i64-capped parse), so the terminating-decimal policy holds
+  at any magnitude: a decimal above i64 still emits its exact
+  terminating decimal when the reduced denominator is within the
+  digit bound.
 - `empty` / `fixed` → `scaled` aliases `original`.
+- Every result carries `changed`: true only when `scaled` is a fresh
+  rewrite. `class == .scalable` alone does not mean a rewrite happened
+  — overflow (or a fractional part / mixed `whole × den` beyond u64)
+  keeps `scaled` aliasing `original` with `changed == false`, never a
+  wrong number.
 - `parseFactor` accepts the same scalable forms as amounts.
 
 What scales on a `Recipe`, what does not (per the conventions):

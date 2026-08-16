@@ -49,7 +49,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Markdown extension worker | E1 modular wikilinks | `Options.wikilinks` inline scan → `.wikilink` leaf (`target`/`label`) + resolver-aware render arm (default: target percent-encoded as the href, `label orelse target` as text; docs/WIKILINKS.md); Markdown fixtures; Textile and the CommonMark corpus untouched | after F1 (v0.5) | implemented on main (issue #64) |
 | Markdown extension worker | E2 callouts/admonitions | `Options.callouts` recognition on the container-block quote path; `.block_quote` callout payload (`type`/`title`/`title_nodes`) + `<div class="callout callout-<type>">` render arm (docs/CALLOUTS.md); Markdown fixtures; corpus untouched | after E1 (v0.6) | implemented on main (issue #65) |
 | shared worker | E3 smart typography | extract Textile's `replaceChars`/`hasCharMacroTrigger` machinery into one shared module (`src/typography.zig`; two callers, Textile byte-identical); `Options.smartypants` text pass with the Textile exemption set (docs/SMARTY.md); Markdown fixtures | after F1/E1 (v1.0) | implemented on main (issue #67) |
-| Cooklang worker | CK6 string-quantity classify/scale + mixed numbers | public `classifyQuantity` / `parseFactor` / `scaleAmount` over authored amount strings (the exact-rational path, not `parseQuantity`'s f64 decimal arm); `scaleRecipe` becomes a caller of `scaleAmount` on ingredient quantities only; mixed `1 1/2` is a canonical scalable input (emits integer / fraction / terminating decimal); timers/cookware/refs still never scale; `scale-mixed` fixture; docs/COOKLANG.md §11 | after CK3 (issue #76; lets consumers delete a forked string scale) | this PR |
+| Cooklang worker | CK6 string-quantity classify/scale + mixed numbers | public `classifyQuantity` / `parseFactor` / `scaleAmount` over authored amount strings (the exact-rational path, not `parseQuantity`'s f64 decimal arm); `scaleRecipe` becomes a caller of `scaleAmount` on ingredient quantities only; mixed `1 1/2` is a canonical scalable input (emits integer / fraction / terminating decimal); timers/cookware/refs still never scale; `scale-mixed` fixture; docs/COOKLANG.md §11 | after CK3 (issue #76; lets consumers delete a forked string scale) | merged (PR #77) |
+| Cooklang worker | CK7 scale edge-case hardening | review findings on the merged CK6 surface (issues #79–#81): `parseMixedNumber` trims leading/trailing ASCII space/tab (issue #79); `familyOfAmount` reads the decimal family from the source form exactly — no f64/i64 probe, terminating decimals at any magnitude (issue #80); `ScaledAmount.changed` distinguishes a rewrite from an overflow passthrough (issue #81); 3 unit tests pin the whitespace battery, the >i64 terminating cases, and the changed/passthrough triggers; docs/COOKLANG.md §11 + FEATURE-MATRIX + ARCHITECTURE + CLEANROOM session 29 | after CK6 | this PR |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1375,6 +1376,40 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Integration:** after CK3; the 652/652 and 60/60 gates are
   re-verified.
 - **State:** this PR (issue #76).
+
+## CK7 — Scale edge-case hardening (review findings #79–#81)
+
+- **Objective:** close the three edge cases a review of the merged CK6
+  string surface uncovered — all Oliver-internal consistency fixes,
+  no new upstream spec (clean-room session 29). Issues #79, #80, #81.
+- **Normative sources:** the already-pinned CK6 contract
+  (docs/COOKLANG.md §11); no new upstream material.
+- **Dependencies:** CK6 `classifyQuantity` / `parseFactor` /
+  `scaleAmount` / `parseMixedNumber`.
+- **Seams:** `src/cooklang.zig` (`parseMixedNumber` trims leading and
+  trailing ASCII space/tab before splitting — issue #79);
+  `src/cooklang_scale.zig` (`familyOfAmount` reads the decimal family
+  from the source form exactly instead of probing `parseQuantity`'s
+  f64/i64-capped decimal arm, so the terminating-decimal policy holds
+  at any magnitude — issue #80; `ScaledAmount` gains `changed`, used
+  by `deinit` and `scaleRecipe`'s rewrite check, so a passthrough is
+  detectable without a pointer comparison — issue #81); docs
+  (COOKLANG §11, FEATURE-MATRIX scaling row, ARCHITECTURE,
+  CLEANROOM session 29).
+- **Acceptance:** `parseMixedNumber(" 1 1/2")` parses;
+  `scaleAmount("9223372036854775808.5", ×1) → "9223372036854775808.5"`
+  (terminating decimal, not `18446744073709551617/2`);
+  `scaleAmount("18446744073709551615.999999999999", ×1)` → the exact
+  input (12-digit bound); overflow and >u64 inputs report
+  `class == .scalable` with `changed == false` and `scaled` aliasing
+  `original` — never a wrong number.
+- **Tests:** 3 unit tests (parseMixedNumber whitespace battery;
+  decimal-family emission at any magnitude; changed/passthrough
+  battery). 360/360, 652/652, 60/60 re-verified.
+- **Parallelism:** yes; Markdown/Textile untouched.
+- **Integration:** after CK6; the 652/652 and 60/60 gates are
+  re-verified.
+- **State:** this PR (issues #79–#81).
 
 ## Deferred architectural cards
 
