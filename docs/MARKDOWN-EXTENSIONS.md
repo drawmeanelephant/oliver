@@ -217,14 +217,50 @@ suffixes), matching the GFM reference implementation.
 
 ---
 
+## 6. Wikilinks (`parse: wikilinks`)
+
+Obsidian-style `[[Page Name]]` and `[[Page Name|Custom Label]]` inline
+wikilinks, per the contract in docs/WIKILINKS.md:
+
+- `[[target]]` and `[[target|label]]` parse into a `.wikilink` leaf node
+  (source-slice `target`/`label`, the node span covering the whole
+  construct), recognized **ahead of link brackets** in the inline
+  discovery pass.
+- Resolution is a **renderer policy**: by default the target is
+  percent-encoded as the href and the visible text is `label orelse
+  target`; `html.RenderOptions.wikilink_resolver` (an fn pointer) plus
+  `wikilink_resolver_ctx` override both, deterministically.
+- The closer is the first unescaped `]]` (greedy); a target may not
+  contain `[[`; malformed shapes — unterminated, empty/whitespace
+  target, empty label, `[[a|b|c]]` — stay literal with an **atomic
+  fallback** (the consumed `[[` is never re-interpreted as link
+  brackets). Escaped `\[` never opens a wikilink; a `\]` inside the
+  content is raw target bytes, not a closer.
+- Opacity: wikilinks are literal inside code spans/blocks, autolinks,
+  raw HTML, link destinations/titles, image src/alt/title, link display
+  text, and image descriptions (a wikilink inside `[text]` is demoted
+  to literal text — no nested `<a>`).
+- Example: `[[Page Name|Custom]]` →
+  `<a href="Page%20Name">Custom</a>`.
+- Fixtures: `tests/fixtures/markdown/wikilink-*.md`; unit tests in
+  `src/markdown.zig` and `tests/xhtml_test.zig`.
+
+---
+
 ## Interaction and precedence
 
 - Extensions compose: a heading with an IAL id renders that id even when
   `heading_ids` is on; footnotes may appear inside definition bodies; link
   reference definitions and footnote definitions can lead the same
-  paragraph (footnote definitions are tried first).
-- Fenced code, code spans, HTML blocks, and raw HTML are opaque to all five
+  paragraph (footnote definitions are tried first); a `[[x]]` wikilink
+  wins over the `[x]` shortcut reference, and a heading containing a
+  wikilink slugs on the wikilink's label (or target).
+- Fenced code, code spans, HTML blocks, and raw HTML are opaque to all six
   extensions (a `[^x]:` line inside a fence is code, not a definition; a
-  `~~` pair inside a code span or fence is literal).
-- Fixtures: `tests/fixtures/markdown/ext-*.md` (parsed with all extensions
+  `~~` pair inside a code span or fence is literal; a `[[x]]` inside a
+  code span or autolink is literal).
+- In GFM table cells an unescaped `|` is a cell separator (GFM §4.10), so
+  a pipe-label wikilink inside a cell needs `\|` (docs/WIKILINKS.md §7).
+- Fixtures: `tests/fixtures/markdown/ext-*.md` and
+  `tests/fixtures/markdown/wikilink-*.md` (parsed with all extensions
   enabled) plus unit tests in `src/markdown.zig` and `src/html.zig`.

@@ -485,3 +485,48 @@ test "xhtml: wellformedness checker itself distinguishes clean from poisoned" {
     try wrapFragment(poisoned, &wrapped_bad);
     try std.testing.expectError(error.Malformed, wellformed.check(wrapped_bad.items));
 }
+
+fn renderWikilinkProfile(
+    input: []const u8,
+    profile: oliver.OutputProfile,
+    resolver: ?oliver.html.WikilinkResolver,
+) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
+        .markdown = .{ .wikilinks = true },
+    });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{
+        .profile = profile,
+        .wikilink_resolver = resolver,
+    });
+    return aw.toArrayList();
+}
+
+fn testXhtmlWikilinkResolver(_: []const u8, label: ?[]const u8, _: ?*const anyopaque) oliver.html.ResolvedWikilink {
+    return .{ .href = "/notes", .text = label orelse "untitled" };
+}
+
+test "xhtml: wikilinks are well-formed under both profiles (extension)" {
+    const input = "See [[Page Name]] and [[Page Name|Custom Label]], plus [[note]] here.\n";
+    var html = try renderWikilinkProfile(input, .html, null);
+    defer html.deinit(std.testing.allocator);
+    var xhtml = try renderWikilinkProfile(input, .xhtml, null);
+    defer xhtml.deinit(std.testing.allocator);
+    // No serialization delta: the profiles agree byte-for-byte.
+    try expectRender(xhtml.items, html.items, "wikilinks xhtml vs html");
+    var wrapped = std.ArrayList(u8).empty;
+    defer wrapped.deinit(std.testing.allocator);
+    try wrapFragment(xhtml.items, &wrapped);
+    try wellformed.check(wrapped.items);
+
+    // A consumer resolver must also stay well-formed.
+    var resolved = try renderWikilinkProfile("[[Page Name|Label]]\n", .xhtml, &testXhtmlWikilinkResolver);
+    defer resolved.deinit(std.testing.allocator);
+    try expectRender(resolved.items, "<p><a href=\"/notes\">Label</a></p>\n", "wikilinks resolver xhtml");
+    var wrapped_r = std.ArrayList(u8).empty;
+    defer wrapped_r.deinit(std.testing.allocator);
+    try wrapFragment(resolved.items, &wrapped_r);
+    try wellformed.check(wrapped_r.items);
+}

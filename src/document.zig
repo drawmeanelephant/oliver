@@ -135,6 +135,13 @@ pub const Tag = enum {
     /// `data.link` this payload is *not* escape-resolved;
     /// docs/AUTOLINKS.md §3).
     autolink,
+    /// An inline wikilink (Markdown `[[target]]` / `[[target|label]]`
+    /// extension). Leaf: no children. `data.wikilink` holds the trimmed
+    /// target and optional label — both source slices (the trimmed span
+    /// borrows the source; docs/WIKILINKS.md §4). Resolution is a
+    /// renderer policy: the default percent-encodes the target as the
+    /// href with `label orelse target` as the text.
+    wikilink,
     /// A raw HTML tag (Markdown §6.6): an open/closing tag, comment,
     /// processing instruction, declaration, or CDATA section. Leaf: no
     /// children. No data payload — the renderer writes the source bytes
@@ -171,13 +178,13 @@ pub const Tag = enum {
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => true,
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => false,
         };
     }
@@ -236,6 +243,10 @@ pub const Data = union(enum) {
     /// inside autolinks (§6.5), so the content is copied verbatim — never
     /// passed through escape resolution (docs/AUTOLINKS.md §3).
     autolink: Autolink,
+    /// `.wikilink`: the trimmed target and optional label of a
+    /// `[[target]]` / `[[target|label]]` wikilink (Markdown extension),
+    /// both source slices (trimming narrows the span; no copy).
+    wikilink: Wikilink,
     /// `.list`: the list's type, its bullet character or ordered delimiter,
     /// the ordered start number (1 for bullet lists; the first item's number
     /// for ordered), and the tight/loose flag (docs/BLOCKS-PARSING.md §4:
@@ -370,6 +381,17 @@ pub const CodeBlock = struct {
 pub const Autolink = struct {
     href: []const u8,
     label: []const u8,
+};
+
+/// `.wikilink` payload: the trimmed target and the optional trimmed
+/// label of a `[[target]]` / `[[target|label]]` wikilink (Markdown
+/// extension, docs/WIKILINKS.md). Both are source slices — trimming
+/// narrows the span, so no copy is needed. The label is null when the
+/// `|label` form is absent, not an empty string. The node span covers
+/// the whole `[[…]]` construct.
+pub const Wikilink = struct {
+    target: []const u8,
+    label: ?[]const u8 = null,
 };
 
 /// The payload of a `.list` node (Markdown §5.3). `bullet`/`delimiter`

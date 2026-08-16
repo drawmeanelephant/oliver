@@ -572,3 +572,14 @@ src/cooklang_scale.zig and docs/COOKLANG.md §11, not claimed to be
 convention behavior.
 
 No Markdown or Textile parser implementation source was consulted.
+
+Session 24 (E1 wikilinks extension) provenance record: the
+`[[target]]` / `[[target|label]]` syntax is modeled on Obsidian's
+published, user-facing wikilink documentation (a user-facing syntax
+doc, clean-room allowed). The behavior contract was written before any
+code (docs/WIKILINKS.md) and pins the chosen shapes — the greedy
+first-`]]` closer, the atomic literal fallback, `[[`-free targets, the
+space/tab-trimmed target/label, and renderer-policy resolution with a
+deterministic default (target percent-encoded as the href, `label
+orelse target` as the text). No parser implementation source was
+consulted.

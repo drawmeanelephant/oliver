@@ -125,6 +125,14 @@ pub const Options = struct {
     /// Flanking follows the CommonMark emphasis rules (GFM spec §6.5
     /// "Strikethrough (extension)").
     strikethrough: bool = false,
+    /// Obsidian-style wikilinks: `[[Page Name]]` and
+    /// `[[Page Name|Custom Label]]` parse into a `.wikilink` inline node
+    /// (resolved at render time by a resolver policy, docs/WIKILINKS.md).
+    /// Recognized ahead of link brackets; malformed shapes (unterminated,
+    /// empty/whitespace targets, empty labels, `[[a|b|c]]`, `[[` inside
+    /// the target) stay literal. Off by default so the CommonMark corpus
+    /// stays byte-exact.
+    wikilinks: bool = false,
 };
 
 const tab_stop: u32 = 4;
@@ -2873,12 +2881,27 @@ const InlineItem = union(enum) {
     /// the whole construct and `label` the bytes between `^` and `]`.
     /// Leaf item: opaque to the delimiter stack.
     footnote: FootnoteItem,
+    /// A recognized wikilink (`[[target]]` / `[[target|label]]`, extension):
+    /// `span` covers the whole `[[…]]` construct and `content` the raw
+    /// bytes between the delimiters. The target/label split and trim are
+    /// validated at discovery (`splitWikilinkContent`) and re-derived at
+    /// emit time. Leaf item: opaque to the delimiter stack and link
+    /// discovery (docs/WIKILINKS.md §2).
+    wikilink: WikilinkItem,
 };
 
 /// A Markdown footnote reference item (extension). See `InlineItem.footnote`.
 const FootnoteItem = struct {
     span: source.Span,
     label: source.Span,
+};
+
+/// A recognized wikilink item (extension). See `InlineItem.wikilink`.
+const WikilinkItem = struct {
+    /// The whole `[[…]]` construct.
+    span: source.Span,
+    /// The raw bytes between `[[` and `]]` (before trimming/splitting).
+    content: source.Span,
 };
 
 /// A raw HTML tag item (§6.6): the whole construct span. The tag's bytes
@@ -2917,6 +2940,7 @@ fn itemSpan(item: InlineItem) source.Span {
         .autolink => |a| a.span,
         .raw_html => |h| h.span,
         .footnote => |fn_| fn_.span,
+        .wikilink => |wk| wk.span,
     };
 }
 
@@ -2933,6 +2957,7 @@ fn setItemSpan(item: *InlineItem, span: source.Span) void {
         .autolink => |*a| a.span = span,
         .raw_html => |*h| h.span = span,
         .footnote => |*fn_| fn_.span = span,
+        .wikilink => |*wk| wk.span = span,
     }
 }
 
@@ -3487,6 +3512,65 @@ const max_link_scan: usize = 2048;
 /// (spec example 561). Reference forms apply to both `[` and `![` openers
 /// (reference-style images per docs/REFERENCE-IMAGES.md). Runs
 /// before emphasis matching: link/image items are opaque to the delimiter
+/// The trimmed target/label spans of a wikilink's raw content, or null
+/// when the shape is malformed: an empty or whitespace-only target or
+/// label, an empty target on the label-side-only form (`[[|x]]`), or a
+/// label containing a second `|` (`[[a|b|c]]`) (docs/WIKILINKS.md §1).
+/// Trimming removes leading/trailing spaces and tabs; the returned spans
+/// are the trimmed sub-ranges of `content`.
+const WikilinkParts = struct {
+    target: source.Span,
+    label: ?source.Span,
+};
+
+fn splitWikilinkContent(bytes: []const u8, content: source.Span) ?WikilinkParts {
+    var end = content.end;
+    while (end > content.start and (bytes[end - 1] == ' ' or bytes[end - 1] == '\t')) end -= 1;
+    var start = content.start;
+    while (start < end and (bytes[start] == ' ' or bytes[start] == '\t')) start += 1;
+    if (start >= end) return null; // empty after trim
+
+    var pipe: ?usize = null;
+    var i = start;
+    while (i < end) : (i += 1) {
+        if (bytes[i] == '|') {
+            pipe = i;
+            break;
+        }
+    }
+    const pipe_at = pipe orelse return .{ .target = .{ .start = @intCast(start), .end = @intCast(end) }, .label = null };
+    if (pipe_at <= start) return null; // `[[|x]]`: empty target
+
+    // Label: after the pipe, trimmed, non-empty, no second pipe.
+    var ls = pipe_at + 1;
+    while (ls < end and (bytes[ls] == ' ' or bytes[ls] == '\t')) ls += 1;
+    var le = end;
+    while (le > ls and (bytes[le - 1] == ' ' or bytes[le - 1] == '\t')) le -= 1;
+    if (ls >= le) return null; // `[[x|]]`: empty label
+    var j = ls;
+    while (j < le) : (j += 1) {
+        if (bytes[j] == '|') return null; // `[[a|b|c]]`: extra pipe
+    }
+    return .{
+        .target = .{ .start = @intCast(start), .end = @intCast(pipe_at) },
+        .label = .{ .start = @intCast(ls), .end = @intCast(le) },
+    };
+}
+
+/// A wikilink that ends up inside a formed link's display text (or an
+/// image description) is demoted to literal text: wikilinks are opaque
+/// inside link text (docs/WIKILINKS.md §2), so `[a [[b]] c](/url)` keeps
+/// `[[b]]` literal — a nested `<a>` inside `<a>` would be invalid HTML.
+/// Runs on the copied children list; `out` in the caller is unaffected.
+fn demoteWikilinks(children: *std.ArrayList(InlineItem)) void {
+    for (children.items) |*c| {
+        if (c.* == .wikilink) {
+            const span = c.wikilink.span;
+            c.* = .{ .text = span };
+        }
+    }
+}
+
 /// stack, and their children are matched separately (link text as a fresh
 /// inline scope; image descriptions flattened to the alt string at emit
 /// time).
@@ -3507,6 +3591,63 @@ fn discoverLinksAndImages(
     var i: usize = 0;
     while (i < old.len) : (i += 1) {
         const item = old[i];
+        // Wikilink extension: `[[` is recognized ahead of link brackets
+        // (docs/WIKILINKS.md §2). Two consecutive unescaped `[` bracket
+        // items start a wikilink attempt: scan items for the first pair of
+        // consecutive `]` brackets (the greedy closer), reject a raw `[[`
+        // inside the content and any malformed target/label shape, and
+        // emit a `.wikilink` item consuming the whole construct. On any
+        // failure the `[[` is emitted as literal text and the scan resumes
+        // after it — the bracket machinery never re-visits the `[[`
+        // (atomic fallback).
+        if (options.wikilinks and item == .bracket and item.bracket.ch == '[' and
+            i + 1 < old.len and old[i + 1] == .bracket and old[i + 1].bracket.ch == '[')
+        {
+            var close: ?usize = null;
+            var j = i + 2;
+            while (j + 1 < old.len) : (j += 1) {
+                if (old[j] == .bracket and old[j].bracket.ch == ']' and
+                    old[j + 1] == .bracket and old[j + 1].bracket.ch == ']')
+                {
+                    close = j;
+                    break;
+                }
+            }
+            var matched = false;
+            if (close) |c| {
+                const content = source.Span{
+                    .start = old[i + 1].bracket.span.end,
+                    .end = old[c].bracket.span.start,
+                };
+                // The target may not contain `[[` (docs/WIKILINKS.md §1):
+                // checked on the raw content bytes.
+                var no_nested = true;
+                var k = content.start;
+                while (k + 1 < content.end) : (k += 1) {
+                    if (bytes[k] == '[' and bytes[k + 1] == '[') {
+                        no_nested = false;
+                        break;
+                    }
+                }
+                if (no_nested and splitWikilinkContent(bytes, content) != null) {
+                    matched = true;
+                    try out.append(doc.allocator(), .{
+                        .wikilink = .{
+                            .span = .{ .start = item.bracket.span.start, .end = old[c + 1].bracket.span.end },
+                            .content = content,
+                        },
+                    });
+                    i = c + 1;
+                }
+            }
+            if (!matched) {
+                // Atomic fallback: both `[`s as literal text.
+                try out.append(doc.allocator(), .{ .text = item.bracket.span });
+                try out.append(doc.allocator(), .{ .text = old[i + 1].bracket.span });
+                i += 1;
+            }
+            continue;
+        }
         if (item == .bracket and (item.bracket.ch == '[' or item.bracket.ch == '!')) {
             try out.append(doc.allocator(), item);
             try stack.append(doc.allocator(), out.items.len - 1);
@@ -3560,6 +3701,7 @@ fn discoverLinksAndImages(
                     // images.
                     var children = std.ArrayList(InlineItem).empty;
                     try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
+                    demoteWikilinks(&children); // wikilinks stay literal inside link text
 
                     // Consume the `(...)` items: everything after the `]` up
                     // to (not including) the closing paren. The last
@@ -3728,6 +3870,7 @@ fn discoverLinksAndImages(
                 if (try tryResolveReference(doc, defs, text)) |def| {
                     var children = std.ArrayList(InlineItem).empty;
                     try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
+                    demoteWikilinks(&children); // wikilinks stay literal inside link text
 
                     out.shrinkRetainingCapacity(o);
                     if (is_image) {
@@ -4454,6 +4597,21 @@ fn emitInlines(
                 });
                 try doc.appendChild(current, node);
             },
+            .wikilink => |wk| {
+                // Leaf node (extension): the trimmed target/label,
+                // re-derived from the content span validated at discovery
+                // (docs/WIKILINKS.md §4). Both payloads are source slices
+                // — trimming narrowed the span, no copy. Resolution is a
+                // renderer policy (`html.RenderOptions.wikilink_resolver`).
+                const parts = splitWikilinkContent(doc.src.bytes, wk.content).?;
+                const node = try doc.createNode(.wikilink, wk.span, .{
+                    .wikilink = .{
+                        .target = doc.text(parts.target),
+                        .label = if (parts.label) |ls| doc.text(ls) else null,
+                    },
+                });
+                try doc.appendChild(current, node);
+            },
             .autolink => |al| {
                 // Leaf node: the content between `<` and `>` becomes both
                 // the label and the href (with `mailto:` prepended for
@@ -4785,6 +4943,10 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
             .autolink => |al| try buf.appendSlice(doc.allocator(), doc.src.bytes[al.content.start..al.content.end]),
             .raw_html => |h| try buf.appendSlice(doc.allocator(), doc.src.bytes[h.span.start..h.span.end]),
             .footnote => {}, // a footnote ref contributes no plain text to an alt
+            // A wikilink never reaches a description (demoted to literal
+            // text when a link/image forms); the case is exhaustive and
+            // contributes the raw bytes defensively.
+            .wikilink => |wk| try buf.appendSlice(doc.allocator(), doc.src.bytes[wk.content.start..wk.content.end]),
         }
     }
     return buf.toOwnedSlice(doc.allocator());
@@ -7130,4 +7292,151 @@ test "markdown: strikethrough is literal text when disabled" {
     const p = result.document.root.children.items[0];
     try testing.expectEqual(document.Tag.paragraph, p.tag);
     try testing.expectEqualStrings("~~Hi~~", p.children.items[0].data.text);
+}
+
+test "markdown: wikilinks parse into a .wikilink node with target and label (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "See [[Page Name]] and [[Page Name|Custom Label]] here.",
+        .markdown,
+        ext_parse(.{ .wikilinks = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p.tag);
+    try testing.expectEqual(@as(usize, 5), p.children.items.len);
+    try testing.expectEqualStrings("See ", p.children.items[0].data.text);
+    const w0 = p.children.items[1];
+    try testing.expectEqual(document.Tag.wikilink, w0.tag);
+    try testing.expectEqualStrings("Page Name", w0.data.wikilink.target);
+    try testing.expectEqual(@as(?[]const u8, null), w0.data.wikilink.label);
+    try testing.expectEqualStrings(" and ", p.children.items[2].data.text);
+    const w1 = p.children.items[3];
+    try testing.expectEqual(document.Tag.wikilink, w1.tag);
+    try testing.expectEqualStrings("Page Name", w1.data.wikilink.target);
+    try testing.expectEqualStrings("Custom Label", w1.data.wikilink.label.?);
+    try testing.expectEqualStrings(" here.", p.children.items[4].data.text);
+}
+
+test "markdown: wikilinks are literal text when disabled" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "See [[Page Name]] here.", .markdown, .{});
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.paragraph, p.tag);
+    try testing.expectEqual(@as(usize, 1), p.children.items.len);
+    try testing.expectEqualStrings("See [[Page Name]] here.", p.children.items[0].data.text);
+}
+
+test "markdown: wikilink malformed shapes stay literal (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "[[a|b|c]] [[]] [[|x]] [[x|]] [[ ]] [[unterminated",
+        .markdown,
+        ext_parse(.{ .wikilinks = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(@as(usize, 1), p.children.items.len);
+    try testing.expectEqualStrings("[[a|b|c]] [[]] [[|x]] [[x|]] [[ ]] [[unterminated", p.children.items[0].data.text);
+}
+
+test "markdown: wikilink closer is greedy (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "[[a]]] b",
+        .markdown,
+        ext_parse(.{ .wikilinks = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(@as(usize, 2), p.children.items.len);
+    try testing.expectEqual(document.Tag.wikilink, p.children.items[0].tag);
+    try testing.expectEqualStrings("a", p.children.items[0].data.wikilink.target);
+    try testing.expectEqualStrings("] b", p.children.items[1].data.text);
+}
+
+test "markdown: wikilinks inside link text stay literal (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "A [b [[c]] d](/url) link",
+        .markdown,
+        ext_parse(.{ .wikilinks = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    try testing.expectEqual(document.Tag.link, p.children.items[1].tag);
+    const link = p.children.items[1];
+    // Demoted to literal text — never a nested `<a>` (docs/WIKILINKS.md §2);
+    // the contiguous text runs merge into one node.
+    try testing.expectEqual(@as(usize, 1), link.children.items.len);
+    try testing.expectEqual(document.Tag.text, link.children.items[0].tag);
+    try testing.expectEqualStrings("b [[c]] d", link.children.items[0].data.text);
+}
+
+fn renderWikilinksHtml(input: []const u8, render_options: @import("oliver.zig").html.RenderOptions) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{ .wikilinks = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, render_options);
+    return aw.toArrayList();
+}
+
+test "markdown: wikilinks render with the default resolver (extension)" {
+    var out = try renderWikilinksHtml("[[Page Name|Custom]] and [[Trimmed]]", .{});
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p><a href=\"Page%20Name\">Custom</a> and <a href=\"Trimmed\">Trimmed</a></p>\n",
+        out.items,
+    );
+}
+
+fn testResolveWikilink(
+    target: []const u8,
+    label: ?[]const u8,
+    ctx: ?*const anyopaque,
+) @import("oliver.zig").html.ResolvedWikilink {
+    _ = target;
+    const n: u32 = if (ctx) |c| @as(*const u32, @ptrCast(@alignCast(c))).* else 0;
+    return .{ .href = if (n == 1) "/notes" else "/none", .text = label orelse "untitled" };
+}
+
+test "markdown: a consumer wikilink resolver overrides href and text (extension)" {
+    const ctx: u32 = 1;
+    var out = try renderWikilinksHtml("[[Page Name|Custom]]", .{
+        .wikilink_resolver = &testResolveWikilink,
+        .wikilink_resolver_ctx = &ctx,
+    });
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p><a href=\"/notes\">Custom</a></p>\n", out.items);
+}
+
+test "markdown: a 10,000-wikilink storm renders deterministically (extension)" {
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var i: usize = 0;
+    while (i < 10_000) : (i += 1) {
+        if (i > 0) try input.append(testing.allocator, ' ');
+        try input.appendSlice(testing.allocator, "[[Page ");
+        const n0 = try std.fmt.allocPrint(testing.allocator, "{d}", .{i});
+        try input.appendSlice(testing.allocator, n0);
+        testing.allocator.free(n0);
+        try input.appendSlice(testing.allocator, "|P");
+        const n1 = try std.fmt.allocPrint(testing.allocator, "{d}", .{i});
+        try input.appendSlice(testing.allocator, n1);
+        testing.allocator.free(n1);
+        try input.appendSlice(testing.allocator, "]]");
+    }
+    var a = try renderWikilinksHtml(input.items, .{});
+    defer a.deinit(testing.allocator);
+    var b = try renderWikilinksHtml(input.items, .{});
+    defer b.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, a.items, b.items);
+    try testing.expect(std.mem.count(u8, a.items, "<a href=\"Page%20") == 10_000);
 }
