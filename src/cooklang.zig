@@ -38,14 +38,20 @@
 //!   line break, and multi-line steps merge their text runs.
 //! - Notes (a paragraph whose first line starts with `>`) and section
 //!   titles are plain text — never scanned for tokens.
-//! - YAML front matter is recognized at its boundaries only (both
-//!   fences at the very start of the file); the raw payload is
-//!   preserved with exact spans. Oliver does not parse YAML.
+//! - YAML front matter is recognized at its boundaries (both fences at
+//!   the very start of the file) and the raw payload is preserved with
+//!   exact spans. By default Oliver does not parse YAML; with
+//!   `ParseOptions.frontmatter` on, the shared pre-pass
+//!   (src/frontmatter.zig) additionally parses the payload into
+//!   `Recipe.metadata` under a documented bounded subset
+//!   (docs/FRONTMATTER.md) — never faked, out-of-subset payloads stay
+//!   raw.
 
 const std = @import("std");
 const source = @import("source.zig");
 const diagnostic = @import("diagnostic.zig");
 const unicode = @import("unicode.zig");
+const frontmatter = @import("frontmatter.zig");
 
 pub const ParseError = error{ OutOfMemory, InputTooLarge };
 
@@ -183,6 +189,10 @@ pub const Recipe = struct {
     source: source.Source,
     arena: std.heap.ArenaAllocator,
     frontmatter: ?Frontmatter = null,
+    /// Parsed front matter metadata when `ParseOptions.frontmatter` is on
+    /// and the recipe opens with a fence; null otherwise — the parsed view
+    /// beside `frontmatter.raw` (docs/FRONTMATTER.md §8). Arena-owned.
+    metadata: ?frontmatter.Metadata = null,
     blocks: []Block = &.{},
 
     pub fn allocator(self: *Recipe) std.mem.Allocator {
@@ -194,7 +204,14 @@ pub const Recipe = struct {
     }
 };
 
-pub const ParseOptions = struct {};
+pub const ParseOptions = struct {
+    /// Front matter handling: `.none` (default) keeps the boundary-only
+    /// behavior — `---` fences sniffed at index 0, raw payload + exact
+    /// spans, never parsed. `.yaml` / `.toml` additionally parse the
+    /// payload into `Recipe.metadata` under the bounded subset
+    /// (docs/FRONTMATTER.md §8).
+    frontmatter: frontmatter.Option = .none,
+};
 
 pub const ParseResult = struct {
     recipe: Recipe,
@@ -211,7 +228,6 @@ pub const ParseResult = struct {
 /// The public entry point is `oliver.cooklang.parse`; see docs/COOKLANG.md
 /// for the full contract.
 pub fn parse(allocator: std.mem.Allocator, input: []const u8, options: ParseOptions) ParseError!ParseResult {
-    _ = options;
     if (input.len > source.max_input_len) return error.InputTooLarge;
 
     var recipe = Recipe{
@@ -221,7 +237,20 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8, options: ParseOpti
     errdefer recipe.deinit();
     const a = recipe.allocator();
 
+    // Diagnostics are arena-owned with the recipe so every appender (the
+    // front matter pre-pass and the parser) uses one allocator.
     var diags = std.ArrayList(diagnostic.Diagnostic).empty;
+
+    // Front matter: the shared pre-pass (docs/FRONTMATTER.md). Cooklang's
+    // boundary behavior is always on — `.none` still sniffs `---` (raw
+    // payload + exact spans, never parsed); `.yaml`/`.toml` additionally
+    // parse into `Recipe.metadata`. The source is rebound to the clean
+    // body; `frontmatter.raw`/`span` keep referencing `input`, which
+    // outlives the result.
+    const fm_mode: frontmatter.Option = if (options.frontmatter == .none) .yaml else options.frontmatter;
+    const fm = try frontmatter.preprocess(a, input, fm_mode, options.frontmatter != .none, &diags);
+    recipe.source = .{ .bytes = fm.body };
+
     var parser = Parser{
         .src = recipe.source,
         .a = a,
@@ -230,21 +259,12 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8, options: ParseOpti
         .diags = &diags,
     };
 
-    // Front matter: the file's first line must be a `---` fence and a
-    // later line must close it; otherwise the opener is ordinary text.
-    var lines = source.Lines.init(input);
-    var first_content: ?source.Line = null;
-    const fm = try tryFrontmatter(&parser, &lines, &first_content);
-
     // Blocks: blank lines separate paragraphs. A paragraph whose first
     // line starts with `>` is a note; a line starting with `=` is a
     // section header; anything else is a step.
+    var lines = source.Lines.init(fm.body);
     var para = std.ArrayList(source.Span).empty;
-    while (true) {
-        const line = if (first_content) |l| blk: {
-            first_content = null;
-            break :blk l;
-        } else lines.next() orelse break;
+    while (lines.next()) |line| {
         if (isBlank(line.text)) {
             if (para.items.len > 0) {
                 try appendParagraph(&parser, para.items);
@@ -267,7 +287,8 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8, options: ParseOpti
     // Finalize an open section (no-op when none is open).
     try parser.finishSection();
 
-    recipe.frontmatter = fm;
+    recipe.frontmatter = if (fm.block) |b| .{ .raw = b.raw, .span = b.span } else null;
+    recipe.metadata = if (fm.block) |b| b.metadata else null;
     recipe.blocks = try parser.top.toOwnedSlice(a);
     return .{ .recipe = recipe, .diagnostics = try diags.toOwnedSlice(a) };
 }
@@ -339,48 +360,6 @@ const Parser = struct {
         self.section_open = true;
     }
 };
-
-/// Recognizes the YAML front matter block at the very start of the file:
-/// the first line must be exactly `---` (trailing whitespace allowed) and
-/// a later line must be exactly `---`. Without the closing fence, the
-/// opener is ordinary step text. Returns null when there is no front
-/// matter; in that case `first_out` receives the first line so the block
-/// loop can still process it.
-fn tryFrontmatter(p: *Parser, lines: *source.Lines, first_out: *?source.Line) ParseError!?Frontmatter {
-    const first = lines.next() orelse return null;
-    if (!isFence(first.text)) {
-        first_out.* = first;
-        return null;
-    }
-    var raw_start: ?u32 = null;
-    while (lines.next()) |line| {
-        if (isFence(line.text)) {
-            // The payload runs from the first content line to the closing
-            // fence's line start; when the fences are adjacent (an empty
-            // front matter block) the payload is the empty slice.
-            const start: u32 = raw_start orelse @intCast(line.start);
-            const raw = p.src.bytes[start..@intCast(line.start)];
-            return .{
-                .raw = raw,
-                .span = .{ .start = @intCast(first.start), .end = @intCast(line.end) },
-            };
-        }
-        if (raw_start == null) raw_start = @intCast(line.start);
-    }
-    // No closing fence: the opener is ordinary content (degradation is
-    // the documented behavior), with a structured warning so consumers
-    // can spot the dangling fence.
-    try emitWarning(p, "unclosed-frontmatter", .{ .start = @intCast(first.start), .end = @intCast(first.end) }, "front matter fence `---` never closed");
-    first_out.* = first;
-    return null;
-}
-
-fn isFence(text: []const u8) bool {
-    if (text.len < 3 or text[0] != '-' or text[1] != '-' or text[2] != '-') return false;
-    var i: usize = 3;
-    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
-    return i == text.len;
-}
 
 fn isBlank(text: []const u8) bool {
     for (text) |b| {
@@ -1329,6 +1308,40 @@ test "cooklang: YAML front matter boundaries only" {
     var res3 = try parseT(std.testing.allocator, "---\ntitle: x");
     defer res3.deinit();
     try std.testing.expect(res3.recipe.frontmatter == null);
+}
+
+test "cooklang: frontmatter option parses metadata beside raw" {
+    // docs/FRONTMATTER.md §8: with `ParseOptions.frontmatter` on, the
+    // Recipe exposes the parsed view beside the unchanged raw/span
+    // boundary contract.
+    var res = try parse(std.testing.allocator, "---\nsourced: babooshka\n---\n\nAdd @salt.", .{ .frontmatter = .yaml });
+    defer res.deinit();
+    const fm = res.recipe.frontmatter.?;
+    try std.testing.expectEqualStrings("sourced: babooshka\n", fm.raw);
+    try std.testing.expectEqual(@as(u32, 0), fm.span.start);
+    const m = res.recipe.metadata.?;
+    try std.testing.expectEqual(@as(usize, 1), m.entries.len);
+    try std.testing.expectEqualStrings("sourced", m.entries[0].key);
+    try std.testing.expectEqualStrings("babooshka", m.entries[0].value.scalar);
+    try std.testing.expectEqual(@as(usize, 1), res.recipe.blocks.len);
+    try std.testing.expectEqual(@as(usize, 0), res.diagnostics.len);
+}
+
+test "cooklang: default options keep the parsed view null" {
+    // Boundary behavior unchanged until the option is on: the raw
+    // frontmatter is recognized, never parsed.
+    var res = try parseT(std.testing.allocator, "---\nsourced: babooshka\n---\n\nAdd @salt.");
+    defer res.deinit();
+    try std.testing.expect(res.recipe.frontmatter != null);
+    try std.testing.expect(res.recipe.metadata == null);
+}
+
+test "cooklang: toml fence with the toml option" {
+    var res = try parse(std.testing.allocator, "+++\ntitle = \"Hello\"\n+++\nAdd @salt.", .{ .frontmatter = .toml });
+    defer res.deinit();
+    try std.testing.expect(res.recipe.frontmatter != null);
+    const m = res.recipe.metadata.?;
+    try std.testing.expectEqualStrings("Hello", m.entries[0].value.scalar);
 }
 
 test "cooklang: empty input and CRLF" {

@@ -1,20 +1,20 @@
 ---
 published_at: 2026-08-16T00:00:00Z
-summary: Pre-implementation contract for YAML/TOML front-matter extraction with a parsed metadata object for all three frontends.
+summary: Contract for YAML/TOML front-matter extraction with a parsed metadata object for all three frontends (shipped, issue #66).
 ---
 
 # Front matter (extension) — contract
 
-**Status:** planned — contract only; nothing is parsed or stripped yet
-beyond Cooklang's existing boundary handling. Implementation is tracked
-as issue #66 (milestone v0.5, "The Green Pastures Release"), ledger card
-F1, and the "front matter (extension)" row of the feature matrix
-(docs/FEATURE-MATRIX.md).  \
-**Modules:** new `src/frontmatter.zig` (shared pre-pass), `oliver.parse`
+**Status:** implemented — the shared sniff/strip pre-pass, the bounded
+YAML/TOML subset parsers, `ParseResult.metadata`, and the Cooklang
+convergence landed on main as issue #66 (milestone v0.5, "The Green
+Pastures Release"), ledger card F1, and the "front matter (extension)"
+row of the feature matrix (docs/FEATURE-MATRIX.md).  \
+**Modules:** `src/frontmatter.zig` (shared pre-pass), `oliver.parse`
 + `ParseResult` (dispatch boundary), `src/cooklang.zig`
 (`tryFrontmatter` convergence)  \
-**Options (proposed):** `ParseOptions.frontmatter: enum { none, yaml,
-toml } = .none` (shared by all three frontends)
+**Options:** `ParseOptions.frontmatter: enum { none, yaml, toml } =
+.none` (shared by all three frontends)
 
 ## 1. Current state and provenance
 
@@ -29,9 +29,9 @@ Markdown/Textile frontends have no front-matter concept: at index 0,
 
 This contract extends the boundary rule into parsing — but honestly:
 the parsing is a **documented, bounded Oliver-chosen subset**, not a
-reference YAML/TOML implementation (clean-room session to be recorded).
-Anything outside the subset stays raw with a diagnostic; Oliver never
-guesses.
+reference YAML/TOML implementation (clean-room session 25 recorded in
+docs/CLEANROOM.md). Anything outside the subset stays raw with a
+diagnostic; Oliver never guesses.
 
 ## 2. Detection and stripping
 
@@ -80,6 +80,11 @@ recorded here:
   indented deeper than their parent key; the indent rule is pinned at
   **2 spaces** (a document may use one consistent deeper indent; the
   exact rule is "any consistent deeper indentation, pinned by fixture").
+  Shipped pin: a nested value (map **or** list) must be indented deeper
+  than its key — `key:\n- a` at the same indent is out of subset — and
+  the first nested key's indent fixes the block, so a later line deeper
+  than its sibling's level is out of subset (pinned by the
+  `frontmatter-nested` fixture and the unit battery).
 - **Comments:** a full-line `#` comment is skipped. Inline comments
   (`value # comment`) are outside the subset.
 
@@ -118,19 +123,25 @@ pub const Value = union(enum) {
 - Scalars keep their **raw lexical bytes** (`"42"` stays `42` as bytes,
   `true` stays `true`) — no type coercion, matching the Cooklang
   quantity philosophy.
-- Duplicate keys: **last wins** (the YAML convention), pinned.
+- Duplicate keys: **last wins** (the YAML convention), pinned: the
+  first position keeps the last value. Empty front matter (`---\n---`)
+  parses to an empty, non-null `Metadata` (the CK2 fix precedent).
 - `ParseResult` gains `metadata: ?Metadata` (null when there is no front
   matter or when the option is off). Cooklang's `Recipe` gains a parsed
   view beside `frontmatter.raw`.
 
 ## 8. Cooklang convergence
 
-- `tryFrontmatter` moves onto the shared pre-pass; `Recipe.frontmatter`
+- `tryFrontmatter` moved onto the shared pre-pass; `Recipe.frontmatter`
   keeps its `raw`/`span` contract (serialization, scaling, and the menu
-  view read the raw payload and must not change).
+  view read the raw payload and must not change). The Recipe's
+  `source` is rebound to the clean body (like the Markdown/Textile
+  document); `frontmatter.raw`/`span` keep referencing the original
+  input, which outlives the result.
 - With `ParseOptions.frontmatter` on, the Recipe additionally exposes
-  the parsed metadata; scaling's `.servings` mode may later read the
-  parsed view (out of scope here — behavior unchanged).
+  the parsed metadata (`Recipe.metadata`); scaling's `.servings` mode
+  may later read the parsed view (out of scope here — behavior
+  unchanged).
 
 ## 9. Diagnostics
 
@@ -139,22 +150,31 @@ pub const Value = union(enum) {
 - `frontmatter-parse-unsupported` — new, when a payload is outside the
   subset (whole payload stays raw).
 
-## 10. Acceptance and fixtures
+## 10. Acceptance and fixtures (shipped)
 
 - `---\ntitle: Hello\n---\n\n# Doc` parses to
   `metadata.title == "Hello"` with the body exactly `# Doc` →
-  `<h1>Doc</h1>`, across markdown, textile, and cooklang.
+  `<h1>Doc</h1>`, across markdown, textile, and cooklang (unit tests in
+  `src/oliver.zig` / `src/cooklang.zig`; fixture pairs per frontend).
 - YAML subset fixtures: scalars (bare/quoted/typed), lists, nested maps,
   comments, empty front matter `---\n---` (must not panic — the CK2 fix
   is the precedent), `+++`/`---` fence correctness.
 - TOML fixtures: `key = value`, `[table]`, `[[array-of-tables]]`.
 - Out-of-subset fixture: payload stays raw + `frontmatter-parse-unsupported`.
-- Unclosed-opener fixtures per frontend (`unclosed-frontmatter`).
-- Default options: byte-identical output — 652/652 + full suite green.
+- Unclosed-opener fixture: bytes pass through, `---` degrades to a
+  thematic break (`frontmatter-unclosed`), and `unclosed-frontmatter`
+  fires.
+- Default options: byte-identical output — re-verified at integration
+  (CommonMark 652/652, Cooklang 60/60, full suite green).
+- Fixture wall: `tests/fixtures/{markdown,textile,cooklang}/frontmatter-*`
+  (markdown: `yaml`, `toml`, `nested`, `out-of-subset`, `unclosed`;
+  textile: `textile`; cooklang: `cooklang`).
 
 ## 11. Conformance status
 
 Extension, off by default: the CommonMark 0.31.2 corpus is untouched
-(re-verified at integration). Cooklang boundary behavior is unchanged
-until the option is on. The fixture wall lives at
+(re-verified at integration — 652/652, 0 regressions). Cooklang boundary
+behavior is unchanged until the option is on (`.none` still sniffs `---`
+with raw + exact spans, never parsed). The XHTML well-formedness gate
+covers a frontmatter body under both profiles. The fixture wall lives at
 `tests/fixtures/{markdown,textile,cooklang}/frontmatter-*`.

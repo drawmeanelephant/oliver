@@ -31,9 +31,14 @@ Boris:   files, metadata authority, graph, recipe-reference resolution,
   parsed as semantic references — the path string is preserved; resolving
   it against a recipe corpus is a consumer responsibility.
 - The current spec's YAML front matter is recognized at its boundary and
-  preserved as a raw borrowed payload with exact spans. Oliver does **not**
-  parse arbitrary YAML (it has no YAML layer, and faking a subset would
-  corrupt Boris's metadata authority). The canonical conformance harness
+  preserved as a raw borrowed payload with exact spans. By default
+  Oliver does **not** parse arbitrary YAML (it has no reference YAML
+  layer, and faking a subset would corrupt Boris's metadata authority).
+  With the shared frontmatter extension on
+  (`ParseOptions.frontmatter = .yaml`, docs/FRONTMATTER.md), the payload
+  is additionally parsed into `Recipe.metadata` under a documented,
+  bounded Oliver-chosen subset — never faked, out-of-subset payloads
+  stay raw with a diagnostic. The canonical conformance harness
   (a dev-only tool) reads the corpus's flat `key: value` forms only.
 - Application/ecosystem behavior — shopping lists, checked state, pantry,
   aisles, image discovery, collection indexing, search, meal scheduling,
@@ -87,10 +92,12 @@ infrastructure (spans, diagnostics, arena ownership, byte borrowing,
 
 ```
 Recipe
-  source: source.Source            (borrowed bytes)
+  source: source.Source            (borrowed clean body — fences stripped)
   arena: ArenaAllocator            (owns nothing but the block list itself;
                                    text payloads are borrowed slices)
-  frontmatter: ?Frontmatter        (raw YAML payload + exact spans)
+  frontmatter: ?Frontmatter        (raw YAML payload + exact spans, into the
+                                   original input)
+  metadata: ?frontmatter.Metadata  (parsed view, option on; docs/FRONTMATTER.md)
   blocks: []Block
 
 Frontmatter { raw: []const u8, span: source.Span }

@@ -530,3 +530,28 @@ test "xhtml: wikilinks are well-formed under both profiles (extension)" {
     try wrapFragment(resolved.items, &wrapped_r);
     try wellformed.check(wrapped_r.items);
 }
+
+fn renderFrontmatterProfile(input: []const u8, profile: oliver.OutputProfile) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{ .frontmatter = .yaml });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{ .profile = profile });
+    return aw.toArrayList();
+}
+
+test "xhtml: frontmatter body is well-formed under both profiles (extension)" {
+    // The strip happens before parsing, so the fence and payload never
+    // reach the renderer; the body must stay well-formed under `.xhtml`
+    // like any other markdown (docs/FRONTMATTER.md §10).
+    const input = "---\ntitle: \"A & B\"\n---\n\n# Doc\n\nSee [a & b](/x?a=1&b=2).\n";
+    var html = try renderFrontmatterProfile(input, .html);
+    defer html.deinit(std.testing.allocator);
+    var xhtml = try renderFrontmatterProfile(input, .xhtml);
+    defer xhtml.deinit(std.testing.allocator);
+    try expectRender(xhtml.items, html.items, "frontmatter xhtml vs html");
+    var wrapped = std.ArrayList(u8).empty;
+    defer wrapped.deinit(std.testing.allocator);
+    try wrapFragment(xhtml.items, &wrapped);
+    try wellformed.check(wrapped.items);
+}

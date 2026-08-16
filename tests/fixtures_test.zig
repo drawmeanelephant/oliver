@@ -1511,6 +1511,59 @@ const TextileFixture = struct {
     expected: []const u8,
 };
 
+// Frontmatter-extension fixtures (docs/FRONTMATTER.md §10): parsed with
+// `ParseOptions.frontmatter` on and rendered with default render options.
+// Each entry carries the fence dialect its input uses.
+const MarkdownFmFixture = struct {
+    name: []const u8,
+    mode: oliver.frontmatter.Option,
+    input: []const u8,
+    expected: []const u8,
+};
+
+const markdown_fm_fixtures = [_]MarkdownFmFixture{
+    .{
+        .name = "frontmatter-yaml",
+        .mode = .yaml,
+        .input = @embedFile("fixtures/markdown/frontmatter-yaml.md"),
+        .expected = @embedFile("fixtures/markdown/frontmatter-yaml.html"),
+    },
+    .{
+        .name = "frontmatter-toml",
+        .mode = .toml,
+        .input = @embedFile("fixtures/markdown/frontmatter-toml.md"),
+        .expected = @embedFile("fixtures/markdown/frontmatter-toml.html"),
+    },
+    .{
+        .name = "frontmatter-nested",
+        .mode = .yaml,
+        .input = @embedFile("fixtures/markdown/frontmatter-nested.md"),
+        .expected = @embedFile("fixtures/markdown/frontmatter-nested.html"),
+    },
+    .{
+        .name = "frontmatter-out-of-subset",
+        .mode = .yaml,
+        .input = @embedFile("fixtures/markdown/frontmatter-out-of-subset.md"),
+        .expected = @embedFile("fixtures/markdown/frontmatter-out-of-subset.html"),
+    },
+    .{
+        .name = "frontmatter-unclosed",
+        .mode = .yaml,
+        .input = @embedFile("fixtures/markdown/frontmatter-unclosed.md"),
+        .expected = @embedFile("fixtures/markdown/frontmatter-unclosed.html"),
+    },
+};
+
+// Textile frontmatter fixture pair (docs/FRONTMATTER.md §10): parsed with
+// `.frontmatter = .yaml`, rendered with default render options.
+const textile_fm_fixtures = [_]TextileFixture{
+    .{
+        .name = "frontmatter-textile",
+        .input = @embedFile("fixtures/textile/frontmatter-textile.textile"),
+        .expected = @embedFile("fixtures/textile/frontmatter-textile.html"),
+    },
+};
+
 const textile_fixtures = [_]TextileFixture{
     .{
         .name = "paragraph",
@@ -2252,6 +2305,17 @@ const cooklang_fixtures = [_]CooklangFixture{
     },
 };
 
+// Frontmatter-extension cooklang fixture pair (docs/FRONTMATTER.md §10):
+// parsed with `.frontmatter = .yaml` so the parsed metadata view is
+// exercised; the raw frontmatter still never renders.
+const cooklang_fm_fixtures = [_]CooklangFixture{
+    .{
+        .name = "frontmatter-cooklang",
+        .input = @embedFile("fixtures/cooklang/frontmatter-cooklang.cook"),
+        .expected = @embedFile("fixtures/cooklang/frontmatter-cooklang.html"),
+    },
+};
+
 // Canonical-serialization fixture pairs (docs/COOKLANG.md §10): input
 // `.cook` files whose canonical serialization must equal the expected
 // `.out.cook` bytes exactly.
@@ -2445,6 +2509,75 @@ test "markdown extension fixtures" {
         if (!std.mem.eql(u8, f.expected, out.items)) {
             std.debug.print(
                 "extension fixture [{s}] mismatch\n--- expected ({d} bytes) ---\n{s}\n--- actual ({d} bytes) ---\n{s}\n",
+                .{ f.name, f.expected.len, f.expected, out.items.len, out.items },
+            );
+            return error.FixtureMismatch;
+        }
+    }
+}
+
+fn renderMarkdownFmHtml(input: []const u8, mode: oliver.frontmatter.Option) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{ .frontmatter = mode });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "markdown frontmatter fixtures" {
+    for (markdown_fm_fixtures) |f| {
+        var out = try renderMarkdownFmHtml(f.input, f.mode);
+        defer out.deinit(std.testing.allocator);
+        if (!std.mem.eql(u8, f.expected, out.items)) {
+            std.debug.print(
+                "frontmatter fixture [{s}] mismatch\n--- expected ({d} bytes) ---\n{s}\n--- actual ({d} bytes) ---\n{s}\n",
+                .{ f.name, f.expected.len, f.expected, out.items.len, out.items },
+            );
+            return error.FixtureMismatch;
+        }
+    }
+}
+
+fn renderTextileFmHtml(input: []const u8) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .textile, .{ .frontmatter = .yaml });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "textile frontmatter fixtures" {
+    for (textile_fm_fixtures) |f| {
+        var out = try renderTextileFmHtml(f.input);
+        defer out.deinit(std.testing.allocator);
+        if (!std.mem.eql(u8, f.expected, out.items)) {
+            std.debug.print(
+                "textile frontmatter fixture [{s}] mismatch\n--- expected ({d} bytes) ---\n{s}\n--- actual ({d} bytes) ---\n{s}\n",
+                .{ f.name, f.expected.len, f.expected, out.items.len, out.items },
+            );
+            return error.FixtureMismatch;
+        }
+    }
+}
+
+fn renderCooklangFmHtml(input: []const u8) !std.ArrayList(u8) {
+    var result = try oliver.cooklang.parse(std.testing.allocator, input, .{ .frontmatter = .yaml });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.cooklang_html.render(std.testing.allocator, &aw.writer, &result.recipe, .{});
+    return aw.toArrayList();
+}
+
+test "cooklang frontmatter fixtures" {
+    for (cooklang_fm_fixtures) |f| {
+        var out = try renderCooklangFmHtml(f.input);
+        defer out.deinit(std.testing.allocator);
+        if (!std.mem.eql(u8, f.expected, out.items)) {
+            std.debug.print(
+                "cooklang frontmatter fixture [{s}] mismatch\n--- expected ({d} bytes) ---\n{s}\n--- actual ({d} bytes) ---\n{s}\n",
                 .{ f.name, f.expected.len, f.expected, out.items.len, out.items },
             );
             return error.FixtureMismatch;

@@ -146,7 +146,7 @@
           "file": "FRONTMATTER.md",
           "title": "Front matter (extension)",
           "audience": "dev",
-          "summary": "Pre-implementation contract for YAML/TOML front matter: detection, the bounded subset, the metadata model, Cooklang convergence (issue #66)."
+          "summary": "Contract for YAML/TOML front matter: the shared sniff/strip pre-pass, the bounded subset, the metadata model, Cooklang convergence (shipped, issue #66)."
         },
         {
           "file": "SMARTY.md",

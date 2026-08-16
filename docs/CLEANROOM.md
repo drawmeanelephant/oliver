@@ -583,3 +583,16 @@ space/tab-trimmed target/label, and renderer-policy resolution with a
 deterministic default (target percent-encoded as the href, `label
 orelse target` as the text). No parser implementation source was
 consulted.
+
+Session 25 (F1 frontmatter extension) provenance record: the YAML/TOML
+subset grammar is Oliver's own — the fences (`---`/`+++` at index 0)
+and the boundary contract extend Cooklang's existing
+`tryFrontmatter`/`unclosed-frontmatter` behavior; the parsing rules
+(top-level mappings, raw-byte scalars, quoted forms with `\"`/`\\`
+escapes, scalar lists, indented maps by consistent deeper
+indentation, full-line comments, last-wins duplicates; TOML
+`key = value`, `[table]`, `[[array-of-tables]]`) were pinned in
+docs/FRONTMATTER.md before any code and follow the documented,
+bounded-subset discipline — Oliver never fakes a reference YAML/TOML
+parser, and everything outside the subset stays raw with a diagnostic.
+No YAML or TOML parser implementation source was consulted.
