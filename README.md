@@ -209,7 +209,7 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (360 tests)
+zig build test    # run all tests (365 tests)
 zig build         # build the static library and CLI into zig-out/
 zig build cooklang-conformance   # Cooklang canonical corpus (vendored)
 ```
@@ -303,6 +303,10 @@ oliver render --from cooklang  < recipe.cook
 oliver render --from markdown --to xhtml < document.md  # XML-compatible fragment
 oliver render --from textile  --to xhtml < document.textile
 oliver render --from cooklang --to xhtml < recipe.cook
+# Markdown extensions (all off by default)
+oliver render --from markdown --wikilinks --callouts --smartypants < document.md
+oliver render --from markdown --footnotes --definition-lists --heading-attributes --strikethrough < document.md
+oliver render --from markdown --frontmatter yaml < document.md  # --frontmatter works on any frontend
 oliver serialize --from cooklang < recipe.cook   # canonical .cook
 oliver scale --from cooklang --factor 2 < recipe.cook   # scaled .cook
 oliver scale --from cooklang --servings 4 < recipe.cook  # via servings

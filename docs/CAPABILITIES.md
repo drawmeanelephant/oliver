@@ -85,7 +85,11 @@ YAML). Derived operations over the same model:
   `oliver scale --from cooklang (--factor n[/d] | --servings n)`,
   `oliver menu --from cooklang` — a thin stdin/stdout adapter; all
   semantics live in the library. HTML remains the default; `--to xhtml`
-  selects the XML-compatible fragment serialization.
+  selects the XML-compatible fragment serialization. Markdown render
+  also exposes the extension surface as flags (`--wikilinks`,
+  `--callouts`, `--smartypants`, `--footnotes`, `--definition-lists`,
+  `--heading-attributes`, `--strikethrough`) and `--frontmatter
+  yaml|toml` on any render frontend — all off by default.
 
 ## Go deeper
 
