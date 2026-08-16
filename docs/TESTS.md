@@ -38,8 +38,11 @@ fifth — the XHTML profile suite — is described in its own section below):
    10,000-pair phrase storm, and a 2,000-deep phrase-nesting workload.
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
-2. **Fixture and adversarial tests** — 14 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 275 Markdown and 105 Textile fixture pairs.
+2. **Fixture and adversarial tests** — 18 tests in `tests/fixtures_test.zig`.
+   The explicit index contains 299 Markdown (276 CommonMark/GFM +
+   18 extension + 5 frontmatter pairs) and 106 Textile (105 + 1
+   frontmatter pair) fixture pairs, plus 11 Cooklang pairs across the
+   fixture, frontmatter, serialize, scale, and menu tables.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
    emphasis/strong, code spans, inline links, inline/reference-style images,
    block quotes, list items and lists (§§5.2–5.3: marker-width indentation,
@@ -145,7 +148,8 @@ fifth — the XHTML profile suite — is described in its own section below):
    docs/TEXTILE-PARITY.md §18). Every Textile fixture family in the
    index is counted in the final coverage scorecard,
    docs/TEXTILE-PARITY.md §24 — one fixture pair per row, summing to the
-   105 Textile pairs here. The Cooklang wall covers the semantic
+   105 parity pairs; the frontmatter pair brings the Textile wall to the
+   106 counted above. The Cooklang wall covers the semantic
    families end-to-end through Oliver's deterministic HTML policy
    (`cooklang-basic`, `cooklang-sections`, `cooklang-frontmatter`,
    `cooklang-literal`; docs/COOKLANG.md) and the canonical serializer
@@ -182,9 +186,9 @@ fifth — the XHTML profile suite — is described in its own section below):
    `--help`/`-h` handling. They run as part of the ordinary `zig build
    test` gate.
 
-The current complete result is **280/280 tests passing** with Zig 0.16.0
-(236 library module tests + 14 fixture/adversarial tests + 7
-conformance-harness tests + 10 CLI argument-parsing tests + 13 XHTML
+The current complete result is **357/357 tests passing** with Zig 0.16.0
+(304 library module tests + 18 fixture/adversarial tests + 7
+conformance-harness tests + 11 CLI argument-parsing tests + 17 XHTML
 profile tests). On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the
 Textile wall stays fully green, and the Cooklang canonical corpus passes
