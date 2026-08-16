@@ -49,6 +49,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Markdown extension worker | E1 modular wikilinks | `Options.wikilinks` inline scan → `.wikilink` leaf (`target`/`label`) + resolver-aware render arm (default: target percent-encoded as the href, `label orelse target` as text; docs/WIKILINKS.md); Markdown fixtures; Textile and the CommonMark corpus untouched | after F1 (v0.5) | implemented on main (issue #64) |
 | Markdown extension worker | E2 callouts/admonitions | `Options.callouts` recognition on the container-block quote path; `.block_quote` callout payload (`type`/`title`/`title_nodes`) + `<div class="callout callout-<type>">` render arm (docs/CALLOUTS.md); Markdown fixtures; corpus untouched | after E1 (v0.6) | implemented on main (issue #65) |
 | shared worker | E3 smart typography | extract Textile's `replaceChars`/`hasCharMacroTrigger` machinery into one shared module (`src/typography.zig`; two callers, Textile byte-identical); `Options.smartypants` text pass with the Textile exemption set (docs/SMARTY.md); Markdown fixtures | after F1/E1 (v1.0) | implemented on main (issue #67) |
+| Cooklang worker | CK6 string-quantity classify/scale + mixed numbers | public `classifyQuantity` / `parseFactor` / `scaleAmount` over authored amount strings (the exact-rational path, not `parseQuantity`'s f64 decimal arm); `scaleRecipe` becomes a caller of `scaleAmount` on ingredient quantities only; mixed `1 1/2` is a canonical scalable input (emits integer / fraction / terminating decimal); timers/cookware/refs still never scale; `scale-mixed` fixture; docs/COOKLANG.md §11 | after CK3 (issue #76; lets consumers delete a forked string scale) | this PR |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1334,6 +1335,46 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   table cells, and callout titles/bodies — with the exemption set and
   the borrow-or-copy contract intact; the full suite, the 652/652 gate,
   and the Cooklang 60/60 gate are all re-verified.
+
+## CK6 — Public string-quantity classify/scale + mixed numbers
+
+- **Objective:** lift the exact-rational quantity grammar into a
+  documented public string API so consumers that store Cooklang
+  amounts as authored text (not a typed `Recipe`) can classify and
+  scale without forking the operation; widen the canonical numeric
+  forms by mixed `1 1/2`. Issue #76.
+- **Normative sources:** the already-pinned CK3 conventions material
+  (session 22 — "Scaling and Servings"); no new upstream spec. Mixed
+  numbers and the string surface are Oliver's own markup-semantics
+  choice, recorded in clean-room session 28. `parseQuantity`'s f64
+  decimal arm is deliberately not the authority for scaling.
+- **Dependencies:** CK3 `scaleRecipe` / exact rationals / `=` lock;
+  `parseQuantity` stays the HTML/conformance numeric view.
+- **Seams:** `src/cooklang.zig` (`classifyQuantity`, mixed-number arm
+  of `parseQuantity`, `parseMixedNumber`); `src/cooklang_scale.zig`
+  (`parseFactor`, `scaleAmount`, `scaleRecipe` calls `scaleAmount` on
+  ingredient quantities only); `src/oliver.zig` (export comment);
+  docs/COOKLANG.md §11 + FEATURE-MATRIX scaling row + TESTS.md +
+  README + ARCHITECTURE + CAPABILITIES; `scale-mixed` fixture pair.
+- **Acceptance:** `classifyQuantity("1 1/2") == scalable`; `"=1"`,
+  `"1-2"`, `"some"` are `fixed`; `scaleAmount("1/2", ×2) → "1"`;
+  `scaleAmount("1.5", ×3) → "4.5"` (decimal family preserved);
+  `scaleAmount("=1", ×4) → "=1"` (`scaled` aliases `original`);
+  `scaleRecipe` on `@flour{1 1/2%cup}` × 2 serializes a scaled
+  amount; `@salt{=1%tsp}`, `#pot{2}`, `~{9%minutes}`, `@./sauce{2}`
+  stay put; zero factors still `error.InvalidScaleFactor` (oliver#55
+  stays closed). Existing `scale-basic` / `scale-servings` stay
+  byte-identical.
+- **Tests:** 2 parser unit tests (closed classify forms; mixed
+  `parseQuantity`); 2 scale unit tests (string API + mixed through
+  `scaleRecipe`); `scale-mixed` fixture pair (`1 1/2` × 2 → `3`,
+  with lock/cookware/timer/ref pinned).
+- **Parallelism:** yes; Markdown/Textile untouched; Cooklang HTML
+  and the canonical corpus unchanged (mixed is a new form, not a
+  corpus one).
+- **Integration:** after CK3; the 652/652 and 60/60 gates are
+  re-verified.
+- **State:** this PR (issue #76).
 
 ## Deferred architectural cards
 

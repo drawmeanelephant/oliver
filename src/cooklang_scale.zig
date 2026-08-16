@@ -1,12 +1,19 @@
 //! Pure Cooklang scaling (semantic operation).
 //!
-//! `scaleRecipe` derives a new `Recipe` from an existing one by scaling
-//! its ingredient quantities. It is a pure, deterministic operation:
-//! no filesystem, network, or global state, and the input recipe is
-//! never mutated. Semantics follow the official Cooklang conventions
-//! ("Scaling and Servings", https://cooklang.org/docs/conventions/;
-//! provenance in docs/CLEANROOM.md session 22, policy in
-//! docs/COOKLANG.md §11):
+//! Two surfaces, one exact-rational grammar (docs/COOKLANG.md §11):
+//!
+//! - String primitives — `classifyQuantity`, `parseFactor`,
+//!   `scaleAmount` — so consumers that store amounts as authored text
+//!   (not a typed `Recipe`) can classify and rewrite a quantity string
+//!   without forking the arithmetic.
+//! - `scaleRecipe` derives a new `Recipe` by calling `scaleAmount` on
+//!   ingredient quantities only. It is a pure, deterministic operation:
+//!   no filesystem, network, or global state, and the input recipe is
+//!   never mutated.
+//!
+//! Semantics follow the official Cooklang conventions ("Scaling and
+//! Servings", https://cooklang.org/docs/conventions/; provenance in
+//! docs/CLEANROOM.md session 22, policy in docs/COOKLANG.md §11):
 //!
 //! - Ingredient quantities scale linearly by an exact rational factor.
 //! - A fixed quantity — a leading `=` (`@salt{=1%tsp}`) — is left
@@ -29,7 +36,8 @@
 //! denominator has only 2 and 5 factors, which emits the exact
 //! terminating decimal (bounded at 12 fractional digits). Results whose
 //! exact representation would overflow 128-bit arithmetic are left
-//! unchanged.
+//! unchanged. Mixed numbers (`1 1/2`) are a canonical input form;
+//! emission stays integer / fraction / terminating decimal.
 //!
 //! Ownership: the scaled `Recipe` owns a fresh arena; synthesized
 //! quantity text lives in it. Everything else is a shallow copy of the
@@ -52,6 +60,50 @@ pub const ScaleBy = union(enum) {
     factor: cooklang.Fraction,
     servings: u32,
 };
+
+/// An exact rational scale factor (`num/den`). Zero numerator or
+/// denominator is invalid (`error.InvalidScaleFactor`).
+pub const ScaleFactor = struct {
+    num: u64,
+    den: u64,
+};
+
+/// The result of `scaleAmount`. For `empty` / `fixed` (and for a
+/// scalable amount that overflows), `scaled` aliases `original`.
+pub const ScaledAmount = struct {
+    class: cooklang.QuantityClass,
+    original: []const u8,
+    scaled: []const u8,
+
+    pub fn deinit(self: ScaledAmount, allocator: std.mem.Allocator) void {
+        if (self.scaled.ptr != self.original.ptr) allocator.free(self.scaled);
+    }
+};
+
+pub const classifyQuantity = cooklang.classifyQuantity;
+pub const QuantityClass = cooklang.QuantityClass;
+
+/// Parses a scale factor as an exact rational. Accepts the same
+/// canonical scalable forms as amounts (integer, `a/b`, decimal,
+/// mixed). Zero, a zero denominator, and anything that is not a
+/// scalable form are `error.InvalidScaleFactor`.
+pub fn parseFactor(text: []const u8) ScaleError!ScaleFactor {
+    const t = std.mem.trim(u8, text, " \t");
+    const r = rationalOf(t) orelse return error.InvalidScaleFactor;
+    if (r.num == 0) return error.InvalidScaleFactor;
+    if (r.num > std.math.maxInt(u64) or r.den > std.math.maxInt(u64)) return error.InvalidScaleFactor;
+    return .{ .num = @intCast(r.num), .den = @intCast(r.den) };
+}
+
+/// Scales one authored amount string. Scalable amounts become the
+/// exact rational product under the same formatting policy as
+/// `scaleRecipe`. Empty and fixed amounts (and overflow) leave
+/// `scaled` aliasing `original`. A zero `num` or `den` is
+/// `error.InvalidScaleFactor`.
+pub fn scaleAmount(allocator: std.mem.Allocator, amount: []const u8, factor: ScaleFactor) ScaleError!ScaledAmount {
+    if (factor.den == 0 or factor.num == 0) return error.InvalidScaleFactor;
+    return scaleAmountBy(allocator, amount, Rational.of(factor.num, factor.den));
+}
 
 /// An exact non-negative rational, reduced after every operation.
 const Rational = struct {
@@ -187,15 +239,18 @@ fn copyPart(a: std.mem.Allocator, part: cooklang.Part, factor: Rational) ScaleEr
     switch (part) {
         .ingredient => |ig| {
             // Recipe references carry their own scaling directives and
-            // are never rewritten; fixed and non-numeric quantities
-            // have nothing numeric to scale.
-            if (ig.is_recipe_reference or ig.numeric == null or isFixed(ig.quantity)) return part;
-            const text = (try scaledText(a, ig.quantity.?, ig.numeric.?, factor)) orelse return part;
+            // are never rewritten. Everything else goes through the
+            // public string operation (empty / fixed / overflow keep
+            // the original slice).
+            if (ig.is_recipe_reference) return part;
+            const q = ig.quantity orelse return part;
+            const result = try scaleAmountBy(a, q, factor);
+            if (result.scaled.ptr == q.ptr) return part;
             var out = ig;
-            out.quantity = text;
+            out.quantity = result.scaled;
             // Re-derive the numeric view from the new text so the model
             // invariant holds (numeric == parseQuantity(quantity)).
-            out.numeric = cooklang.parseQuantity(text);
+            out.numeric = cooklang.parseQuantity(result.scaled);
             return .{ .ingredient = out };
         },
         // Text, line breaks, cookware, and timers are copied as-is.
@@ -203,20 +258,31 @@ fn copyPart(a: std.mem.Allocator, part: cooklang.Part, factor: Rational) ScaleEr
     }
 }
 
-/// A fixed quantity per the conventions: a leading `=` locks the amount
-/// (`@salt{=1%tsp}` never scales).
-fn isFixed(quantity: ?[]const u8) bool {
-    const q = quantity orelse return false;
-    return q.len > 0 and q[0] == '=';
+/// The string operation `scaleRecipe` is built on. `scaled` aliases
+/// `original` unless a new exact-rational rewrite was allocated.
+fn scaleAmountBy(a: std.mem.Allocator, amount: []const u8, factor: Rational) ScaleError!ScaledAmount {
+    const class = cooklang.classifyQuantity(amount);
+    if (class != .scalable) {
+        return .{ .class = class, .original = amount, .scaled = amount };
+    }
+    const trimmed = std.mem.trim(u8, amount, " \t");
+    const r = rationalOf(trimmed) orelse {
+        return .{ .class = class, .original = amount, .scaled = amount };
+    };
+    const prod = r.mul(factor) orelse {
+        return .{ .class = class, .original = amount, .scaled = amount };
+    };
+    const family = familyOfAmount(trimmed);
+    var buf: [NumBuf]u8 = undefined;
+    const text = formatRational(prod, family, &buf) orelse {
+        return .{ .class = class, .original = amount, .scaled = amount };
+    };
+    return .{ .class = class, .original = amount, .scaled = try a.dupe(u8, text) };
 }
 
-/// The scaled quantity text for a token, or null to keep the original.
-fn scaledText(a: std.mem.Allocator, quantity_text: []const u8, numeric: cooklang.Quantity, factor: Rational) ScaleError!?[]const u8 {
-    const r = rationalOf(quantity_text) orelse return null;
-    const prod = r.mul(factor) orelse return null;
-    var buf: [NumBuf]u8 = undefined;
-    const text = formatRational(prod, familyOf(numeric), &buf) orelse return null;
-    return @as(?[]const u8, try a.dupe(u8, text));
+fn familyOfAmount(text: []const u8) Family {
+    const numeric = cooklang.parseQuantity(text) orelse return .fraction;
+    return familyOf(numeric);
 }
 
 const Family = enum { integer, decimal, fraction };
@@ -294,9 +360,10 @@ fn pow10(k: u32) u128 {
 
 /// Exact rational of a canonical quantity text: an integer (`0` or
 /// `[1-9][0-9]*`), a decimal (`ip.fp`, integer part canonical, digit
-/// fraction), or a fraction of two canonical integers with a non-zero
-/// denominator (spaces around the slash allowed, per the corpus). This
-/// mirrors the model's `parseQuantity` acceptance but exactly — no f64.
+/// fraction), a fraction of two canonical integers with a non-zero
+/// denominator (spaces around the slash allowed, per the corpus), or
+/// a mixed number `a b/c` (whole + proper fraction). This mirrors
+/// `classifyQuantity` / `parseQuantity` acceptance but exactly — no f64.
 /// Null when not canonical or when the exact rational exceeds 64-bit
 /// bounds.
 fn rationalOf(text: []const u8) ?Rational {
@@ -310,6 +377,11 @@ fn rationalOf(text: []const u8) ?Rational {
         const k: u32 = @intCast(fp.len);
         const p = pow10(k);
         return reduce(.{ .num = @as(u128, ipv) * p + fpv, .den = p });
+    }
+    if (cooklang.parseMixedNumber(text)) |m| {
+        const whole_part = std.math.mul(u64, m.whole, m.den) catch return null;
+        const n = std.math.add(u64, whole_part, m.num) catch return null;
+        return Rational.of(n, m.den);
     }
     if (std.mem.indexOfScalar(u8, text, '/')) |s| {
         const num = canonicalU64(std.mem.trim(u8, text[0..s], " \t")) orelse return null;
@@ -476,4 +548,52 @@ test "cooklang scale: empty and frontmatter-only inputs" {
     const b = try scaleT(std.testing.allocator, "---\n---\n\nAdd @salt.", .{ .factor = .{ .num = 2, .den = 1 } });
     defer std.testing.allocator.free(b);
     try std.testing.expectEqualStrings("---\n---\n\nAdd @salt.\n", b);
+}
+
+test "cooklang scale: scaleAmount public string API" {
+    const allocator = std.testing.allocator;
+    const double = try parseFactor("2");
+    var half = try scaleAmount(allocator, "1/2", double);
+    defer half.deinit(allocator);
+    try std.testing.expectEqual(QuantityClass.scalable, half.class);
+    try std.testing.expectEqualStrings("1", half.scaled);
+
+    const triple = try parseFactor("3");
+    var decimal = try scaleAmount(allocator, "1.5", triple);
+    defer decimal.deinit(allocator);
+    try std.testing.expectEqualStrings("4.5", decimal.scaled);
+
+    var locked = try scaleAmount(allocator, "=1", .{ .num = 4, .den = 1 });
+    defer locked.deinit(allocator);
+    try std.testing.expectEqual(QuantityClass.fixed, locked.class);
+    try std.testing.expectEqualStrings("=1", locked.scaled);
+    try std.testing.expect(locked.scaled.ptr == locked.original.ptr);
+
+    var empty = try scaleAmount(allocator, "", double);
+    defer empty.deinit(allocator);
+    try std.testing.expectEqual(QuantityClass.empty, empty.class);
+    try std.testing.expect(empty.scaled.ptr == empty.original.ptr);
+
+    try std.testing.expectError(error.InvalidScaleFactor, scaleAmount(allocator, "1", .{ .num = 0, .den = 1 }));
+    try std.testing.expectError(error.InvalidScaleFactor, parseFactor("0"));
+    try std.testing.expectError(error.InvalidScaleFactor, parseFactor("1/0"));
+    try std.testing.expectError(error.InvalidScaleFactor, parseFactor("some"));
+}
+
+test "cooklang scale: mixed numbers scale through the string and recipe APIs" {
+    const allocator = std.testing.allocator;
+    const double = try parseFactor("2");
+    var mixed = try scaleAmount(allocator, "1 1/2", double);
+    defer mixed.deinit(allocator);
+    try std.testing.expectEqual(QuantityClass.scalable, mixed.class);
+    try std.testing.expectEqualStrings("3", mixed.scaled);
+
+    // Identity factor still emits the integer/fraction policy, not mixed.
+    var ident = try scaleAmount(allocator, "1 1/2", .{ .num = 1, .den = 1 });
+    defer ident.deinit(allocator);
+    try std.testing.expectEqualStrings("3/2", ident.scaled);
+
+    const out = try scaleT(allocator, "Add @flour{1 1/2%cup} and @salt{=1%tsp} and fry in #pot{2} for ~{9%minutes}, then @./sauce{2}.", .{ .factor = .{ .num = 2, .den = 1 } });
+    defer allocator.free(out);
+    try std.testing.expectEqualStrings("Add @flour{3%cup} and @salt{=1%tsp} and fry in #pot{2} for ~{9%minutes}, then @./sauce{2}.\n", out);
 }

@@ -134,8 +134,10 @@ Design decisions:
   `"few"`; `#frying pan{two small}` keeps `"two small"`; `@milk{1/2%cup}`
   keeps `"1/2"`. A derived numeric view (`numeric: ?Number` where Number
   is int/decimal/fraction) is exposed **only** for pure numeric forms
-  (`2`, `1.5`, `01/2` does **not** qualify) so the canonical harness and
-  future scaling can compare canonically without losing the source text.
+  (`2`, `1.5`, `1/2`, mixed `1 1/2`; `01/2` does **not** qualify) so the
+  canonical harness and scaling can compare canonically without losing
+  the source text. A mixed number's numeric view is its equivalent
+  improper fraction; there is no mixed-number emission form.
 - **Canonical defaults are applied by the conformance harness, not the
   model.** `@chilli` (no braces) has `quantity: null` in the model; the
   canonical semantics default ingredients to `"some"`, cookware to `1`,
@@ -390,16 +392,50 @@ Contract, verified by tests:
 
 ## 11. Scaling (pure semantic operation)
 
-`src/cooklang_scale.zig` derives a new `Recipe` from an existing one by
-scaling its ingredient quantities: `oliver.cooklang_scale.scaleRecipe(
-allocator, &recipe, by)`, or `oliver scale --from cooklang (--factor
-<num[/den]> | --servings <n>)` on the CLI. It is pure and deterministic:
-no filesystem, network, or global state; the input recipe is never
-mutated. Semantics follow the official conventions' "Scaling and
-Servings" section (https://cooklang.org/docs/conventions/; provenance
-in docs/CLEANROOM.md session 22).
+`src/cooklang_scale.zig` is two surfaces on one exact-rational grammar:
 
-What scales, what does not (per the conventions):
+- **String primitives**, for consumers that store amounts as authored
+  text rather than a typed `Recipe`:
+  `oliver.cooklang.classifyQuantity(amount)` → `empty` | `scalable` |
+  `fixed`; `oliver.cooklang_scale.parseFactor(text)` → an exact
+  rational (`error.InvalidScaleFactor` for 0, a 0-denominator, or a
+  non-scalable form); `oliver.cooklang_scale.scaleAmount(allocator,
+  amount, factor)` → `{ class, original, scaled }`. The same three
+  names are re-exported from `cooklang_scale`.
+- **`scaleRecipe`**, the whole-recipe operation:
+  `oliver.cooklang_scale.scaleRecipe(allocator, &recipe, by)`, or
+  `oliver scale --from cooklang (--factor <num[/den]> | --servings
+  <n>)` on the CLI. It calls `scaleAmount` on ingredient quantities
+  only. It is pure and deterministic: no filesystem, network, or
+  global state; the input recipe is never mutated.
+
+Semantics follow the official conventions' "Scaling and Servings"
+section (https://cooklang.org/docs/conventions/; provenance in
+docs/CLEANROOM.md session 22). The string surface and mixed numbers
+are Oliver-chosen markup semantics (session 28).
+
+Closed classify rules (after trimming ASCII space/tab):
+
+| Class      | Forms                                                                                          |
+| ---------- | ---------------------------------------------------------------------------------------------- |
+| `empty`    | `""`                                                                                           |
+| `scalable` | unsigned integer; `a/b` with `b ≠ 0` (spaces around `/` accepted); decimal `a.b`; mixed `a b/c` |
+| `fixed`    | everything else, including `=…`, ranges (`1-2`), words (`some`), `1/0`, leading zeros (`02`)   |
+
+A mixed number is a whole part plus a proper fraction (`num < den`,
+`den ≠ 0`), separated by one or more ASCII space/tab (the same trim
+set used elsewhere). `1 1/2` is scalable; `1 3/2` is not. A leading
+`=` is `fixed` even if the rest would parse (`=1`, `=1/2`).
+
+`scaleAmount`:
+
+- `scalable` → exact rational product, same formatting policy as
+  `scaleRecipe` (whole → integer; decimal-family + terminating den →
+  decimal; else reduced `num/den`; overflow → leave original).
+- `empty` / `fixed` → `scaled` aliases `original`.
+- `parseFactor` accepts the same scalable forms as amounts.
+
+What scales on a `Recipe`, what does not (per the conventions):
 
 - Ingredient quantities scale **linearly** by an exact rational factor.
 - **Fixed quantities** — a leading `=` (`@salt{=1%tsp}`) — stay
@@ -431,8 +467,11 @@ Arithmetic and formatting policy:
   denominator has only 2 and 5 factors, which emits the exact
   terminating decimal (bounded at 12 fractional digits). Results whose
   exact representation would overflow 128-bit arithmetic are left
-  unchanged. Examples: `1/2 × 2 = 1`, `1/2 × 3 = 3/2`, `1.5 × 3 =
-  4.5`, `0.1 × 4/3 = 2/15` (fraction, since 15 has a 3 factor).
+  unchanged. Mixed numbers are a canonical **input** form; emission
+  stays integer / fraction / terminating decimal (no mixed-number
+  output). Examples: `1/2 × 2 = 1`, `1/2 × 3 = 3/2`, `1.5 × 3 =
+  4.5`, `1 1/2 × 2 = 3`, `0.1 × 4/3 = 2/15` (fraction, since 15 has a
+  3 factor).
 - The frontmatter is passed through raw and unmodified: Oliver does not
   rewrite metadata, and the input recipe is never changed. Re-scaling
   the derived recipe is therefore the caller's responsibility.
@@ -442,12 +481,13 @@ Arithmetic and formatting policy:
   of synthesized quantities still point at the source quantity region
   (derived recipes are not re-parses).
 
-Verification: 10 unit tests pin the families above (exactness,
+Verification: unit tests pin the families above (exactness,
 servings-mode metadata keys, invalid-factor rejection, sections/notes,
-numeric-view recomputation, empty input), and `scale-basic` /
-`scale-servings` fixture pairs pin the canonical scaled output
-byte-for-byte. The scaled output is valid `.cook` by construction
-(the serializer is the emission path) and re-parses consistently.
+numeric-view recomputation, empty input, the public string API, mixed
+numbers), and `scale-basic` / `scale-servings` / `scale-mixed`
+fixture pairs pin the canonical scaled output byte-for-byte. The
+scaled output is valid `.cook` by construction (the serializer is the
+emission path) and re-parses consistently.
 
 ## 12. Menu profile (.menu view)
 

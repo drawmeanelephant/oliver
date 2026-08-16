@@ -272,7 +272,9 @@ try oliver.cooklang_serialize.serialize(allocator, &aw.writer, &cooked.recipe, .
 
 // Pure scaling: Recipe -> scaled Recipe (exact rationals; fixed `=1`
 // quantities, timers, cookware, and recipe references stay untouched;
-// docs/COOKLANG.md §11).
+// docs/COOKLANG.md §11). String primitives (`classifyQuantity` /
+// `parseFactor` / `scaleAmount`) classify and rewrite authored amount
+// text without a typed Recipe, including mixed `1 1/2`.
 var scaled = try oliver.cooklang_scale.scaleRecipe(
     allocator,
     &cooked.recipe,

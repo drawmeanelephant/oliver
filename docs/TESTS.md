@@ -153,8 +153,9 @@ fifth — the XHTML profile suite — is described in its own section below):
    `.cook` → expected canonical `.cook`, pinning the fixed-point and
    literal/degraded round trips; docs/COOKLANG.md §10) and the scaling
    pairs (`scale-basic` factor 2, `scale-servings` via frontmatter
-   servings — input `.cook` → expected scaled canonical `.cook`;
-   docs/COOKLANG.md §11) and the menu-view pair (`menu-basic`, the
+   servings, `scale-mixed` mixed `1 1/2` × 2 — input `.cook` → expected
+   scaled canonical `.cook`; docs/COOKLANG.md §11) and the menu-view
+   pair (`menu-basic`, the
    conventions' own Monday–Wednesday + dated-days example — input
    `.menu` → expected day/meal text dump; docs/COOKLANG.md §12) plus
    adversarial storms

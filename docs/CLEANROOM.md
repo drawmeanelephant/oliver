@@ -621,3 +621,21 @@ enabled for the Textile caller and disabled for CommonMark
 smartypants — braces are ordinary text in CommonMark (pinned in
 docs/SMARTY.md §1). No Markdown or Textile parser implementation
 source was consulted.
+
+Session 28 (CK6 string-quantity classify/scale + mixed numbers)
+provenance record: no new upstream specification. Scaling semantics
+remain the session-22 conventions material ("Scaling and Servings");
+the language spec still defines no quantity grammar and no scaling.
+The public string surface (`classifyQuantity` / `parseFactor` /
+`scaleAmount`) is a lift of Oliver's existing exact-rational path —
+not `parseQuantity`'s f64 decimal arm — so consumers that store
+amounts as authored text share one grammar. Mixed `1 1/2` is an
+Oliver-chosen widening of the canonical numeric forms (people write
+it): whole part + proper fraction (`num < den`, `den ≠ 0`), ASCII
+space/tab separator, spaces around `/` as already accepted for
+`a/b`. Chosen and pinned: no mixed-number *output* (emission stays
+integer / fraction / terminating decimal); a leading `=` is `fixed`
+even when the rest would parse; leading zeros (`02`) stay rejected;
+timers, cookware, and recipe references still never scale. Consumer
+IR/CLI/frontmatter stay out of scope. No parser implementation
+source was consulted.
