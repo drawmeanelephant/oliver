@@ -42,6 +42,20 @@ pub const RunConfig = struct {
     factor_den: ?u32 = null,
     servings_target: ?u32 = null,
     profile: oliver.OutputProfile = .html,
+    /// Markdown extension surface (`render --from markdown` only; all off
+    /// by default). `parseArgs` scopes them to the Markdown frontend;
+    /// `renderDocument` threads them into `markdown.Options` / the
+    /// footnotes render option (docs/MARKDOWN-EXTENSIONS.md).
+    footnotes: bool = false,
+    definition_lists: bool = false,
+    heading_attributes: bool = false,
+    strikethrough: bool = false,
+    wikilinks: bool = false,
+    callouts: bool = false,
+    smartypants: bool = false,
+    /// Front matter mode (`render` with any frontend; null = default
+    /// off). Shared by all three frontends (docs/FRONTMATTER.md §3).
+    frontmatter: ?oliver.frontmatter.Option = null,
 };
 
 /// Parses the argument vector (excluding the program name) into a
@@ -59,8 +73,17 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var factor_den: ?u32 = null;
     var servings_target: ?u32 = null;
     var profile: oliver.OutputProfile = .html;
+    var footnotes = false;
+    var definition_lists = false;
+    var heading_attributes = false;
+    var strikethrough = false;
+    var wikilinks = false;
+    var callouts = false;
+    var smartypants = false;
+    var frontmatter: ?oliver.frontmatter.Option = null;
     var saw_to = false;
     var saw_from = false;
+    var saw_frontmatter = false;
 
     var index: usize = 0;
     while (index < args.len) : (index += 1) {
@@ -126,6 +149,33 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             const value = args[index];
             servings_target = std.fmt.parseUnsigned(u32, value, 10) catch return error.Usage;
             if (servings_target.? == 0) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--wikilinks")) {
+            wikilinks = true;
+        } else if (std.mem.eql(u8, arg, "--callouts")) {
+            callouts = true;
+        } else if (std.mem.eql(u8, arg, "--smartypants")) {
+            smartypants = true;
+        } else if (std.mem.eql(u8, arg, "--footnotes")) {
+            footnotes = true;
+        } else if (std.mem.eql(u8, arg, "--definition-lists")) {
+            definition_lists = true;
+        } else if (std.mem.eql(u8, arg, "--heading-attributes")) {
+            heading_attributes = true;
+        } else if (std.mem.eql(u8, arg, "--strikethrough")) {
+            strikethrough = true;
+        } else if (std.mem.eql(u8, arg, "--frontmatter")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            // A second `--frontmatter` would contradict the first (like
+            // a second `--from`), so reject duplicates.
+            if (saw_frontmatter) return error.Usage;
+            saw_frontmatter = true;
+            const value = args[index];
+            if (std.mem.eql(u8, value, "yaml")) {
+                frontmatter = .yaml;
+            } else if (std.mem.eql(u8, value, "toml")) {
+                frontmatter = .toml;
+            } else return error.Usage;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.Help;
         } else if (std.mem.eql(u8, arg, "--version")) {
@@ -139,18 +189,25 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     if (!cooklang and dialect == null) return error.Usage;
     // Flags must belong to the command they are given with: `--to`
     // selects the renderer profile (render only), `--factor` /
-    // `--servings` configure scaling (scale only), and serialize/scale/
-    // menu are Cooklang capabilities only (Markdown/Textile have no
-    // canonical form; the shared renderer is the output for those).
+    // `--servings` configure scaling (scale only), serialize/scale/menu
+    // are Cooklang capabilities only, the Markdown extension flags are
+    // Markdown-frontend options, and `--frontmatter` is a render
+    // option shared by every frontend.
+    const ext_flags = footnotes or definition_lists or heading_attributes or
+        strikethrough or wikilinks or callouts or smartypants;
     switch (cmd) {
         .render => {
             if (factor_num != null or servings_target != null) return error.Usage;
+            // The Markdown extensions cannot apply to Textile or
+            // Cooklang; rejecting them keeps the strict scoping rule.
+            if (ext_flags and dialect != .markdown) return error.Usage;
         },
         .serialize, .menu => {
-            if (!cooklang or saw_to or factor_num != null or servings_target != null) return error.Usage;
+            if (!cooklang or saw_to or factor_num != null or servings_target != null or
+                ext_flags or frontmatter != null) return error.Usage;
         },
         .scale => {
-            if (!cooklang or saw_to) return error.Usage;
+            if (!cooklang or saw_to or ext_flags or frontmatter != null) return error.Usage;
             // Scaling needs exactly one mode: factor or servings.
             if ((factor_num == null) == (servings_target == null)) return error.Usage;
         },
@@ -163,6 +220,14 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .factor_den = factor_den,
         .servings_target = servings_target,
         .profile = profile,
+        .footnotes = footnotes,
+        .definition_lists = definition_lists,
+        .heading_attributes = heading_attributes,
+        .strikethrough = strikethrough,
+        .wikilinks = wikilinks,
+        .callouts = callouts,
+        .smartypants = smartypants,
+        .frontmatter = frontmatter,
     };
 }
 
@@ -210,7 +275,7 @@ pub fn main(init: std.process.Init) !u8 {
     var out_writer = std.Io.File.stdout().writer(init.io, &out_buf);
 
     if (cfg.cooklang) {
-        var result = oliver.cooklang.parse(gpa, input.items, .{}) catch |err| {
+        var result = oliver.cooklang.parse(gpa, input.items, cooklangParseOptions(cfg)) catch |err| {
             std.debug.print("oliver: {s}\n", .{@errorName(err)});
             return 1;
         };
@@ -256,14 +321,8 @@ pub fn main(init: std.process.Init) !u8 {
             },
         }
     } else {
-        const d = cfg.dialect.?;
-        var result = oliver.parse(gpa, input.items, d, .{}) catch |err| {
+        const html_bytes = renderWith(gpa, cfg, input.items) catch |err| {
             std.debug.print("oliver: {s}\n", .{@errorName(err)});
-            return 1;
-        };
-        defer result.deinit();
-        oliver.html.render(gpa, &out_writer.interface, &result.document, .{ .profile = profile }) catch |err| {
-            std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
             if (err == error.RawHtmlNotXmlWellFormed) {
                 std.debug.print(
                     "oliver: --to xhtml rejects raw HTML that cannot be guaranteed well-formed XML\n" ++
@@ -273,9 +332,64 @@ pub fn main(init: std.process.Init) !u8 {
             }
             return 1;
         };
+        defer gpa.free(html_bytes);
+        out_writer.interface.writeAll(html_bytes) catch {};
     }
     out_writer.flush() catch {};
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// The render path, shared by `main` and the CLI tests so the tested path
+// is the shipped path.
+// ---------------------------------------------------------------------------
+
+/// The Markdown/Textile parse options selected by the extension flags in
+/// `cfg` (scoped to the render command by `parseArgs`).
+fn markdownParseOptions(cfg: RunConfig) oliver.ParseOptions {
+    var opts = oliver.ParseOptions{};
+    opts.markdown = .{
+        .footnotes = cfg.footnotes,
+        .definition_lists = cfg.definition_lists,
+        .heading_attributes = cfg.heading_attributes,
+        .strikethrough = cfg.strikethrough,
+        .wikilinks = cfg.wikilinks,
+        .callouts = cfg.callouts,
+        .smartypants = cfg.smartypants,
+    };
+    if (cfg.frontmatter) |fm| opts.frontmatter = fm;
+    return opts;
+}
+
+/// The Cooklang parse options selected by `cfg` (front matter only; the
+/// Markdown extensions do not apply to Cooklang).
+fn cooklangParseOptions(cfg: RunConfig) oliver.cooklang.ParseOptions {
+    var opts = oliver.cooklang.ParseOptions{};
+    if (cfg.frontmatter) |fm| opts.frontmatter = fm;
+    return opts;
+}
+
+/// The renderer options for the extension flags in `cfg`. The footnotes
+/// extension has a render side: references and the `<section>` emit only
+/// when this option is on (docs/MARKDOWN-EXTENSIONS.md).
+fn renderOptionsFor(cfg: RunConfig) oliver.html.RenderOptions {
+    return .{
+        .profile = cfg.profile,
+        .footnotes = cfg.footnotes,
+    };
+}
+
+/// Renders a Markdown/Textile document with the extension options from
+/// `cfg`. Returns the owned HTML bytes; the caller frees with the same
+/// allocator.
+fn renderWith(a: std.mem.Allocator, cfg: RunConfig, input: []const u8) ![]u8 {
+    var result = try oliver.parse(a, input, cfg.dialect.?, markdownParseOptions(cfg));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(a);
+    defer aw.deinit();
+    try oliver.html.render(a, &aw.writer, &result.document, renderOptionsFor(cfg));
+    var out = aw.toArrayList();
+    return out.toOwnedSlice(a);
 }
 
 fn printUsage() void {
@@ -290,6 +404,12 @@ fn printUsage() void {
         \\(XHTML fragment with --to xhtml). serialize/scale write canonical
         \\Cooklang text; menu writes the day/meal text dump. --version prints
         \\the version and the embedded source commit (CI builds).
+        \\
+        \\Markdown extensions (render --from markdown, all off by default):
+        \\  --wikilinks  --callouts  --smartypants  --footnotes
+        \\  --definition-lists  --heading-attributes  --strikethrough
+        \\Front matter (render with any frontend, off by default):
+        \\  --frontmatter yaml|toml
         \\
     , .{});
 }
@@ -399,4 +519,129 @@ test "cli: zero scale factors are rejected, not passed to the library" {
     try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "0" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "0/2" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2/0" }));
+}
+
+test "cli: markdown extension flags are scoped to render --from markdown" {
+    const wl = try parseArgs(&.{ "render", "--from", "markdown", "--wikilinks" });
+    try testing.expect(wl.wikilinks);
+    const co = try parseArgs(&.{ "render", "--from", "markdown", "--callouts" });
+    try testing.expect(co.callouts);
+    const sp = try parseArgs(&.{ "render", "--from", "markdown", "--smartypants" });
+    try testing.expect(sp.smartypants);
+    const all = try parseArgs(&.{ "render", "--from", "markdown", "--footnotes", "--definition-lists", "--heading-attributes", "--strikethrough" });
+    try testing.expect(all.footnotes and all.definition_lists and all.heading_attributes and all.strikethrough);
+
+    // A flag that cannot apply is an error (the --to-on-serialize rule).
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "textile", "--wikilinks" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "cooklang", "--smartypants" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--callouts" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", "--footnotes" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", "--wikilinks" }));
+}
+
+test "cli: --frontmatter is a render option shared by every frontend" {
+    const md = try parseArgs(&.{ "render", "--from", "markdown", "--frontmatter", "yaml" });
+    try testing.expectEqual(oliver.frontmatter.Option.yaml, md.frontmatter.?);
+    const tx = try parseArgs(&.{ "render", "--from", "textile", "--frontmatter", "toml" });
+    try testing.expectEqual(oliver.frontmatter.Option.toml, tx.frontmatter.?);
+    const ck = try parseArgs(&.{ "render", "--from", "cooklang", "--frontmatter", "yaml" });
+    try testing.expectEqual(oliver.frontmatter.Option.yaml, ck.frontmatter.?);
+
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--frontmatter", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--frontmatter" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--frontmatter", "yaml", "--frontmatter", "toml" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--frontmatter", "yaml" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", "--frontmatter", "yaml" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", "--frontmatter", "yaml" }));
+}
+
+test "cli: the four new markdown extensions render end to end" {
+    const allocator = std.testing.allocator;
+
+    // Wikilinks resolve under the default policy (target percent-encoded
+    // href, label orelse target as text).
+    const wl = try parseArgs(&.{ "render", "--from", "markdown", "--wikilinks" });
+    const wl_out = try renderWith(allocator, wl, "See [[Page Name]] now.\n");
+    defer allocator.free(wl_out);
+    try testing.expect(std.mem.indexOf(u8, wl_out, "<a href=\"Page%20Name\">Page Name</a>") != null);
+
+    // Callouts become the semantic box with the inline-parsed title.
+    const co = try parseArgs(&.{ "render", "--from", "markdown", "--callouts" });
+    const co_out = try renderWith(allocator, co, "> [!note] Title\n> body\n");
+    defer allocator.free(co_out);
+    try testing.expect(std.mem.indexOf(u8, co_out, "<div class=\"callout callout-note\">") != null);
+    try testing.expect(std.mem.indexOf(u8, co_out, "<div class=\"callout-title\">Title</div>") != null);
+
+    // Smart typography applies the curly quotes and the em dash.
+    const sp = try parseArgs(&.{ "render", "--from", "markdown", "--smartypants" });
+    const sp_out = try renderWith(allocator, sp, "\"Hello\" -- world\n");
+    defer allocator.free(sp_out);
+    try testing.expect(std.mem.indexOf(u8, sp_out, "“Hello” — world") != null);
+
+    // Front matter: the fence is consumed and the body renders; the same
+    // input without the flag keeps `---` a thematic break (control).
+    const fm = try parseArgs(&.{ "render", "--from", "markdown", "--frontmatter", "yaml" });
+    const fm_out = try renderWith(allocator, fm, "---\ntitle: Hello\n---\n\n# Doc\n");
+    defer allocator.free(fm_out);
+    try testing.expect(std.mem.indexOf(u8, fm_out, "<h1>Doc</h1>") != null);
+    try testing.expect(std.mem.indexOf(u8, fm_out, "<hr") == null);
+    const plain = try parseArgs(&.{ "render", "--from", "markdown" });
+    const plain_out = try renderWith(allocator, plain, "---\ntitle: Hello\n---\n\n# Doc\n");
+    defer allocator.free(plain_out);
+    try testing.expect(std.mem.indexOf(u8, plain_out, "<hr") != null);
+}
+
+test "cli: the legacy markdown extensions render end to end" {
+    const allocator = std.testing.allocator;
+
+    const dl = try parseArgs(&.{ "render", "--from", "markdown", "--definition-lists" });
+    const dl_out = try renderWith(allocator, dl, "Term\n: definition\n");
+    defer allocator.free(dl_out);
+    try testing.expect(std.mem.indexOf(u8, dl_out, "<dl>") != null);
+    try testing.expect(std.mem.indexOf(u8, dl_out, "<dt>Term</dt>") != null);
+
+    const ha = try parseArgs(&.{ "render", "--from", "markdown", "--heading-attributes" });
+    const ha_out = try renderWith(allocator, ha, "# Head {#id .cls}\n");
+    defer allocator.free(ha_out);
+    try testing.expect(std.mem.indexOf(u8, ha_out, "<h1 id=\"id\" class=\"cls\">Head</h1>") != null);
+
+    const st = try parseArgs(&.{ "render", "--from", "markdown", "--strikethrough" });
+    const st_out = try renderWith(allocator, st, "~~gone~~\n");
+    defer allocator.free(st_out);
+    try testing.expect(std.mem.indexOf(u8, st_out, "<p><del>gone</del></p>") != null);
+
+    // Footnotes have a render side too: the references and the section
+    // emit only when the render option is on (renderWith threads it).
+    const fn_ = try parseArgs(&.{ "render", "--from", "markdown", "--footnotes" });
+    const fn_out = try renderWith(allocator, fn_, "Ref[^1].\n\n[^1]: note\n");
+    defer allocator.free(fn_out);
+    try testing.expect(std.mem.indexOf(u8, fn_out, "class=\"footnote-ref\"") != null);
+    try testing.expect(std.mem.indexOf(u8, fn_out, "<section class=\"footnotes\"") != null);
+}
+
+test "cli: --frontmatter reaches the cooklang render path" {
+    const allocator = std.testing.allocator;
+    const input = "+++\ntitle = \"x\"\n+++\nAdd @salt.\n";
+
+    // With --frontmatter toml the +++ fence is consumed; the default
+    // (yaml sniffing) leaves it as body text.
+    const toml = try parseArgs(&.{ "render", "--from", "cooklang", "--frontmatter", "toml" });
+    var result = try oliver.cooklang.parse(allocator, input, cooklangParseOptions(toml));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(allocator);
+    defer aw.deinit();
+    try oliver.cooklang_html.render(allocator, &aw.writer, &result.recipe, .{ .profile = toml.profile });
+    var out = aw.toArrayList();
+    defer out.deinit(allocator);
+    try testing.expect(std.mem.indexOf(u8, out.items, "+++") == null);
+
+    const plain = try parseArgs(&.{ "render", "--from", "cooklang" });
+    var result2 = try oliver.cooklang.parse(allocator, input, cooklangParseOptions(plain));
+    defer result2.deinit();
+    var aw2 = std.Io.Writer.Allocating.init(allocator);
+    defer aw2.deinit();
+    try oliver.cooklang_html.render(allocator, &aw2.writer, &result2.recipe, .{ .profile = plain.profile });
+    var out2 = aw2.toArrayList();
+    defer out2.deinit(allocator);
+    try testing.expect(std.mem.indexOf(u8, out2.items, "+++") != null);
 }
