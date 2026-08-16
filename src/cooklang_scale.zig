@@ -55,14 +55,20 @@ pub const ScaleError = error{ OutOfMemory, InvalidScaleFactor };
 /// serving count (the current count is read from the recipe's
 /// frontmatter per the conventions; `num`, `den`, and the target must
 /// be non-zero — a zero numerator or denominator is
-/// `error.InvalidScaleFactor`).
+/// `error.InvalidScaleFactor`). The factor's `num`/`den` are
+/// `cooklang.Fraction` (u32) — the same cap as the model's quantity
+/// fractions — so `parseFactor` rejects larger values rather than
+/// returning a factor that cannot reach `scaleRecipe`.
 pub const ScaleBy = union(enum) {
     factor: cooklang.Fraction,
     servings: u32,
 };
 
 /// An exact rational scale factor (`num/den`). Zero numerator or
-/// denominator is invalid (`error.InvalidScaleFactor`).
+/// denominator is invalid (`error.InvalidScaleFactor`). This is the
+/// string surface's type (u64 arithmetic); `parseFactor` additionally
+/// caps results at u32 so they fit `ScaleBy.factor` — see
+/// `scaleAmount` for the wider direct-construction path.
 pub const ScaleFactor = struct {
     num: u64,
     den: u64,
@@ -90,13 +96,21 @@ pub const QuantityClass = cooklang.QuantityClass;
 
 /// Parses a scale factor as an exact rational. Accepts the same
 /// canonical scalable forms as amounts (integer, `a/b`, decimal,
-/// mixed). Zero, a zero denominator, and anything that is not a
-/// scalable form are `error.InvalidScaleFactor`.
+/// mixed). Zero, a zero denominator, anything that is not a scalable
+/// form, and any value whose numerator or denominator exceeds u32 are
+/// `error.InvalidScaleFactor` — the u32 cap matches `ScaleBy.factor`
+/// (`cooklang.Fraction`), so every parsed factor can reach
+/// `scaleRecipe` (docs/COOKLANG.md §11).
 pub fn parseFactor(text: []const u8) ScaleError!ScaleFactor {
     const t = std.mem.trim(u8, text, " \t");
     const r = rationalOf(t) orelse return error.InvalidScaleFactor;
     if (r.num == 0) return error.InvalidScaleFactor;
-    if (r.num > std.math.maxInt(u64) or r.den > std.math.maxInt(u64)) return error.InvalidScaleFactor;
+    // The recipe-level factor mode (and the model's quantity fractions)
+    // are u32-capped; reject larger values here so the string surface
+    // is consistent with `ScaleBy.factor` (issue #86). `scaleAmount` is
+    // u64 arithmetic and still accepts wider factors when constructed
+    // directly.
+    if (r.num > std.math.maxInt(u32) or r.den > std.math.maxInt(u32)) return error.InvalidScaleFactor;
     return .{ .num = @intCast(r.num), .den = @intCast(r.den) };
 }
 
@@ -517,6 +531,25 @@ test "cooklang scale: sections recurse, notes and text untouched" {
     const out = try scaleT(std.testing.allocator, input, .{ .factor = .{ .num = 2, .den = 1 } });
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings("= Dough\n\nMix @flour{400%g}.\n\n> Keep the @salt nearby.\n\n= Filling\n\nCombine @cheese{200%g}(grated).\n", out);
+}
+
+test "cooklang scale: parseFactor is u32-capped to match ScaleBy.factor" {
+    // The recipe-level factor mode is u32-capped (cooklang.Fraction), so
+    // the string surface rejects larger values rather than returning a
+    // factor that cannot reach scaleRecipe (issue #86).
+    try std.testing.expectError(error.InvalidScaleFactor, parseFactor("4294967296")); // u32 max + 1
+    try std.testing.expectError(error.InvalidScaleFactor, parseFactor("1/4294967296")); // denominator over u32
+    const max = try parseFactor("4294967295"); // u32 max is accepted
+    try std.testing.expectEqual(@as(u64, 4294967295), max.num);
+    try std.testing.expectEqual(@as(u64, 1), max.den);
+    const max_den = try parseFactor("1/4294967295");
+    try std.testing.expectEqual(@as(u64, 1), max_den.num);
+    try std.testing.expectEqual(@as(u64, 4294967295), max_den.den);
+    // scaleAmount is u64 arithmetic and still accepts wider factors when
+    // constructed directly (not through parseFactor).
+    var wide = try scaleAmount(std.testing.allocator, "1", .{ .num = 5000000000, .den = 1 });
+    defer wide.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("5000000000", wide.scaled);
 }
 
 test "cooklang scale: invalid factors are rejected, not guessed" {

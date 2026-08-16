@@ -50,6 +50,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Markdown extension worker | E2 callouts/admonitions | `Options.callouts` recognition on the container-block quote path; `.block_quote` callout payload (`type`/`title`/`title_nodes`) + `<div class="callout callout-<type>">` render arm (docs/CALLOUTS.md); Markdown fixtures; corpus untouched | after E1 (v0.6) | implemented on main (issue #65) |
 | shared worker | E3 smart typography | extract Textile's `replaceChars`/`hasCharMacroTrigger` machinery into one shared module (`src/typography.zig`; two callers, Textile byte-identical); `Options.smartypants` text pass with the Textile exemption set (docs/SMARTY.md); Markdown fixtures | after F1/E1 (v1.0) | implemented on main (issue #67) |
 | shared worker | E4 CLI extension surface | `oliver render --from markdown` exposes the full extension surface as flags (`--wikilinks`, `--callouts`, `--smartypants`, `--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--heading-ids` — scoped to render + Markdown) plus `--frontmatter yaml|toml` on any render frontend (threaded into the shared `markdownParseOptions` / `cooklangParseOptions` / `renderOptionsFor` seams; `renderWith` is the one render path shared by `main` and the tests); 6 new CLI tests (flag scoping, frontmatter validation, one end-to-end render per extension incl. the legacy four, heading ids, and cooklang frontmatter); usage text + README + TESTS + CAPABILITIES + MARKDOWN-EXTENSIONS | after the extension wave (issue #74) | merged (PR #83) |
+| shared worker | S1 scale-factor grammar alignment | review findings #85–#86: `oliver scale --factor` routes through the library's `parseFactor` (decimals, mixed `1 1/2`, spaces around the slash accepted; leading zeros, `1/2/3`, `some`, over-u32 values rejected) instead of a parallel u32 split parser; `parseFactor` caps at u32 to match `ScaleBy.factor` while `scaleAmount` keeps its u64 path; `--factor`/`--servings` gain duplicate rejection; `scaleWith` is the shared scale path; 3 new tests (parseFactor u32 boundary; factor grammar battery; scale end-to-end); docs/COOKLANG.md §11 + README + TESTS | after #74 and CK7 | this PR |
 | Cooklang worker | CK6 string-quantity classify/scale + mixed numbers | public `classifyQuantity` / `parseFactor` / `scaleAmount` over authored amount strings (the exact-rational path, not `parseQuantity`'s f64 decimal arm); `scaleRecipe` becomes a caller of `scaleAmount` on ingredient quantities only; mixed `1 1/2` is a canonical scalable input (emits integer / fraction / terminating decimal); timers/cookware/refs still never scale; `scale-mixed` fixture; docs/COOKLANG.md §11 | after CK3 (issue #76; lets consumers delete a forked string scale) | merged (PR #77) |
 | Cooklang worker | CK7 scale edge-case hardening | review findings on the merged CK6 surface (issues #79–#81): `parseMixedNumber` trims leading/trailing ASCII space/tab (issue #79); `familyOfAmount` reads the decimal family from the source form exactly — no f64/i64 probe, terminating decimals at any magnitude (issue #80); `ScaledAmount.changed` distinguishes a rewrite from an overflow passthrough (issue #81); 3 unit tests pin the whitespace battery, the >i64 terminating cases, and the changed/passthrough triggers; docs/COOKLANG.md §11 + FEATURE-MATRIX + ARCHITECTURE + CLEANROOM session 29 | after CK6 | this PR |
 
@@ -1443,6 +1444,35 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes; parser and renderer untouched.
 - **Integration:** after the extension wave; gates re-verified.
 - **State:** this PR (issue #74).
+
+## S1 — Scale-factor grammar alignment (issues #85–#86)
+
+- **Objective:** close the two review findings on the merged CLI +
+  Cooklang surface: the CLI's `--factor` used a parallel u32 split
+  parser instead of the library's public `parseFactor`, and the string
+  surface was u64 while the recipe-level factor mode was u32.
+- **Normative sources:** docs/COOKLANG.md §11 (the CK6 string surface);
+  no new markup semantics.
+- **Dependencies:** CK6/CK7 string surface; the #74 CLI work.
+- **Seams:** `src/cooklang_scale.zig` (`parseFactor` now rejects a
+  numerator or denominator above u32 — the cap that matches
+  `ScaleBy.factor` — so every parsed factor reaches `scaleRecipe`);
+  `src/main.zig` (`--factor` routes through `parseFactor`, mapping
+  `InvalidScaleFactor` to a usage error; `--factor`/`--servings` gain
+  the duplicate rejection every other value flag has; `scaleWith` is
+  the shared scale path used by `main` and the tests).
+- **Acceptance:** `--factor 1.5`, `--factor "1 1/2"`, `--factor
+  "1 / 2"` scale correctly; `--factor 01/2`, `1/2/3`, `some`, and
+  values above u32 are usage errors; `--factor 2 --factor 3` and
+  `--servings 2 --servings 4` are usage errors; `parseFactor` caps at
+  u32 while `scaleAmount` keeps its u64 path.
+- **Tests:** 1 library test (parseFactor u32 boundary + scaleAmount's
+  wider direct path) and 2 CLI tests (factor grammar battery +
+  duplicates; scale end-to-end through `scaleWith`). 369/369, 652/652,
+  60/60 re-verified.
+- **Parallelism:** yes; parsers and renderers untouched.
+- **Integration:** after #74 and CK7; gates re-verified.
+- **State:** this PR (issues #85–#86).
 
 ## Deferred architectural cards
 

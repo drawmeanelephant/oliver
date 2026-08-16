@@ -398,8 +398,10 @@ Contract, verified by tests:
   text rather than a typed `Recipe`:
   `oliver.cooklang.classifyQuantity(amount)` → `empty` | `scalable` |
   `fixed`; `oliver.cooklang_scale.parseFactor(text)` → an exact
-  rational (`error.InvalidScaleFactor` for 0, a 0-denominator, or a
-  non-scalable form); `oliver.cooklang_scale.scaleAmount(allocator,
+  rational (`error.InvalidScaleFactor` for 0, a 0-denominator, a
+  non-scalable form, or a numerator/denominator above u32 — the cap
+  that matches `ScaleBy.factor`, so every parsed factor reaches
+  `scaleRecipe`); `oliver.cooklang_scale.scaleAmount(allocator,
   amount, factor)` → `{ class, original, scaled }`. The same three
   names are re-exported from `cooklang_scale`.
 - **`scaleRecipe`**, the whole-recipe operation:
@@ -446,7 +448,10 @@ not. A leading `=` is `fixed` even if the rest would parse (`=1`,
   — overflow (or a fractional part / mixed `whole × den` beyond u64)
   keeps `scaled` aliasing `original` with `changed == false`, never a
   wrong number.
-- `parseFactor` accepts the same scalable forms as amounts.
+- `parseFactor` accepts the same scalable forms as amounts, capped at
+  u32 on both parts to match `ScaleBy.factor` (`cooklang.Fraction`);
+  `scaleAmount` is u64 arithmetic and accepts wider factors when
+  constructed directly.
 
 What scales on a `Recipe`, what does not (per the conventions):
 

@@ -178,23 +178,25 @@ fifth — the XHTML profile suite — is described in its own section below):
    complete/nonoverlapping manifest validation, malformed divergence-record
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
-4. **CLI argument-parsing tests** — 17 tests in `src/main.zig`: pure
+4. **CLI argument-parsing tests** — 19 tests in `src/main.zig`: pure
    `parseArgs` unit tests (no allocator, no I/O) pinning the subcommand
    grammar (exactly one of `render`/`serialize`/`scale`/`menu`), flag
    scoping (`--to` render-only; `--factor`/`--servings` scale-only; the
    Markdown extension flags `--wikilinks`/`--callouts`/`--smartypants`/
    `--footnotes`/`--definition-lists`/`--heading-attributes`/
    `--strikethrough`/`--heading-ids` render+Markdown-only,
-   `--frontmatter yaml|toml` on any render frontend), dialect
-   validation, zero-factor/zero-servings rejection, and
-   `--help`/`-h` handling — plus end-to-end render
-   tests that run each extension through the shared render path
-   (`renderWith`, the same path `main` uses). They run as part of the
-   ordinary `zig build test` gate.
+   `--frontmatter yaml|toml` on any render frontend), the `--factor`
+   grammar (routed through `parseFactor` — decimals, mixed numbers,
+   spaces around the slash accepted; leading zeros, over-u32 values
+   rejected), duplicate value-flag rejection, dialect validation,
+   zero-factor/zero-servings rejection, and `--help`/`-h` handling —
+   plus end-to-end render and scale tests that run through the shared
+   paths (`renderWith` / `scaleWith`, the same paths `main` uses).
+   They run as part of the ordinary `zig build test` gate.
 
-The current complete result is **366/366 tests passing** with Zig 0.16.0
-(307 library module tests + 18 fixture/adversarial tests + 7
-conformance-harness tests + 17 CLI argument-parsing tests + 17 XHTML
+The current complete result is **369/369 tests passing** with Zig 0.16.0
+(308 library module tests + 18 fixture/adversarial tests + 7
+conformance-harness tests + 19 CLI argument-parsing tests + 17 XHTML
 profile tests). On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the
 Textile wall stays fully green, and the Cooklang canonical corpus passes

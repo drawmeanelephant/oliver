@@ -87,6 +87,8 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var saw_to = false;
     var saw_from = false;
     var saw_frontmatter = false;
+    var saw_factor = false;
+    var saw_servings = false;
 
     var index: usize = 0;
     while (index < args.len) : (index += 1) {
@@ -132,23 +134,28 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         } else if (std.mem.eql(u8, arg, "--factor")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
+            // A second `--factor` would contradict the first; reject
+            // duplicates like `--from`/`--to`/`--frontmatter`.
+            if (saw_factor) return error.Usage;
+            saw_factor = true;
             const value = args[index];
-            var parts = std.mem.splitScalar(u8, value, '/');
-            const num = parts.next() orelse return error.Usage;
-            factor_num = std.fmt.parseUnsigned(u32, num, 10) catch return error.Usage;
-            // A zero numerator scales everything to nothing and a zero
-            // denominator is division by zero; both are degenerate, so
-            // both are rejected here (symmetric with `--servings 0`; the
-            // library rejects them too, docs/COOKLANG.md §11).
-            if (factor_num.? == 0) return error.Usage;
-            if (parts.next()) |den| {
-                factor_den = std.fmt.parseUnsigned(u32, den, 10) catch return error.Usage;
-                if (factor_den.? == 0) return error.Usage;
-            }
-            if (parts.next() != null) return error.Usage;
+            // The library's parseFactor owns the grammar: the same
+            // scalable forms as amounts (integer, a/b, decimal, mixed
+            // `1 1/2`; spaces around the slash accepted) and the u32 cap
+            // that matches ScaleBy.factor. Zero numerators and zero
+            // denominators are rejected by parseFactor itself
+            // (docs/COOKLANG.md §11); InvalidScaleFactor maps to a usage
+            // error.
+            const f = oliver.cooklang_scale.parseFactor(value) catch return error.Usage;
+            factor_num = @intCast(f.num);
+            factor_den = @intCast(f.den);
         } else if (std.mem.eql(u8, arg, "--servings")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
+            // Duplicate servings contradict each other; reject them like
+            // every other value flag.
+            if (saw_servings) return error.Usage;
+            saw_servings = true;
             const value = args[index];
             servings_target = std.fmt.parseUnsigned(u32, value, 10) catch return error.Usage;
             if (servings_target.? == 0) return error.Usage;
@@ -294,19 +301,12 @@ pub fn main(init: std.process.Init) !u8 {
                 };
             },
             .scale => {
-                const by: oliver.cooklang_scale.ScaleBy = if (cfg.factor_num) |n|
-                    .{ .factor = .{ .num = n, .den = cfg.factor_den orelse 1 } }
-                else
-                    .{ .servings = cfg.servings_target.? };
-                var scaled = oliver.cooklang_scale.scaleRecipe(gpa, &result.recipe, by) catch |err| {
+                const scaled = scaleWith(gpa, input.items, cfg) catch |err| {
                     std.debug.print("oliver: scale failed: {s}\n", .{@errorName(err)});
                     return 1;
                 };
-                defer scaled.deinit();
-                oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &scaled, .{}) catch |err| {
-                    std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
-                    return 1;
-                };
+                defer gpa.free(scaled);
+                out_writer.interface.writeAll(scaled) catch {};
             },
             .menu => {
                 var m = oliver.cooklang_menu.menuView(gpa, &result.recipe) catch |err| {
@@ -399,11 +399,31 @@ fn renderWith(a: std.mem.Allocator, cfg: RunConfig, input: []const u8) ![]u8 {
     return out.toOwnedSlice(a);
 }
 
+/// Scales a Cooklang recipe with the `--factor` / `--servings` mode from
+/// `cfg` (scoped to the scale command by `parseArgs`) and serializes the
+/// result. Returns the owned canonical `.cook` bytes; the caller frees
+/// with the same allocator.
+fn scaleWith(a: std.mem.Allocator, input: []const u8, cfg: RunConfig) ![]u8 {
+    var result = try oliver.cooklang.parse(a, input, cooklangParseOptions(cfg));
+    defer result.deinit();
+    const by: oliver.cooklang_scale.ScaleBy = if (cfg.factor_num) |n|
+        .{ .factor = .{ .num = n, .den = cfg.factor_den orelse 1 } }
+    else
+        .{ .servings = cfg.servings_target.? };
+    var scaled = try oliver.cooklang_scale.scaleRecipe(a, &result.recipe, by);
+    defer scaled.deinit();
+    var aw = std.Io.Writer.Allocating.init(a);
+    defer aw.deinit();
+    try oliver.cooklang_serialize.serialize(a, &aw.writer, &scaled, .{});
+    var out = aw.toArrayList();
+    return out.toOwnedSlice(a);
+}
+
 fn printUsage() void {
     std.debug.print(
         \\usage: oliver render --from <markdown|textile|cooklang> [--to <html|xhtml>]
         \\       oliver serialize --from cooklang
-        \\       oliver scale --from cooklang (--factor <num[/den]> | --servings <n>)
+        \\       oliver scale --from cooklang (--factor <scalable> | --servings <n>)
         \\       oliver menu --from cooklang
         \\       oliver --version
         \\
@@ -411,6 +431,8 @@ fn printUsage() void {
         \\(XHTML fragment with --to xhtml). serialize/scale write canonical
         \\Cooklang text; menu writes the day/meal text dump. --version prints
         \\the version and the embedded source commit (CI builds).
+        \\scale --factor accepts the same scalable quantity forms as amounts
+        \\(2, 1/2, 1.5, 1 1/2; quote values containing spaces).
         \\
         \\Markdown extensions (render --from markdown, all off by default):
         \\  --wikilinks  --callouts  --smartypants  --footnotes
@@ -527,6 +549,45 @@ test "cli: zero scale factors are rejected, not passed to the library" {
     try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "0" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "0/2" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2/0" }));
+}
+
+test "cli: --factor parses the full scalable grammar through parseFactor" {
+    // The library's parseFactor owns the grammar, so the CLI accepts the
+    // same scalable forms as amounts (issue #85) and rejects the same
+    // non-canonical shapes, including leading zeros.
+    const decimal = try parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "1.5" });
+    try testing.expectEqual(@as(u32, 3), decimal.factor_num.?);
+    try testing.expectEqual(@as(u32, 2), decimal.factor_den.?);
+    const mixed = try parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "1 1/2" });
+    try testing.expectEqual(@as(u32, 3), mixed.factor_num.?);
+    try testing.expectEqual(@as(u32, 2), mixed.factor_den.?);
+    const spaced = try parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "1 / 2" });
+    try testing.expectEqual(@as(u32, 1), spaced.factor_num.?);
+    try testing.expectEqual(@as(u32, 2), spaced.factor_den.?);
+
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "01/2" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "1/2/3" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "some" }));
+    // Above the u32 cap that matches ScaleBy.factor (issue #86).
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "4294967296" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "1/4294967296" }));
+
+    // Duplicate value flags contradict each other (the --from rule).
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", "--factor", "3" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--servings", "2", "--servings", "4" }));
+}
+
+test "cli: --factor grammar reaches the scale path end to end" {
+    const allocator = std.testing.allocator;
+    const decimal = try parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "1.5" });
+    const out = try scaleWith(allocator, "Add @x{2}.\n", decimal);
+    defer allocator.free(out);
+    try testing.expectEqualStrings("Add @x{3}.\n", out);
+
+    const mixed = try parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "1 1/2" });
+    const out2 = try scaleWith(allocator, "Add @flour{2%cup}.\n", mixed);
+    defer allocator.free(out2);
+    try testing.expectEqualStrings("Add @flour{3%cup}.\n", out2);
 }
 
 test "cli: markdown extension flags are scoped to render --from markdown" {

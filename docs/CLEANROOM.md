@@ -659,3 +659,19 @@ rewrite from an overflow passthrough (product beyond 128-bit,
 fractional part beyond u64, or mixed `whole × den` beyond u64)
 without a pointer comparison (issue #81). No parser implementation
 source was consulted.
+
+Session 30 (S1 scale-factor grammar alignment) provenance record: no
+new upstream specification — the fixes below align the CK6 string
+surface with the CLI and the recipe API (issues #85–#86). (1) The CLI
+`--factor` flag now routes through `oliver.cooklang_scale.parseFactor`
+(the documented string surface) instead of a parallel `num[/den]` u32
+split parser, so decimals, mixed numbers, and spaces around the slash
+work exactly as the library accepts them, and leading zeros,
+multi-slash shapes, and words are rejected exactly as the library
+rejects them. (2) `parseFactor` now caps both parts at u32 — the same
+cap as `ScaleBy.factor` (`cooklang.Fraction`) and the model's quantity
+fractions — so every parsed factor can reach `scaleRecipe`;
+`scaleAmount` remains u64 arithmetic and accepts wider factors when
+constructed directly. (3) `--factor`/`--servings` gain the duplicate
+rejection every other value flag has. No parser implementation source
+was consulted.
