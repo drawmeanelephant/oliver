@@ -639,3 +639,23 @@ even when the rest would parse; leading zeros (`02`) stay rejected;
 timers, cookware, and recipe references still never scale. Consumer
 IR/CLI/frontmatter stay out of scope. No parser implementation
 source was consulted.
+
+Session 29 (CK7 scale edge-case hardening) provenance record: no new
+upstream specification — the fixes below are Oliver-internal
+consistency hardening of the session-28 string surface, driven by a
+review of the merged CK6 code (issues #79–#81) and pinned by unit
+tests. (1) `parseMixedNumber` now ignores leading and trailing ASCII
+space/tab before splitting — it previously trimmed only the fraction
+parts, so `" 1 1/2"` failed while every other entry point
+(`classifyQuantity`, `scaleAmount`, `parseFactor`) trimmed (issue
+#79). (2) The decimal emission family is now read from the source
+form exactly: `familyOfAmount` no longer probes `parseQuantity`'s
+f64/i64-capped decimal arm, so a decimal source above i64 emits its
+exact terminating decimal when the reduced denominator is within the
+12-digit bound, instead of a reduced fraction — the arithmetic was
+already exact; only the emission form diverged (issue #80). (3)
+`ScaledAmount` gains a `changed` flag so consumers can tell a fresh
+rewrite from an overflow passthrough (product beyond 128-bit,
+fractional part beyond u64, or mixed `whole × den` beyond u64)
+without a pointer comparison (issue #81). No parser implementation
+source was consulted.

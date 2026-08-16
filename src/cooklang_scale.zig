@@ -68,15 +68,20 @@ pub const ScaleFactor = struct {
     den: u64,
 };
 
-/// The result of `scaleAmount`. For `empty` / `fixed` (and for a
-/// scalable amount that overflows), `scaled` aliases `original`.
+/// The result of `scaleAmount`. `class` is always the input amount's
+/// class; `changed` is false exactly when `scaled` aliases `original`
+/// — for `empty` / `fixed` input, and for a scalable amount whose
+/// exact rewrite was not representable (arithmetic overflow). Check
+/// `changed` (or `scaled.ptr != original.ptr`) to tell whether a
+/// rewrite happened; never assume `.scalable` implies one.
 pub const ScaledAmount = struct {
     class: cooklang.QuantityClass,
     original: []const u8,
     scaled: []const u8,
+    changed: bool,
 
     pub fn deinit(self: ScaledAmount, allocator: std.mem.Allocator) void {
-        if (self.scaled.ptr != self.original.ptr) allocator.free(self.scaled);
+        if (self.changed) allocator.free(self.scaled);
     }
 };
 
@@ -245,7 +250,7 @@ fn copyPart(a: std.mem.Allocator, part: cooklang.Part, factor: Rational) ScaleEr
             if (ig.is_recipe_reference) return part;
             const q = ig.quantity orelse return part;
             const result = try scaleAmountBy(a, q, factor);
-            if (result.scaled.ptr == q.ptr) return part;
+            if (!result.changed) return part;
             var out = ig;
             out.quantity = result.scaled;
             // Re-derive the numeric view from the new text so the model
@@ -263,37 +268,38 @@ fn copyPart(a: std.mem.Allocator, part: cooklang.Part, factor: Rational) ScaleEr
 fn scaleAmountBy(a: std.mem.Allocator, amount: []const u8, factor: Rational) ScaleError!ScaledAmount {
     const class = cooklang.classifyQuantity(amount);
     if (class != .scalable) {
-        return .{ .class = class, .original = amount, .scaled = amount };
+        return .{ .class = class, .original = amount, .scaled = amount, .changed = false };
     }
     const trimmed = std.mem.trim(u8, amount, " \t");
     const r = rationalOf(trimmed) orelse {
-        return .{ .class = class, .original = amount, .scaled = amount };
+        return .{ .class = class, .original = amount, .scaled = amount, .changed = false };
     };
     const prod = r.mul(factor) orelse {
-        return .{ .class = class, .original = amount, .scaled = amount };
+        return .{ .class = class, .original = amount, .scaled = amount, .changed = false };
     };
     const family = familyOfAmount(trimmed);
     var buf: [NumBuf]u8 = undefined;
     const text = formatRational(prod, family, &buf) orelse {
-        return .{ .class = class, .original = amount, .scaled = amount };
+        return .{ .class = class, .original = amount, .scaled = amount, .changed = false };
     };
-    return .{ .class = class, .original = amount, .scaled = try a.dupe(u8, text) };
+    return .{ .class = class, .original = amount, .scaled = try a.dupe(u8, text), .changed = true };
 }
 
+/// The emission family from the source form, exactly — never through
+/// f64 or `parseQuantity`'s i64-capped integer arm. Runs only after
+/// `rationalOf` succeeded, so a `.` means the decimal arm parsed, a
+/// canonical integer is the integer arm, and everything else (plain
+/// fraction or mixed input) is a fraction family. This keeps the
+/// terminating-decimal policy uniform at any magnitude: a decimal
+/// source above i64 still emits the exact terminating decimal when
+/// its reduced denominator is 2^a·5^b within the digit bound.
 fn familyOfAmount(text: []const u8) Family {
-    const numeric = cooklang.parseQuantity(text) orelse return .fraction;
-    return familyOf(numeric);
+    if (std.mem.indexOfScalar(u8, text, '.') != null) return .decimal;
+    if (canonicalU64(text) != null) return .integer;
+    return .fraction;
 }
 
 const Family = enum { integer, decimal, fraction };
-
-fn familyOf(numeric: cooklang.Quantity) Family {
-    return switch (numeric) {
-        .int => .integer,
-        .decimal => .decimal,
-        .fraction => .fraction,
-    };
-}
 
 // ---------------------------------------------------------------------------
 // Exact rationals and formatting.
@@ -596,4 +602,90 @@ test "cooklang scale: mixed numbers scale through the string and recipe APIs" {
     const out = try scaleT(allocator, "Add @flour{1 1/2%cup} and @salt{=1%tsp} and fry in #pot{2} for ~{9%minutes}, then @./sauce{2}.", .{ .factor = .{ .num = 2, .den = 1 } });
     defer allocator.free(out);
     try std.testing.expectEqualStrings("Add @flour{3%cup} and @salt{=1%tsp} and fry in #pot{2} for ~{9%minutes}, then @./sauce{2}.\n", out);
+}
+
+test "cooklang scale: decimal-family emission is exact at any magnitude" {
+    const allocator = std.testing.allocator;
+    const id: ScaleFactor = .{ .num = 1, .den = 1 };
+    const dbl: ScaleFactor = .{ .num = 2, .den = 1 };
+
+    // Control: a small decimal stays decimal under identity.
+    var control = try scaleAmount(allocator, "1.5", id);
+    defer control.deinit(allocator);
+    try std.testing.expectEqualStrings("1.5", control.scaled);
+
+    // The same decimal shape above i64 now emits the exact terminating
+    // decimal (issue #80: the f64/i64 family probe emitted a fraction).
+    var big = try scaleAmount(allocator, "9223372036854775808.5", id);
+    defer big.deinit(allocator);
+    try std.testing.expectEqualStrings("9223372036854775808.5", big.scaled);
+
+    // A 12-digit decimal within the digit bound emits the exact
+    // terminating decimal, not a fraction.
+    var twelve = try scaleAmount(allocator, "18446744073709551615.999999999999", id);
+    defer twelve.deinit(allocator);
+    try std.testing.expectEqualStrings("18446744073709551615.999999999999", twelve.scaled);
+
+    // Scaled: 2x stays an exact terminating decimal at the same magnitude.
+    var doubled = try scaleAmount(allocator, "18446744073709551615.999999999999", dbl);
+    defer doubled.deinit(allocator);
+    try std.testing.expectEqualStrings("36893488147419103231.999999999998", doubled.scaled);
+
+    // A whole product above i64 emits an integer.
+    var whole = try scaleAmount(allocator, "9223372036854775808.5", dbl);
+    defer whole.deinit(allocator);
+    try std.testing.expectEqualStrings("18446744073709551617", whole.scaled);
+
+    // Past the digit bound the fallback is still the exact fraction
+    // (never a rounded decimal), for any magnitude.
+    var fallback = try scaleAmount(allocator, "0.0000000000001", id);
+    defer fallback.deinit(allocator);
+    try std.testing.expectEqualStrings("1/10000000000000", fallback.scaled);
+}
+
+test "cooklang scale: changed flag distinguishes rewrite from passthrough" {
+    const allocator = std.testing.allocator;
+    const maxu64: u64 = 18446744073709551615;
+    const id: ScaleFactor = .{ .num = 1, .den = 1 };
+
+    // Normal rewrite: changed == true, scaled is a fresh allocation.
+    var r = try scaleAmount(allocator, "1/2", .{ .num = 2, .den = 1 });
+    defer r.deinit(allocator);
+    try std.testing.expect(r.changed);
+    try std.testing.expect(r.scaled.ptr != r.original.ptr);
+    try std.testing.expectEqualStrings("1", r.scaled);
+
+    // Empty and fixed inputs: changed == false, scaled aliases original.
+    var empty = try scaleAmount(allocator, "", id);
+    defer empty.deinit(allocator);
+    try std.testing.expect(!empty.changed);
+    try std.testing.expect(empty.scaled.ptr == empty.original.ptr);
+
+    var locked = try scaleAmount(allocator, "=1", id);
+    defer locked.deinit(allocator);
+    try std.testing.expect(!locked.changed);
+    try std.testing.expect(locked.scaled.ptr == locked.original.ptr);
+
+    // Passthrough triggers (issue #81): class stays .scalable — the
+    // amount IS scalable — but changed == false tells the consumer no
+    // rewrite happened.
+    // 1. Exact product overflows 128-bit arithmetic.
+    var overflow = try scaleAmount(allocator, "18446744073709551615.999999999999", .{ .num = maxu64, .den = 1 });
+    defer overflow.deinit(allocator);
+    try std.testing.expectEqual(QuantityClass.scalable, overflow.class);
+    try std.testing.expect(!overflow.changed);
+    try std.testing.expect(overflow.scaled.ptr == overflow.original.ptr);
+
+    // 2. Fractional part exceeds u64 in the exact rational.
+    var fp = try scaleAmount(allocator, "1.99999999999999999999", id);
+    defer fp.deinit(allocator);
+    try std.testing.expectEqual(QuantityClass.scalable, fp.class);
+    try std.testing.expect(!fp.changed);
+
+    // 3. Mixed whole*den exceeds u64.
+    var mixed = try scaleAmount(allocator, "18446744073709551615 1/2", id);
+    defer mixed.deinit(allocator);
+    try std.testing.expectEqual(QuantityClass.scalable, mixed.class);
+    try std.testing.expect(!mixed.changed);
+    try std.testing.expect(mixed.scaled.ptr == mixed.original.ptr);
 }

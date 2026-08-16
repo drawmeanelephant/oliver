@@ -186,8 +186,8 @@ fifth — the XHTML profile suite — is described in its own section below):
    `--help`/`-h` handling. They run as part of the ordinary `zig build
    test` gate.
 
-The current complete result is **357/357 tests passing** with Zig 0.16.0
-(304 library module tests + 18 fixture/adversarial tests + 7
+The current complete result is **360/360 tests passing** with Zig 0.16.0
+(307 library module tests + 18 fixture/adversarial tests + 7
 conformance-harness tests + 11 CLI argument-parsing tests + 17 XHTML
 profile tests). On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the

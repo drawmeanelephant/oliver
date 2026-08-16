@@ -1003,11 +1003,14 @@ pub const MixedNumber = struct {
     den: u64,
 };
 
-/// Parses a mixed number. Null when `text` is not `whole` + space/tab
-/// + a proper fraction of two canonical integers. Shared by
-/// `parseQuantity`, `classifyQuantity`, and the exact scale path.
+/// Parses a mixed number. Leading and trailing ASCII space/tab are
+/// ignored (the same trim set as `classifyQuantity`). Null when `text`
+/// is not `whole` + space/tab + a proper fraction of two canonical
+/// integers. Shared by `parseQuantity`, `classifyQuantity`, and the
+/// exact scale path.
 pub fn parseMixedNumber(text: []const u8) ?MixedNumber {
-    const parts = splitMixed(text) orelse return null;
+    const trimmed = std.mem.trim(u8, text, " \t");
+    const parts = splitMixed(trimmed) orelse return null;
     const whole = parseCanonicalU64(parts.whole) orelse return null;
     const num = parseCanonicalU64(parts.num) orelse return null;
     const den = parseCanonicalU64(parts.den) orelse return null;
@@ -1589,4 +1592,21 @@ test "cooklang: parseQuantity accepts mixed numbers" {
     const ig = res.recipe.blocks[0].step.parts[0].ingredient;
     try std.testing.expectEqualStrings("1 1/2", ig.quantity.?);
     try std.testing.expectEqual(Quantity{ .fraction = .{ .num = 3, .den = 2 } }, ig.numeric.?);
+}
+
+test "cooklang: parseMixedNumber ignores leading and trailing space/tab" {
+    const one_and_half = MixedNumber{ .whole = 1, .num = 1, .den = 2 };
+    try std.testing.expectEqual(one_and_half, parseMixedNumber("1 1/2").?);
+    try std.testing.expectEqual(one_and_half, parseMixedNumber(" 1 1/2").?); // leading space (issue #79)
+    try std.testing.expectEqual(one_and_half, parseMixedNumber("1 1/2 ").?); // trailing space
+    try std.testing.expectEqual(one_and_half, parseMixedNumber("\t1 1/2").?); // leading tab
+    try std.testing.expectEqual(one_and_half, parseMixedNumber("1\t1/2").?); // tab separator
+    try std.testing.expectEqual(one_and_half, parseMixedNumber("1 1 / 2").?); // spaces around the slash
+    try std.testing.expectEqual(one_and_half, parseMixedNumber("  1  1/2  ").?); // doubled separators
+    try std.testing.expect(parseMixedNumber("1 3/2") == null); // improper fraction stays rejected
+    try std.testing.expect(parseMixedNumber("1 1/0") == null); // zero denominator stays rejected
+    try std.testing.expect(parseMixedNumber("1/2") == null); // no whole part
+    try std.testing.expect(parseMixedNumber("") == null);
+    // classifyQuantity agrees on the trimmed view.
+    try std.testing.expectEqual(QuantityClass.scalable, classifyQuantity(" 1 1/2 "));
 }
