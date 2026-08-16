@@ -609,3 +609,15 @@ title, and the deliberate `<div class="callout callout-<type>">`
 element change from `<blockquote>` (the Obsidian/admonition
 convention, with `<div>` a valid XHTML container). No Markdown or
 Textile parser implementation source was consulted.
+
+Session 27 (E3 smart typography extension) provenance record: the
+replacement set is Oliver's own already-documented Textile
+character-replacement contract (docs/TEXTILE-PARITY.md §13, sessions
+10/13 — no new upstream material was consulted). The extraction moved
+`replaceChars`/`hasCharMacroTrigger` and their helpers verbatim into
+the shared `src/typography.zig`; the only behavioral surface is the
+`char_macros` flag, which keeps the Textile `{...}` macro table
+enabled for the Textile caller and disabled for CommonMark
+smartypants — braces are ordinary text in CommonMark (pinned in
+docs/SMARTY.md §1). No Markdown or Textile parser implementation
+source was consulted.

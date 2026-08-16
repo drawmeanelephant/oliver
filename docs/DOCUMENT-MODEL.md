@@ -103,7 +103,10 @@ entity decoding and the Textile character replacements
    `superscript`/`subscript`/`span`/`link` contain inline children. The
    leaf inline tags (`text`, `code_span`, `image`, `autolink`, `raw_html`,
    `soft_break`, `hard_break`) never have children.
-9. `Data.text` always slices the document's source bytes; `raw_html` also
+9. `Data.text` always slices the document's source bytes — except under
+   the opt-in `smartypants` extension, where a span containing a
+   typography replacement carries an arena-owned copy (the borrow-or-
+   copy contract, docs/SMARTY.md §3); `raw_html` also
    borrows its bytes through `Node.span` and carries `Data.none`; the other
    text payloads (`code_span`, `code_block.content`, `code_block.info`,
    `link.href`, `link.title`, `image.src`,

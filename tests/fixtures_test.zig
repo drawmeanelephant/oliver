@@ -1523,6 +1523,21 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .input = @embedFile("fixtures/markdown/callout-literal.md"),
         .expected = @embedFile("fixtures/markdown/callout-literal.html"),
     },
+    .{
+        .name = "smartypants-basic",
+        .input = @embedFile("fixtures/markdown/smartypants-basic.md"),
+        .expected = @embedFile("fixtures/markdown/smartypants-basic.html"),
+    },
+    .{
+        .name = "smartypants-exempt",
+        .input = @embedFile("fixtures/markdown/smartypants-exempt.md"),
+        .expected = @embedFile("fixtures/markdown/smartypants-exempt.html"),
+    },
+    .{
+        .name = "smartypants-scopes",
+        .input = @embedFile("fixtures/markdown/smartypants-scopes.md"),
+        .expected = @embedFile("fixtures/markdown/smartypants-scopes.html"),
+    },
 };
 
 const TextileFixture = struct {
@@ -2511,6 +2526,7 @@ fn renderExtHtml(input: []const u8) !std.ArrayList(u8) {
             .strikethrough = true,
             .wikilinks = true,
             .callouts = true,
+            .smartypants = true,
         },
     });
     defer result.deinit();

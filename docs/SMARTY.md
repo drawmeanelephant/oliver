@@ -1,18 +1,17 @@
 ---
 published_at: 2026-08-16T00:00:00Z
-summary: Pre-implementation contract for the opt-in smartypants typography pass in the Markdown frontend, one shared implementation with Textile.
+summary: Contract for the opt-in smartypants typography pass in the Markdown frontend — one shared implementation with Textile (shipped, issue #67).
 ---
 
 # Smart typography (`smartypants`) — contract
 
-**Status:** planned — contract only; nothing is parsed or rendered yet.
-Implementation is tracked as issue #67 (milestone v1.0, "The Goodest
-Boy"), ledger card E3, and the "smart typography (extension)" row of the
-feature matrix (docs/FEATURE-MATRIX.md).  \
-**Modules:** new shared `src/typography.zig` (extracted from
+**Status:** implemented — shipped via issue #67 (milestone v1.0, "The
+Goodest Boy"); the provenance record is in docs/CLEANROOM.md session
+27.  \
+**Modules:** shared `src/typography.zig` (extracted from
 `src/textile.zig`), `src/markdown.zig` (parse), `src/textile.zig`
 (caller)  \
-**Options (proposed):** `markdown.Options.smartypants: bool = false`
+**Options:** `markdown.Options.smartypants: bool = false`
 
 Textile already implements the legendary typotastic rules
 (docs/TEXTILE-PARITY.md §13 — T15). This contract brings those **exact**
@@ -43,7 +42,7 @@ clean-room session.
 
 The Textile `{...}` character-macro table (T20) is **Textile-only**:
 braces in CommonMark are ordinary text, and smartypants never enables
-the macro table (pinned).
+the macro table (pinned — `{c|}` stays literal under smartypants).
 
 ## 2. Where the pass applies
 
@@ -79,26 +78,35 @@ the macro table (pinned).
 ## 4. Rendering and XHTML
 
 - No renderer changes: replaced payloads flow through the existing text
-  writer (the renderer already escapes and emits payloads).
+  writer (the renderer already escapes and emits payloads — a
+  backslash-escaped `\"` still renders `&quot;`, HTML-escaped like any
+  text).
 - No new elements; curly quotes, dashes, and symbols are valid in both
-  output profiles. The XHTML well-formedness gate is unaffected.
+  output profiles. The XHTML well-formedness gate is unaffected
+  (a dedicated case verifies both profiles).
 
-## 5. Interaction with the other planned extensions
+## 5. Interaction with the other extensions
 
 - `wikilinks`: wikilink targets/labels are exempt (plain-text payloads,
-  not re-scanned) — matching the exemption set.
+  not re-scanned — pinned: `[[Wiki -- Target]]` keeps its dashes) —
+  matching the exemption set.
 - `callouts`: the title and body are ordinary inline scopes; the pass
-  applies there like anywhere else.
+  applies there like anywhere else (pinned in `smartypants-scopes`).
 - `front matter`: stripped before the body parses; never processed.
 
-## 6. Acceptance and fixtures
+## 6. Acceptance and fixtures (shipped)
 
 - `"Hello," -- she said...` → `“Hello,” — she said…` (byte-pinned);
   `2 x 4` → `2 × 4`; `(c)` → ©; apostrophes by position.
 - Exemptions pinned: `` `code "quotes"` ``, fenced code, autolinks, raw
-  HTML, link destinations/titles, image src/alt/title, escaped `\"`.
+  HTML tags, link destinations/titles, image src/alt/title, escaped
+  `\"`/`\'`, and the Textile-only `{...}` macro table (literal).
 - Literal fallbacks pinned: `---` → `—` + `-`, `....`, `(1/3)`,
   letter-touching hyphens (no en dash in `foo-bar`), plain `x`.
+- Fixture wall: `smartypants-basic` (the replacement set, runs, symbols),
+  `smartypants-exempt` (the §2 exemption battery), `smartypants-scopes`
+  (headings incl. the heading-id slug, link display text, list items,
+  GFM table cells, callout title/body, wikilink exemption).
 - Textile fixtures byte-identical before/after the extraction refactor
   (the wall is the regression net).
 - Off by default: quotes/dashes stay literal — 652/652 + full suite
@@ -107,5 +115,6 @@ the macro table (pinned).
 ## 7. Conformance status
 
 Extension, off by default: the CommonMark 0.31.2 corpus is untouched
-(re-verified at integration). The fixture wall lives at
+(re-verified at integration: 652/652 with the `--gate` harness, and the
+Cooklang 60/60 gate). The fixture wall lives at
 `tests/fixtures/markdown/smartypants-*`.

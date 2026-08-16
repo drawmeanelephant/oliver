@@ -76,9 +76,9 @@ pub const Dialect = enum {
 /// the CommonMark conformance corpus stays green. Each extension is a
 /// documented, principled addition with its own contract doc and tests
 /// (footnotes, definition lists, heading attribute lists, GFM
-/// strikethrough, wikilinks, callouts; see `markdown.Options`,
-/// docs/MARKDOWN-EXTENSIONS.md, docs/WIKILINKS.md, and
-/// docs/CALLOUTS.md).
+/// strikethrough, wikilinks, callouts, smartypants; see
+/// `markdown.Options`, docs/MARKDOWN-EXTENSIONS.md, docs/WIKILINKS.md,
+/// docs/CALLOUTS.md, and docs/SMARTY.md).
 pub const MarkdownOptions = markdown.Options;
 
 /// Parse options. Markdown extensions are off by default, and front

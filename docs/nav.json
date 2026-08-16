@@ -152,7 +152,7 @@
           "file": "SMARTY.md",
           "title": "Smart typography (extension)",
           "audience": "dev",
-          "summary": "Pre-implementation contract for the opt-in `smartypants` pass: the Textile replacement set, exemptions, CommonMark pins (issue #67)."
+          "summary": "The opt-in `smartypants` pass: the Textile replacement set in one shared implementation, exemptions, CommonMark pins (shipped, issue #67, v1.0)."
         },
         {
           "file": "IMAGES-MISSION.md",

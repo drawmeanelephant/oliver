@@ -278,6 +278,34 @@ in docs/CALLOUTS.md:
 
 ---
 
+## 8. Smart typography (`parse: smartypants`)
+
+Smart typography — curly quotes by direction, em/en dashes, ellipsis,
+the dimension sign, and the parenthesized symbols — in **one shared
+implementation** with Textile (`src/typography.zig`), per the contract
+in docs/SMARTY.md:
+
+- The Textile character-replacement passes apply verbatim to plain
+  `.text` nodes in every Markdown inline scope: paragraphs, ATX/Setext
+  headings (heading-id slugs are unaffected — the non-ASCII replacement
+  bytes are dropped by `slugify`), list items, GFM table cells, link
+  display text, and callout titles/bodies.
+- The `{...}` character-macro table stays **Textile-only**: braces in
+  CommonMark are ordinary text and never expand.
+- Exempt by construction: code spans/blocks, autolinks, raw HTML tags
+  (text *between* tags is ordinary text), link destinations/titles,
+  image src/alt/title, wikilink targets/labels, and image descriptions
+  (they flatten to `alt` from the raw items, before the pass).
+- A backslash-escaped `\"` or `\'` renders the literal straight
+  character (the escape split exempts the byte).
+- Borrow-or-copy: untouched text borrows the source slice; only spans
+  containing a replacement allocate an arena copy.
+- Example: `"Hello," -- she said...` → `“Hello,” — she said…`.
+- Fixtures: `tests/fixtures/markdown/smartypants-*.md`; unit tests in
+  `src/markdown.zig` and `tests/xhtml_test.zig`.
+
+---
+
 ## Interaction and precedence
 
 - Extensions compose: a heading with an IAL id renders that id even when
@@ -287,14 +315,16 @@ in docs/CALLOUTS.md:
   wins over the `[x]` shortcut reference, and a heading containing a
   wikilink slugs on the wikilink's label (or target); a `[!type]` on a
   blockquote's first content line turns it into a callout, and a `[[x]]`
-  in the callout title or body is a normal inline.
+  in the callout title or body is a normal inline; smartypants applies
+  to plain text in every scope, with wikilink payloads exempt.
 - Fenced code, code spans, HTML blocks, and raw HTML are opaque to all
-  seven extensions (a `[^x]:` line inside a fence is code, not a
+  eight extensions (a `[^x]:` line inside a fence is code, not a
   definition; a `[!note]` line inside a fence is code, not a callout; a
   `~~` pair inside a code span or fence is literal; a `[[x]]` inside a
-  code span or autolink is literal).
+  code span or autolink is literal; quotes and dashes inside a code
+  span or fence never typograph).
 - In GFM table cells an unescaped `|` is a cell separator (GFM §4.10), so
   a pipe-label wikilink inside a cell needs `\|` (docs/WIKILINKS.md §7).
-- Fixtures: `tests/fixtures/markdown/ext-*.md`, `wikilink-*.md`, and
-  `callout-*.md` (parsed with all extensions enabled) plus unit tests in
-  `src/markdown.zig` and `src/html.zig`.
+- Fixtures: `tests/fixtures/markdown/ext-*.md`, `wikilink-*.md`,
+  `callout-*.md`, and `smartypants-*.md` (parsed with all extensions
+  enabled) plus unit tests in `src/markdown.zig` and `src/html.zig`.

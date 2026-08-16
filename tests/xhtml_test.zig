@@ -582,3 +582,30 @@ test "xhtml: callouts are well-formed under both profiles (extension)" {
     try wrapFragment(xhtml.items, &wrapped);
     try wellformed.check(wrapped.items);
 }
+
+fn renderSmartypantsProfile(input: []const u8, profile: oliver.OutputProfile) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
+        .markdown = .{ .smartypants = true },
+    });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{ .profile = profile });
+    return aw.toArrayList();
+}
+
+test "xhtml: smartypants output is well-formed under both profiles (extension)" {
+    // The pass replaces payload bytes with Unicode punctuation and
+    // symbols — no new elements or attributes — so the output must stay
+    // well-formed under `.xhtml` like any other text (docs/SMARTY.md §4).
+    const input = "\"Hello,\" -- she said... And 2 x 4 with (c) and a [l\"ink\"](/x?a=1&b=2).\n";
+    var html = try renderSmartypantsProfile(input, .html);
+    defer html.deinit(std.testing.allocator);
+    var xhtml = try renderSmartypantsProfile(input, .xhtml);
+    defer xhtml.deinit(std.testing.allocator);
+    try expectRender(xhtml.items, html.items, "smartypants xhtml vs html");
+    var wrapped = std.ArrayList(u8).empty;
+    defer wrapped.deinit(std.testing.allocator);
+    try wrapFragment(xhtml.items, &wrapped);
+    try wellformed.check(wrapped.items);
+}

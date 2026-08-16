@@ -98,6 +98,7 @@ const document = @import("document.zig");
 const diagnostic = @import("diagnostic.zig");
 const unicode = @import("unicode.zig");
 const entities = @import("entities.zig");
+const typography = @import("typography.zig");
 
 pub const ParseError = error{OutOfMemory};
 
@@ -145,6 +146,15 @@ pub const Options = struct {
     /// stay literal. Off by default so the CommonMark corpus stays
     /// byte-exact.
     callouts: bool = false,
+    /// Smart typography: the Textile character-replacement pass (curly
+    /// quotes by direction, em/en dashes, ellipsis, the dimension sign,
+    /// the parenthesized symbols) applied to plain text in every inline
+    /// scope — one shared implementation with Textile
+    /// (docs/SMARTY.md). The `{...}` character-macro table stays
+    /// Textile-only; escaped `\"`/`\'` render the straight character;
+    /// code, autolinks, raw HTML, and link/image payloads are exempt.
+    /// Off by default so the CommonMark corpus stays byte-exact.
+    smartypants: bool = false,
 };
 
 const tab_stop: u32 = 4;
@@ -2593,7 +2603,7 @@ fn parseMultilineBlockInlines(
     // (§6.3/§6.4), before emphasis matching.
     const para_end = lines[lines.len - 1].content.end;
     try discoverLinksAndImages(doc, &items, para_end, defs, options);
-    try matchInlines(doc, node, items.items);
+    try matchInlines(doc, node, items.items, options);
 }
 
 /// An ATX heading recognized on a line.
@@ -2782,7 +2792,7 @@ fn parseTableCellInlines(
     var exclude: u32 = 0;
     try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
-    try matchInlines(doc, node, items.items);
+    try matchInlines(doc, node, items.items, options);
     try fixCellCodeSpans(doc, node);
 }
 
@@ -2855,7 +2865,7 @@ fn parseHeadingInlines(
     var exclude: u32 = 0;
     try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
-    try matchInlines(doc, node, items.items);
+    try matchInlines(doc, node, items.items, options);
 }
 
 /// Phase 2 inline pass for a callout title (extension): the title parses
@@ -4561,8 +4571,8 @@ fn matchItems(doc: *document.Document, items: []const InlineItem) ParseError![]c
 
 /// Matches the item list as a fresh inline scope, then materializes
 /// document nodes under `block`.
-fn matchInlines(doc: *document.Document, block: *document.Node, items: []const InlineItem) ParseError!void {
-    try emitInlines(doc, block, @constCast(items), try matchItems(doc, items));
+fn matchInlines(doc: *document.Document, block: *document.Node, items: []const InlineItem, options: Options) ParseError!void {
+    try emitInlines(doc, block, @constCast(items), try matchItems(doc, items), options);
 }
 
 // ---------------------------------------------------------------------------
@@ -4577,6 +4587,7 @@ fn emitInlines(
     block: *document.Node,
     items: []const InlineItem,
     matches: []const Match,
+    options: Options,
 ) ParseError!void {
     const n = items.len;
     const alloc = doc.allocator();
@@ -4633,7 +4644,7 @@ fn emitInlines(
 
     for (items, 0..) |item, i| {
         switch (item) {
-            .text => |span| try emitTextRuns(doc, current, span),
+            .text => |span| try emitTextRuns(doc, current, span, options),
             .brk => |brk| {
                 const node = try doc.createNode(
                     if (brk.kind == .hard) .hard_break else .soft_break,
@@ -4648,7 +4659,7 @@ fn emitInlines(
                 });
                 try doc.appendChild(current, node);
             },
-            .bracket => |br| try emitText(doc, current, br.span),
+            .bracket => |br| try emitText(doc, current, br.span, options),
             .link => |lk| {
                 // The link's text is a fresh inline scope: children are
                 // matched with the `[` opener as stack_bottom (the spec's
@@ -4662,7 +4673,7 @@ fn emitInlines(
                     },
                 });
                 try doc.appendChild(current, node);
-                try matchInlines(doc, node, lk.children.items);
+                try matchInlines(doc, node, lk.children.items, options);
             },
             .image => |im| {
                 // Leaf node (no children): the description is flattened to
@@ -4768,7 +4779,7 @@ fn emitInlines(
                     try emitText(doc, current, .{
                         .start = run.span.start + run.front_used,
                         .end = run.span.end - run.back_used,
-                    });
+                    }, options);
                 }
 
                 // Open frames for opener matches, outermost first (smallest
@@ -4819,7 +4830,7 @@ fn openerLess(ctx: []const Match, a: usize, b: usize) bool {
 /// character literally (the backslash is consumed, so it is not covered by
 /// any node's span); a backslash before anything else is a literal
 /// backslash. Each escape splits the text into adjacent text nodes.
-fn emitTextRuns(doc: *document.Document, parent: *document.Node, span: source.Span) ParseError!void {
+fn emitTextRuns(doc: *document.Document, parent: *document.Node, span: source.Span, options: Options) ParseError!void {
     if (span.isEmpty()) return;
     const bytes = doc.src.bytes;
 
@@ -4827,13 +4838,13 @@ fn emitTextRuns(doc: *document.Document, parent: *document.Node, span: source.Sp
     var run_start = span.start;
     while (i < span.end) : (i += 1) {
         if (bytes[i] == '\\' and i + 1 < span.end and isAsciiPunctuation(bytes[i + 1])) {
-            try emitText(doc, parent, .{ .start = run_start, .end = i });
-            try emitText(doc, parent, .{ .start = i + 1, .end = i + 2 });
+            try emitText(doc, parent, .{ .start = run_start, .end = i }, options);
+            try emitText(doc, parent, .{ .start = i + 1, .end = i + 2 }, options);
             i += 1;
             run_start = i + 1;
         }
     }
-    try emitText(doc, parent, .{ .start = run_start, .end = span.end });
+    try emitText(doc, parent, .{ .start = run_start, .end = span.end }, options);
 }
 
 /// §6.1 normalization of a code span's raw content: line endings become
@@ -4953,7 +4964,7 @@ fn resolveEntities(doc: *document.Document, span: source.Span) ParseError![]cons
     return bytes[span.start..span.end];
 }
 
-fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) ParseError!void {
+fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span, options: Options) ParseError!void {
     if (span.isEmpty()) return;
     // Contiguous text in the same parent merges into one node: scanning
     // artifacts (item boundaries, leftover delimiters) must not fragment
@@ -4965,17 +4976,28 @@ fn emitText(doc: *document.Document, parent: *document.Node, span: source.Span) 
     // after it, so the escaped byte stays its own node and the renderer's
     // entity decoding remains escape-aware (`\&ouml;` must render
     // `&amp;ouml;`, never decode the reference the backslash protects).
+    // The same test also exempts the escaped byte from smartypants: a
+    // backslash-escaped `\"` or `\'` renders the literal straight
+    // character (docs/SMARTY.md §3).
+    const escaped = span.start > 0 and doc.src.bytes[span.start - 1] == '\\';
     if (parent.children.items.len > 0) {
         const last = parent.children.items[parent.children.items.len - 1];
         if (last.tag == .text and last.span.end == span.start and
             !(last.span.start > 0 and doc.src.bytes[last.span.start - 1] == '\\'))
         {
             last.span.end = span.end;
-            last.data.text = doc.text(last.span);
+            last.data.text = if (options.smartypants and !escaped)
+                try typography.replace(doc, last.span, false)
+            else
+                doc.text(last.span);
             return;
         }
     }
-    const node = try doc.createNode(.text, span, .{ .text = doc.text(span) });
+    const payload = if (options.smartypants and !escaped)
+        try typography.replace(doc, span, false)
+    else
+        doc.text(span);
+    const node = try doc.createNode(.text, span, .{ .text = payload });
     try doc.appendChild(parent, node);
 }
 
@@ -7659,4 +7681,104 @@ test "markdown: a titleless callout renders without the title div (extension)" {
         "<div class=\"callout callout-warning\">\n<p>Body.</p>\n</div>\n",
         out.items,
     );
+}
+
+fn renderSmartypantsHtml(input: []const u8) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{ .smartypants = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "markdown: smartypants replaces quotes, dashes, and ellipses (extension)" {
+    var out = try renderSmartypantsHtml("\"Hello,\" -- she said... And 2 x 4 is 8. (c) 2026, it's fine.\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>\u{201C}Hello,\u{201D} \u{2014} she said\u{2026} And 2 \u{00D7} 4 is 8. \u{00A9} 2026, it\u{2019}s fine.</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: smartypants leaves braces literal (extension)" {
+    // The Textile `{...}` character-macro table is Textile-only
+    // (docs/SMARTY.md §1): a brace never expands under smartypants.
+    var out = try renderSmartypantsHtml("A {c|} and {*} stay literal.\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>A {c|} and {*} stay literal.</p>\n", out.items);
+}
+
+test "markdown: escaped quotes stay straight under smartypants (extension)" {
+    // The escaped byte stays its own node and bypasses the pass, but the
+    // renderer still HTML-escapes text payloads (docs/SMARTY.md §3).
+    var out = try renderSmartypantsHtml("\\\"escaped\\\" and \\'single\\'.\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>&quot;escaped&quot; and 'single'.</p>\n", out.items);
+}
+
+test "markdown: smartypants exempts code, autolinks, raw HTML tags, and payloads (extension)" {
+    // Code spans, autolinks, raw HTML tags, and link/image src/title
+    // never pass through the pass; text *between* tags is ordinary text
+    // (matching Textile's model — the tag constructs are the exemption).
+    var out = try renderSmartypantsHtml(
+        "`code \"quotes\"` and <http://x.com/a--b> and <b title=\"a--b\">\"kept\"</b> and [link](</dest--x> \"title--y\") and ![alt \"quotes\"](/img.png \"t--t\").\n",
+    );
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p><code>code &quot;quotes&quot;</code> and <a href=\"http://x.com/a--b\">http://x.com/a--b</a> and <b title=\"a--b\">\u{201D}kept\u{201D}</b> and <a href=\"/dest--x\" title=\"title--y\">link</a> and <img src=\"/img.png\" alt=\"alt &quot;quotes&quot;\" title=\"t--t\" />.</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: smartypants applies to link display text and scopes (extension)" {
+    // Link display text is replaced (matching Textile); headings, table
+    // cells, and callout titles/bodies are ordinary inline scopes.
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "# A \"heading\" -- bold\n\n[\"display\" -- text](/url)\n\n| \"cell\" |\n| --- |\n| body--x |\n\n> [!note] \"Title\" -- x\n> \"Body.\"\n",
+        .markdown,
+        ext_parse(.{ .smartypants = true, .callouts = true }),
+    );
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<h1>A \u{201C}heading\u{201D} \u{2014} bold</h1>\n<p><a href=\"/url\">\u{201C}display\u{201D} \u{2014} text</a></p>\n<table>\n<thead>\n<tr>\n<th>\u{201C}cell\u{201D}</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>body\u{2014}x</td>\n</tr>\n</tbody>\n</table>\n<div class=\"callout callout-note\">\n<div class=\"callout-title\">\u{201C}Title\u{201D} \u{2014} x</div>\n<p>\u{201C}Body.\u{201D}</p>\n</div>\n",
+        out.items,
+    );
+}
+
+test "markdown: smartypants literal fallbacks (extension)" {
+    // `---` -> em dash + hyphen; `....` -> ellipsis + period; unknown
+    // fraction stays literal; letter-touching hyphens never en-dash;
+    // a bare `x` stays an `x`.
+    var out = try renderSmartypantsHtml("--- .... (1/3) foo-bar and 2x4 but x alone.\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>\u{2014}- \u{2026}. (1/3) foo-bar and 2\u{00D7}4 but x alone.</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: smartypants is off by default (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "\"Hello,\" -- she said.\n",
+        .markdown,
+        .{},
+    );
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>&quot;Hello,&quot; -- she said.</p>\n", out.items);
 }
