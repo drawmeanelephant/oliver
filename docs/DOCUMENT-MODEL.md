@@ -201,5 +201,12 @@ emit them in a fixed documented order.
 | newline in paragraph | newline in paragraph | `.soft_break` (MD) / `.hard_break` (Textile) |
 | `*x*` / `**x**` | `_x_` / `*x*` (Textile, planned) | `.emphasis` / `.strong` |
 
+Front matter is **not part of the document IR**: the shared pre-pass
+(`src/frontmatter.zig`) strips the block before dispatch and exposes the
+parsed metadata beside the model — `ParseResult.metadata` (Markdown /
+Textile) and `Recipe.metadata` (Cooklang) — with the raw payload kept on
+`Recipe.frontmatter.raw`/`span` (docs/FRONTMATTER.md §7–§8). The clean
+body is what the frontends see.
+
 The same HTML renderer consumes both; `tests/fixtures_test.zig` proves the
 convergence (equivalent Markdown/Textile inputs render byte-identically).

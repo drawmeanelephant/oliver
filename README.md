@@ -67,7 +67,10 @@ colons, escaped `\|`, inline-parsed cells, `<table><thead><tbody>`
 output — docs/TABLES.md), opt-in Markdown extensions (Pandoc-style
 footnotes, definition lists, heading attribute lists, GFM
 strikethrough, and Obsidian-style `[[wikilinks]]` — docs/MARKDOWN-EXTENSIONS.md,
-docs/WIKILINKS.md), entity and numeric character
+docs/WIKILINKS.md), shared front matter (YAML `---` / TOML `+++`
+sniffed at index 0, stripped before dispatch, parsed into
+`ParseResult.metadata` under a bounded, never-faked subset —
+docs/FRONTMATTER.md), entity and numeric character
 references (§2.5,
 named via the WHATWG entities table, decoded in text, link
 destinations/titles, info strings, and autolinks but never in code
@@ -140,6 +143,8 @@ The GFM tables extension contract is
 [docs/TABLES.md](docs/TABLES.md).
 The wikilinks extension contract is
 [docs/WIKILINKS.md](docs/WIKILINKS.md).
+The front matter extension contract is
+[docs/FRONTMATTER.md](docs/FRONTMATTER.md).
 The Cooklang frontend's design contract, source hierarchy, provenance,
 model, diagnostics policy, and the Oliver/Boris boundary is
 [docs/COOKLANG.md](docs/COOKLANG.md).

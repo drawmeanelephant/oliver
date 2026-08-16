@@ -45,7 +45,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Cooklang worker | CK4 richer HTML policy | `src/cooklang_html.zig` grows from the bare article/steps vocabulary into the richer generic policy: an **ingredients index** (one `<li>` per distinct ingredient — exact case-sensitive name, first occurrence's quantity/units/preparation, first-appearance order, recipe-ref items, cookware/timers excluded, omitted when empty), timers as `<time class="timer" datetime="PT25M">` (ISO-8601 duration for whole-number quantities with recognized day/hour/minute/second units, case-insensitive; named timers render `name (3 minutes)`), unnamed sections omit the empty `<h2>`, preparations surfaced in the index; 2 unit tests (ISO durations, richer-policy structure); the 4 HTML fixture pairs regenerated under the new vocabulary; Markdown/Textile untouched | after CK3 (third stretch goal) | merged (PR #47) |
 | Cooklang worker | CK5 `.menu` view | `src/cooklang_menu.zig` — the explicit convenience layer: `.menu` files are valid Cooklang (no second parser), and `menuView` exposes the day/meal structure semantically (`Menu{ days }`, `Day{ name, date, references }`, `Reference{ path, quantity, units }`); trailing `(YYYY-MM-DD)` title dates (valid month/day), reference directives preserved as source text and never deduplicated/resolved, non-section top-level blocks ignored; `writeMenu` text dump shared by `oliver menu --from cooklang` and the `menu-basic` fixture (the conventions' own example); 6 unit tests; no meal-planning logic (shopping/scheduling/filesystem stay consumer-owned) | after CK4 (fourth stretch goal) | merged (PR #48) |
 | serializer worker | X1 XHTML output profile | an explicit XML-compatible serializer profile over the existing renderers (docs/XHTML.md): `OutputProfile` (`html` default, `xhtml`) in `src/html.zig` and `src/cooklang_html.zig` — same IR, same semantics, different serialization bytes (voids always XML-form under `.xhtml`; Cooklang forced line breaks become `<br />`); fail-closed raw-content policy (`.raw_html`, `.html_block`, Textile `pre.` → `error.RawHtmlNotXmlWellFormed`, with an actionable CLI hint); `--to html|xhtml` on `render` (rejected on serialize/scale/menu), testable `parseArgs`; public `oliver.OutputProfile`; paired fixtures, HTML-mode guard against the committed fixture wall, determinism checks, and a hermetic test-only well-formedness gate (`tests/xhtml_wellformed.zig` + `tests/xhtml_test.zig`) wired into `zig build test`; CommonMark 652/652 and Cooklang 60/60 unchanged; docs (XHTML.md, ARCHITECTURE, README, TESTS, CAPABILITIES, COOKLANG, index/nav) | after the Textile audit (T1–T25) + Cooklang wave | PR in review |
-| shared worker | F1 frontmatter extraction | new `src/frontmatter.zig` sniff/strip pre-pass (YAML `---` / TOML `+++` at index 0) + documented bounded YAML/TOML subsets (docs/FRONTMATTER.md); `ParseResult.metadata`; Cooklang `tryFrontmatter` convergence; opt-in `ParseOptions.frontmatter` (default off — an index-0 `---` is today a §4.1 thematic break); out-of-subset payloads stay raw with a diagnostic; fixtures + docs; Markdown/Textile/Cooklang all receive the clean body | first of the extension wave (v0.5) | planned — issue #66 |
+| shared worker | F1 frontmatter extraction | `src/frontmatter.zig` sniff/strip pre-pass (YAML `---` / TOML `+++` at index 0) + documented bounded YAML/TOML subsets (docs/FRONTMATTER.md); `ParseResult.metadata` / `Recipe.metadata`; Cooklang `tryFrontmatter` convergence (raw/span contract intact); opt-in `ParseOptions.frontmatter` (default off — an index-0 `---` is today a §4.1 thematic break); out-of-subset payloads stay raw with a diagnostic; fixtures + docs; Markdown/Textile/Cooklang all receive the clean body | first of the extension wave (v0.5) | implemented on main (issue #66) |
 | Markdown extension worker | E1 modular wikilinks | `Options.wikilinks` inline scan → `.wikilink` leaf (`target`/`label`) + resolver-aware render arm (default: target percent-encoded as the href, `label orelse target` as text; docs/WIKILINKS.md); Markdown fixtures; Textile and the CommonMark corpus untouched | after F1 (v0.5) | implemented on main (issue #64) |
 | Markdown extension worker | E2 callouts/admonitions | `Options.callouts` recognition on the container-block quote path; `.block_quote` callout payload (`type`/`title`) + `<div class="callout callout-<type>">` render arm (docs/CALLOUTS.md); Markdown fixtures; corpus untouched | after E1 (v0.6) | planned — issue #65 |
 | shared worker | E3 smart typography | extract Textile's `replaceChars`/`hasCharMacroTrigger` machinery into one shared module (two callers, Textile byte-identical); `Options.smartypants` text pass with the Textile exemption set (docs/SMARTY.md); Markdown fixtures | after F1/E1 (v1.0) | planned — issue #67 |
@@ -1153,7 +1153,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   0 not-yet / 0 divergences (full conformance)
   (see the M4/M5/M6 cards below).
 
-## F1 — Frontmatter extraction (YAML / TOML) — planned
+## F1 — Frontmatter extraction (YAML / TOML)
 
 - **Objective:** add a shared frontmatter pre-pass — sniff a `---` (YAML)
   or `+++` (TOML) fence at index 0, strip it before dispatch, and expose
@@ -1191,7 +1191,23 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   `oliver.parse`); fixture prep may proceed independently.
 - **Integration:** first of the extension wave; after X1; the 652/652
   gate is re-verified.
-- **State:** planned — tracked as issue #66 (milestone v0.5).
+- **State:** implemented on main (issue #66). `src/frontmatter.zig`
+  landed: `preprocess` (sniff `---`/`+++` at index 0, strip before
+  dispatch, `unclosed-frontmatter` pass-through, out-of-subset payloads
+  stay raw with `frontmatter-parse-unsupported`), the bounded YAML
+  subset parser (top-level mappings, raw-byte scalars, quoted forms,
+  scalar lists, indented maps, comments, last-wins duplicates) and TOML
+  subset parser (`key = value`, `[table]`, `[[array-of-tables]]`), and
+  the public `Metadata`/`Entry`/`Value` model. `oliver.ParseOptions`
+  gained `frontmatter` (default `.none` — corpus untouched, re-verified
+  652/652); `ParseResult.metadata` and `Recipe.metadata` expose the
+  parsed view; Cooklang's `tryFrontmatter`/`isFence` moved onto the
+  shared pre-pass with the raw/span boundary contract intact (the
+  existing boundary tests pass unchanged). Unit tests per subset + the
+  diagnostic battery; fixture pairs `frontmatter-*` across all three
+  frontends; an XHTML well-formedness case; docs/FRONTMATTER.md flipped
+  to implemented, feature-matrix rows, README, DOCUMENT-MODEL,
+  COOKLANG, nav/index, and CLEANROOM session 25.
 
 ## E1 — Modular wikilinks
 
