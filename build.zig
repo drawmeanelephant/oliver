@@ -168,6 +168,28 @@ pub fn build(b: *std.Build) void {
     });
     const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
 
+    // The stable C ABI example consumer (examples/c_example.c): compiled
+    // with the system C compiler against include/oliver.h and the static
+    // oliver library, then run to prove the ABI compiles from C and
+    // round-trips (docs/C-ABI.md). Self-checking — exits non-zero on any
+    // failed assertion, so the step is also the CI gate leg.
+    const c_example_mod = b.createModule(.{
+        .root_source_file = null,
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    c_example_mod.addCSourceFile(.{ .file = b.path("examples/c_example.c"), .flags = &.{"-std=c11"} });
+    c_example_mod.addIncludePath(b.path("include"));
+    c_example_mod.linkLibrary(lib);
+    const c_example = b.addExecutable(.{
+        .name = "oliver-c-example",
+        .root_module = c_example_mod,
+    });
+    const c_example_run = b.addRunArtifact(c_example);
+    const c_example_step = b.step("c-example-run", "Build and run the C ABI example consumer");
+    c_example_step.dependOn(&c_example_run.step);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_fixture_tests.step);

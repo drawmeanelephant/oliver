@@ -50,6 +50,11 @@ pub const cooklang_scale = @import("cooklang_scale.zig");
 /// The Cooklang `.menu` convenience view (semantic day/meal structure
 /// over a parsed Recipe; docs/COOKLANG.md §12).
 pub const cooklang_menu = @import("cooklang_menu.zig");
+/// The stable C ABI for embedding Oliver from C, Rust, Python, Node, and
+/// other FFI consumers: `oliver_render` / `oliver_free` over the public
+/// parse + render path, with explicit error codes (docs/C-ABI.md,
+/// include/oliver.h).
+pub const c_abi = @import("c_abi.zig");
 
 comptime {
     // The Cooklang modules have their own entry points and are never
@@ -62,6 +67,9 @@ comptime {
     _ = cooklang_serialize;
     _ = cooklang_scale;
     _ = cooklang_menu;
+    // Force the C ABI exports into the static library: exported functions
+    // in a lazily-analyzed file would otherwise be dropped from the archive.
+    _ = c_abi;
 }
 
 pub const version = "1.0.0";

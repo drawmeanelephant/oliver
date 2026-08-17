@@ -194,8 +194,9 @@ fifth — the XHTML profile suite — is described in its own section below):
    paths (`renderWith` / `scaleWith`, the same paths `main` uses).
    They run as part of the ordinary `zig build test` gate.
 
-The current complete result is **376/376 tests passing** with Zig 0.16.0
-(309 library module tests + 18 fixture/adversarial tests + 7
+The current complete result is **384/384 tests passing** with Zig 0.16.0
+(317 library module tests — including 8 C-ABI tests over the exported
+`oliver_render`/`oliver_free` surface — + 18 fixture/adversarial tests + 7
 conformance-harness tests + 22 CLI argument-parsing tests + 19 XHTML
 profile tests + 1 fuzz wall). On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the

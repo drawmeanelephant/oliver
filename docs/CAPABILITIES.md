@@ -80,6 +80,11 @@ YAML). Derived operations over the same model:
   `oliver.cooklang.parse` plus the derived operations for Cooklang. The
   caller supplies the allocator; results own their arenas; text payloads
   borrow the input bytes (which must outlive the result).
+- **C ABI**: `oliver_render` / `oliver_free` over the public parse +
+  render path — a stable embedding seam for C, Rust, Python, Node, and
+  other FFI consumers, declared in `include/oliver.h` with the
+  memory-ownership contract and explicit error codes (docs/C-ABI.md),
+  proven by the CI-compiled `examples/c_example.c`.
 - **CLI**: `oliver render --from <markdown|textile|cooklang>
   [--to <html|xhtml>]`, `oliver serialize --from cooklang`,
   `oliver scale --from cooklang (--factor n[/d] | --servings n)`,

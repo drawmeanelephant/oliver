@@ -53,9 +53,10 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | shared worker | S1 scale-factor grammar alignment | review findings #85–#86: `oliver scale --factor` routes through the library's `parseFactor` (decimals, mixed `1 1/2`, spaces around the slash accepted; leading zeros, `1/2/3`, `some`, over-u32 values rejected) instead of a parallel u32 split parser; `parseFactor` caps at u32 to match `ScaleBy.factor` while `scaleAmount` keeps its u64 path; `--factor`/`--servings` gain duplicate rejection; `scaleWith` is the shared scale path; 3 new tests (parseFactor u32 boundary; factor grammar battery; scale end-to-end); docs/COOKLANG.md §11 + README + TESTS | after #74 and CK7 | merged (PR #87) |
 | Cooklang worker | CK6 string-quantity classify/scale + mixed numbers | public `classifyQuantity` / `parseFactor` / `scaleAmount` over authored amount strings (the exact-rational path, not `parseQuantity`'s f64 decimal arm); `scaleRecipe` becomes a caller of `scaleAmount` on ingredient quantities only; mixed `1 1/2` is a canonical scalable input (emits integer / fraction / terminating decimal); timers/cookware/refs still never scale; `scale-mixed` fixture; docs/COOKLANG.md §11 | after CK3 (issue #76; lets consumers delete a forked string scale) | merged (PR #77) |
 | Cooklang worker | CK7 scale edge-case hardening | review findings on the merged CK6 surface (issues #79–#81): `parseMixedNumber` trims leading/trailing ASCII space/tab (issue #79); `familyOfAmount` reads the decimal family from the source form exactly — no f64/i64 probe, terminating decimals at any magnitude (issue #80); `ScaledAmount.changed` distinguishes a rewrite from an overflow passthrough (issue #81); 3 unit tests pin the whitespace battery, the >i64 terminating cases, and the changed/passthrough triggers; docs/COOKLANG.md §11 + FEATURE-MATRIX + ARCHITECTURE + CLEANROOM session 29 | after CK6 | merged (PR #82) |
-| Markdown extension worker | E5 GFM task lists | `Options.task_lists` checkbox recognition at a list item's content start (a `.task_checkbox` leaf; `[ ]`/`[x]`/`[X]` + trailing whitespace; strict shape — the item's first block at the content's first bytes, else literal); disabled `<input type="checkbox">` rendering with valueless `disabled`/`checked` and the render profile's void form (xml-form under `.xhtml`; the profiles agree byte-for-byte); the label scans normally after the checkbox; `--task-lists` CLI flag; docs/TASK-LISTS.md + fixture pair + xhtml hermetic pin + CLI end-to-end test | after the extension wave (issue #92, v1.1) | this PR |
-| shared worker | E6 raw-HTML policy | `html.RenderOptions.raw_html` — the ARCHITECTURE "allowed / escaped / rejected" knob, now implemented: `allowed` (verbatim, the default; XHTML still fails closed), `escaped` (HTML-escapes the bytes — well-formed under both profiles, closing the `pre.` XHTML gap), `rejected` (`error.RawHtmlRejected`, fail closed even in HTML mode); applies uniformly to `.raw_html` inline, `.html_block` (Markdown §4.6 + Textile `==`/`notextile.`), and Textile `pre.` verbatim; `--raw-html allowed|escaped|rejected` CLI flag (render-only, duplicate-rejected); docs/RAW-HTML.md §3 + unit tests + xhtml hermetic pin + CLI battery | after the extension wave (issue #93, v1.1) | this PR |
-| shared worker | F2 deterministic mutation-fuzz wall | `tests/fuzz.zig` — the "dedicated fuzz target" docs/TESTS.md recorded as planned: a fixed-seed PRNG mutates a comptime seed corpus (representative inputs per dialect) into 1,000 derived inputs, each parsed across all three dialects with the extension surface on and the front matter modes, rendered/serialized twice for determinism, and (for Cooklang) scaled — asserting no crash, no leak (test allocator), and byte-deterministic output; failures print the iteration, dialect, and bytes for minimization; wired into `zig build test` as its own step (~5s in Debug) | after the extension wave (issue #94, v1.1) | this PR |
+| Markdown extension worker | E5 GFM task lists | `Options.task_lists` checkbox recognition at a list item's content start (a `.task_checkbox` leaf; `[ ]`/`[x]`/`[X]` + trailing whitespace; strict shape — the item's first block at the content's first bytes, else literal); disabled `<input type="checkbox">` rendering with valueless `disabled`/`checked` and the render profile's void form (xml-form under `.xhtml`; the profiles agree byte-for-byte); the label scans normally after the checkbox; `--task-lists` CLI flag; docs/TASK-LISTS.md + fixture pair + xhtml hermetic pin + CLI end-to-end test | after the extension wave (issue #92, v1.1) | merged (PR #97) |
+| shared worker | E6 raw-HTML policy | `html.RenderOptions.raw_html` — the ARCHITECTURE "allowed / escaped / rejected" knob, now implemented: `allowed` (verbatim, the default; XHTML still fails closed), `escaped` (HTML-escapes the bytes — well-formed under both profiles, closing the `pre.` XHTML gap), `rejected` (`error.RawHtmlRejected`, fail closed even in HTML mode); applies uniformly to `.raw_html` inline, `.html_block` (Markdown §4.6 + Textile `==`/`notextile.`), and Textile `pre.` verbatim; `--raw-html allowed|escaped|rejected` CLI flag (render-only, duplicate-rejected); docs/RAW-HTML.md §3 + unit tests + xhtml hermetic pin + CLI battery | after the extension wave (issue #93, v1.1) | merged (PR #97) |
+| shared worker | F2 deterministic mutation-fuzz wall | `tests/fuzz.zig` — the "dedicated fuzz target" docs/TESTS.md recorded as planned: a fixed-seed PRNG mutates a comptime seed corpus (representative inputs per dialect) into 1,000 derived inputs, each parsed across all three dialects with the extension surface on and the front matter modes, rendered/serialized twice for determinism, and (for Cooklang) scaled — asserting no crash, no leak (test allocator), and byte-deterministic output; failures print the iteration, dialect, and bytes for minimization; wired into `zig build test` as its own step (~5s in Debug) | after the extension wave (issue #94, v1.1) | merged (PR #98) |
+| shared worker | S2 stable C ABI | `src/c_abi.zig` exports — `oliver_render(alloc, free, ctx, bytes, len, dialect, frontmatter, markdown_flags, profile, raw_html, heading_ids, footnotes)` parsing and rendering in one call into an owned, exactly-sized buffer, plus `oliver_free`; the caller's malloc-style pair bridges into a Zig allocator for the call (no realloc — growth allocs/copies/frees), documented failures return `Buffer.error_code` (input-too-large, oom, raw-html-rejected, not-xml-well-formed, invalid-argument) instead of panicking across the boundary, and the render-to-buffer path uses `std.Io.Writer.Allocating` per the session record; `include/oliver.h` declares the surface with the ownership contract; `examples/c_example.c` (a self-checking C consumer) is built and run by `zig build c-example-run` and its own CI leg; docs/C-ABI.md | after the extension wave (issue #96, v1.1) | this PR |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1506,7 +1507,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   xhtml hermetic pin. 371/371, 652/652, 60/60 re-verified.
 - **Parallelism:** yes; Textile and Cooklang untouched.
 - **Integration:** after the extension wave; gates re-verified.
-- **State:** this PR (issue #92).
+- **State:** merged on main (PR #97).
 
 ## E6 — Raw-HTML policy (issue #93)
 
@@ -1539,7 +1540,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes; Textile and Cooklang untouched (the `pre.`
   arm is exercised but its default behavior is unchanged).
 - **Integration:** after the extension wave; gates re-verified.
-- **State:** this PR (issue #93).
+- **State:** merged on main (PR #97).
 
 ## F2 — Deterministic mutation-fuzz wall (issue #94)
 
@@ -1569,7 +1570,45 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   re-verified.
 - **Parallelism:** yes; no parser or renderer files touched.
 - **Integration:** after the extension wave; gates re-verified.
-- **State:** this PR (issue #94).
+- **State:** merged on main (PR #98).
+
+## S2 — Stable C ABI (issue #96)
+
+- **Objective:** give the "markup infrastructure" its embedding seam — a
+  stable C ABI so C, Rust, Python, Node, and other FFI consumers can
+  embed Oliver without adopting Zig, the surface the session record
+  flagged as future work (docs/SESSION-1-REPORT.md, concern 1: the
+  render-to-buffer path for the future C ABI should use
+  `std.Io.Writer.Allocating`).
+- **Normative source:** the module's own ABI contract
+  (docs/C-ABI.md); Oliver-authored surface over the public Zig API
+  (provenance docs/CLEANROOM.md session 34).
+- **Contract:** src/c_abi.zig — `oliver_render` parses and renders in
+  one call into an owned, exactly-sized buffer, plus `oliver_free`. The
+  caller supplies a malloc-style allocator pair (documented max_align_t
+  alignment contract); the pair bridges into a Zig allocator for the
+  call, with no realloc (resize false, remap null — growth
+  allocs/copies/frees). Documented failures return explicit
+  `Buffer.error_code` values (input-too-large, out-of-memory,
+  raw-html-rejected, not-xml-well-formed, invalid-argument) rather than
+  panicking across the boundary; internal bugs abort. The header
+  (include/oliver.h) declares the surface and the ownership contract;
+  the Markdown parse-extension surface is a bitmask; the footnotes
+  extension needs both its parse bit and the render flag.
+- **Design:** the render-to-buffer path uses `std.Io.Writer.Allocating`
+  per the session record; the result is copied into a fresh
+  exactly-sized allocation so the caller's `free` (receiving the
+  returned `len`) matches the allocation. A stack-local state struct
+  holds the two function pointers plus the user context for the call.
+- **Tests:** 8 c-abi unit tests over the exported surface (render,
+  dialect dispatch, extension flags, both raw-html error codes, escaped
+  well-formedness, invalid arguments, ownership) + the self-checking
+  `examples/c_example.c` run by `zig build c-example-run`. 384/384,
+  652/652, 60/60 re-verified.
+- **Parallelism:** yes; no parser, model, or renderer files touched
+  (src/oliver.zig re-exports the module).
+- **Integration:** after the extension wave; gates re-verified.
+- **State:** this PR (issue #96).
 
 ## Deferred architectural cards
 
