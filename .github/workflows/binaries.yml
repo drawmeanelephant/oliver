@@ -71,7 +71,7 @@ jobs:
           test "$(printf '# Hello *world*\n' | dist/oliver-linux-x86_64 render --from markdown)" = \
             '<h1>Hello <em>world</em></h1>'
           test "$(dist/oliver-linux-x86_64 --version)" = \
-            "oliver 0.0.0 (commit $GITHUB_SHA)"
+            "oliver 1.0.0 (commit $GITHUB_SHA)"
 
       - name: Write the checksum manifest
         run: |
