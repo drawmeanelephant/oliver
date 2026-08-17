@@ -706,3 +706,12 @@ unbounded recursion, or output nondeterminism; docs/TESTS.md). The seed
 corpus is the project's own representative inputs, and the mutation
 engine is a plain seeded PRNG over byte edits. No parser implementation
 source was consulted.
+
+Session 34 (S2 stable C ABI) provenance record: no upstream
+specification — the ABI is Oliver-authored surface over the project's
+own public Zig API (`oliver.parse` + `oliver.html.render`), designed
+from the session record's own architectural concern 1 (the
+render-to-buffer path for the future C ABI should use
+`std.Io.Writer.Allocating`). The C header, ownership contract, error
+codes, and example are the module's own contract (docs/C-ABI.md). No
+parser implementation source was consulted.

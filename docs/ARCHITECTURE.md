@@ -74,6 +74,7 @@ The two boundaries that matter:
 | `src/cooklang_serialize.zig` | canonical Cooklang serializer (Recipe → valid `.cook`) |
 | `src/cooklang_scale.zig` | pure Cooklang scaling (Recipe → scaled Recipe; public `classifyQuantity` / `parseFactor` / `scaleAmount` over authored amount strings; exact rationals; mixed `1 1/2` is a canonical input; `ScaledAmount.changed` distinguishes a rewrite from an overflow passthrough) |
 | `src/cooklang_menu.zig` | `.menu` convenience view (Recipe → day/meal structure) |
+| `src/c_abi.zig` | stable C ABI: `oliver_render` / `oliver_free` exports, the caller-allocator bridge, explicit error codes (docs/C-ABI.md) |
 | `src/main.zig` | provisional CLI: arguments + stdio only; no parser semantics |
 | `tools/cooklang_conformance.zig` | Cooklang canonical-corpus harness (`zig build cooklang-conformance`) |
 | `tests/fixtures_test.zig` | fixture-driven tests + adversarial smoke tests |
@@ -213,7 +214,9 @@ includes/transclusion, syntax-highlighting subprocesses.
 ## Provisional decisions (revisit deliberately)
 
 - The renderer takes a plain `*std.Io.Writer`-compatible value (anytype
-  `writeAll`), which couples the library to the Zig 0.16 writer shape. The C
-  ABI milestone will add a render-to-buffer path.
+  `writeAll`), which couples the library to the Zig 0.16 writer shape. The
+  C ABI (`src/c_abi.zig`, docs/C-ABI.md) provides the render-to-buffer
+  path on top of it: `oliver_render` parses and renders into an owned,
+  exactly-sized buffer through `std.Io.Writer.Allocating`.
 - `ParseOptions` is empty; fields arrive as policy decisions do.
 - Heading levels are `u8`; spans are `u32`. Both are documented bounds.

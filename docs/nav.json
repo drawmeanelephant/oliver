@@ -30,6 +30,12 @@
           "summary": "Pipeline, the two document families, module map, boundaries."
         },
         {
+          "file": "C-ABI.md",
+          "title": "C ABI",
+          "audience": "dev",
+          "summary": "The stable embedding seam: oliver_render / oliver_free over the public parse + render path, the ownership contract, error codes, and the CI-compiled example (shipped, issue #96, v1.1)."
+        },
+        {
           "file": "DOCUMENT-MODEL.md",
           "title": "Document model",
           "audience": "dev",

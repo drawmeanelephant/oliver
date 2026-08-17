@@ -213,7 +213,7 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (376 tests)
+zig build test    # run all tests (384 tests)
 zig build         # build the static library and CLI into zig-out/
 zig build cooklang-conformance   # Cooklang canonical corpus (vendored)
 ```
@@ -297,6 +297,29 @@ The caller supplies the allocator; the document (or recipe) owns an arena and
 borrows the
 input bytes; rendering streams to any writer. No global state, no hidden
 caches, deterministic output.
+
+### C ABI
+
+Embedding from C, Rust, Python, Node, or other FFI languages: a stable,
+minimal parse + render surface declared in `include/oliver.h`, with the
+memory-ownership contract (caller-supplied allocator pair, caller frees
+via `oliver_free`) and explicit error codes instead of panics
+(docs/C-ABI.md).
+
+```c
+#include "oliver.h"
+
+const char *md = "# Hello *world*\n";
+oliver_buffer buf = oliver_render(my_alloc, my_free, NULL,
+    (const uint8_t *)md, strlen(md),
+    OLIVER_MARKDOWN, OLIVER_FRONTMATTER_NONE, 0,
+    OLIVER_PROFILE_HTML, OLIVER_RAW_HTML_ALLOWED, 0, 0);
+/* buf.data is now owned by the caller; release with: */
+oliver_free(my_free, NULL, buf);
+```
+
+A self-checking consumer (`examples/c_example.c`) is compiled and run by
+`zig build c-example-run` and by CI on every change.
 
 ## CLI (provisional)
 

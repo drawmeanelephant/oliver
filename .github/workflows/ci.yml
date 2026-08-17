@@ -49,3 +49,11 @@ jobs:
       # semantic fixed point over every corpus source.
       - name: Cooklang canonical conformance gate (60/60)
         run: zig build cooklang-conformance
+
+      # The stable C ABI leg: compile examples/c_example.c with the
+      # system C compiler against include/oliver.h and the static oliver
+      # library, then run it. The example is self-checking (exits non-zero
+      # on any failed assertion), proving the ABI compiles from C and
+      # round-trips end to end (docs/C-ABI.md).
+      - name: C ABI example (compile + run)
+        run: zig build c-example-run
