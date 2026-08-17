@@ -56,7 +56,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Markdown extension worker | E5 GFM task lists | `Options.task_lists` checkbox recognition at a list item's content start (a `.task_checkbox` leaf; `[ ]`/`[x]`/`[X]` + trailing whitespace; strict shape — the item's first block at the content's first bytes, else literal); disabled `<input type="checkbox">` rendering with valueless `disabled`/`checked` and the render profile's void form (xml-form under `.xhtml`; the profiles agree byte-for-byte); the label scans normally after the checkbox; `--task-lists` CLI flag; docs/TASK-LISTS.md + fixture pair + xhtml hermetic pin + CLI end-to-end test | after the extension wave (issue #92, v1.1) | merged (PR #97) |
 | shared worker | E6 raw-HTML policy | `html.RenderOptions.raw_html` — the ARCHITECTURE "allowed / escaped / rejected" knob, now implemented: `allowed` (verbatim, the default; XHTML still fails closed), `escaped` (HTML-escapes the bytes — well-formed under both profiles, closing the `pre.` XHTML gap), `rejected` (`error.RawHtmlRejected`, fail closed even in HTML mode); applies uniformly to `.raw_html` inline, `.html_block` (Markdown §4.6 + Textile `==`/`notextile.`), and Textile `pre.` verbatim; `--raw-html allowed|escaped|rejected` CLI flag (render-only, duplicate-rejected); docs/RAW-HTML.md §3 + unit tests + xhtml hermetic pin + CLI battery | after the extension wave (issue #93, v1.1) | merged (PR #97) |
 | shared worker | F2 deterministic mutation-fuzz wall | `tests/fuzz.zig` — the "dedicated fuzz target" docs/TESTS.md recorded as planned: a fixed-seed PRNG mutates a comptime seed corpus (representative inputs per dialect) into 1,000 derived inputs, each parsed across all three dialects with the extension surface on and the front matter modes, rendered/serialized twice for determinism, and (for Cooklang) scaled — asserting no crash, no leak (test allocator), and byte-deterministic output; failures print the iteration, dialect, and bytes for minimization; wired into `zig build test` as its own step (~5s in Debug) | after the extension wave (issue #94, v1.1) | merged (PR #98) |
-| shared worker | S2 stable C ABI | `src/c_abi.zig` exports — `oliver_render(alloc, free, ctx, bytes, len, dialect, frontmatter, markdown_flags, profile, raw_html, heading_ids, footnotes)` parsing and rendering in one call into an owned, exactly-sized buffer, plus `oliver_free`; the caller's malloc-style pair bridges into a Zig allocator for the call (no realloc — growth allocs/copies/frees), documented failures return `Buffer.error_code` (input-too-large, oom, raw-html-rejected, not-xml-well-formed, invalid-argument) instead of panicking across the boundary, and the render-to-buffer path uses `std.Io.Writer.Allocating` per the session record; `include/oliver.h` declares the surface with the ownership contract; `examples/c_example.c` (a self-checking C consumer) is built and run by `zig build c-example-run` and its own CI leg; docs/C-ABI.md | after the extension wave (issue #96, v1.1) | this PR |
+| shared worker | S2 stable C ABI | `src/c_abi.zig` exports — `oliver_render(alloc, free, ctx, bytes, len, dialect, frontmatter, markdown_flags, profile, raw_html, heading_ids, footnotes)` parsing and rendering in one call into an owned, exactly-sized buffer, plus `oliver_free`; the caller's malloc-style pair bridges into a Zig allocator for the call (no realloc — growth allocs/copies/frees), documented failures return `Buffer.error_code` (input-too-large, oom, raw-html-rejected, not-xml-well-formed, invalid-argument) instead of panicking across the boundary, and the render-to-buffer path uses `std.Io.Writer.Allocating` per the session record; `include/oliver.h` declares the surface with the ownership contract; `examples/c_example.c` (a self-checking C consumer) is built and run by `zig build c-example-run` and its own CI leg; docs/C-ABI.md | after the extension wave (issue #96, v1.1) | merged (PR #99) |
+| shared worker | S3 tested Windows binary | `.github/workflows/binaries.yml` grows `x86_64-windows` to the release matrix (publishing `oliver-windows-x86_64.exe` to the rolling `builds` release) and retires the deliberate-exclusion caveat honestly: a native `windows-latest` smoke-test leg runs the same render/`--version` assertions as the Linux binary against the exact artifact that ships, and the publish job is gated on `needs: [build, smoke-windows]` — the rolling release never ships an untested binary; README platform list + builds-release notes updated | after S2 (issue #95, v1.1) | this PR |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1608,7 +1609,39 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes; no parser, model, or renderer files touched
   (src/oliver.zig re-exports the module).
 - **Integration:** after the extension wave; gates re-verified.
-- **State:** this PR (issue #96).
+- **State:** merged on main (PR #99).
+
+## S3 — Tested Windows binary (issue #95)
+
+- **Objective:** retire the binaries workflow's deliberate-exclusion
+  caveat — Windows cross-compiles trivially from Zig but previously
+  shipped untested — by adding `x86_64-windows` to the release matrix
+  and proving the binary runs natively before anything is published.
+- **Normative source:** issue #95's spec (matrix addition + native
+  smoke leg + docs); no new markup behavior (provenance
+  docs/CLEANROOM.md session 35).
+- **Contract:** `.github/workflows/binaries.yml` — the matrix becomes
+  five targets (`x86_64-linux`, `x86_64-macos`, `aarch64-linux`,
+  `aarch64-macos`, `x86_64-windows`), the Windows artifact ships as
+  `oliver-windows-x86_64.exe`, and the single job splits into three:
+  `build` (ubuntu: cross-compile + native Linux smoke + checksums +
+  artifact upload), `smoke-windows` (`windows-latest`: the same
+  render/`--version` assertions executed against the exact artifact
+  that will be published), and `publish` (gated on `needs: [build,
+  smoke-windows]`). The gate enforces the honest claim: the rolling
+  `builds` release never ships a binary CI has not executed.
+- **Design:** the Windows binary is still cross-compiled once on the
+  ubuntu runner (byte-identical to what ships), so the smoke leg
+  exercises the real artifact; `shell: bash` on the windows runner
+  keeps the assertions byte-identical to the Linux leg. Artifact
+  handoff uses pinned upload/download-artifact v4 actions.
+- **Tests:** no unit tests (workflow-only); the native smoke leg is
+  the test — both legs' assertions, 384/384, 652/652, 60/60
+  re-verified on the untouched tree.
+- **Parallelism:** yes; no parser, model, renderer, or library files
+  touched.
+- **Integration:** after S2; workflow-only.
+- **State:** this PR (issue #95).
 
 ## Deferred architectural cards
 

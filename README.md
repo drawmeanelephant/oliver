@@ -225,6 +225,7 @@ binary for each supported platform, rebuilt on every push to `main`:
 
 - `oliver-linux-x86_64`, `oliver-linux-aarch64`
 - `oliver-macos-x86_64`, `oliver-macos-aarch64`
+- `oliver-windows-x86_64.exe`
 
 Download URL (stable, derived from the tag):
 
@@ -233,7 +234,11 @@ https://github.com/drawmeanelephant/oliver/releases/download/builds/oliver-<os>-
 ```
 
 `sha256sums.txt` in the same release verifies the assets. The binaries
-are ReleaseSafe and statically linked (macOS links only system libSystem).
+are ReleaseSafe and statically linked (macOS links only system libSystem;
+the Windows binary carries no runtime DLLs). Every platform is
+smoke-tested natively in CI before the release is published — the
+Windows binary gets its own `windows-latest` runner leg, so the rolling
+release never ships a binary CI has not executed.
 
 Every CI-built binary embeds the exact source commit it was built from:
 `oliver --version` prints `oliver <version> (commit <full-sha>)`. A
