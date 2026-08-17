@@ -194,10 +194,10 @@ fifth — the XHTML profile suite — is described in its own section below):
    paths (`renderWith` / `scaleWith`, the same paths `main` uses).
    They run as part of the ordinary `zig build test` gate.
 
-The current complete result is **375/375 tests passing** with Zig 0.16.0
+The current complete result is **376/376 tests passing** with Zig 0.16.0
 (309 library module tests + 18 fixture/adversarial tests + 7
 conformance-harness tests + 22 CLI argument-parsing tests + 19 XHTML
-profile tests). On top of the unit gate: the CommonMark
+profile tests + 1 fuzz wall). On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the
 Textile wall stays fully green, and the Cooklang canonical corpus passes
 **60/60** via `zig build cooklang-conformance` (bare: the vendored
@@ -307,8 +307,14 @@ under `std.testing.allocator`:
   block, each rendered twice.
 
 The contract is completion without crash, leak, unbounded recursion, or output
-nondeterminism. A dedicated fuzz target remains planned; the public
-`parse(allocator, bytes, dialect, options)` API is already the fuzz entry point.
+nondeterminism. A dedicated mutation-fuzz wall (`tests/fuzz.zig`, issue #94)
+runs in the ordinary gate: a fixed-seed PRNG mutates a comptime seed corpus
+(representative inputs per dialect) into 1,000 derived inputs, each parsed
+across **all three dialects** with the extension surface on and the front
+matter modes, rendered/serialized twice for determinism, and (for Cooklang)
+scaled — the public `parse(allocator, bytes, dialect, options)` API is the
+fuzz entry point. A failure prints the iteration, the dialect, and the
+failing bytes (raw and hex) for minimization.
 
 ## CommonMark 0.31.2 scorecard
 

@@ -55,6 +55,7 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | Cooklang worker | CK7 scale edge-case hardening | review findings on the merged CK6 surface (issues #79–#81): `parseMixedNumber` trims leading/trailing ASCII space/tab (issue #79); `familyOfAmount` reads the decimal family from the source form exactly — no f64/i64 probe, terminating decimals at any magnitude (issue #80); `ScaledAmount.changed` distinguishes a rewrite from an overflow passthrough (issue #81); 3 unit tests pin the whitespace battery, the >i64 terminating cases, and the changed/passthrough triggers; docs/COOKLANG.md §11 + FEATURE-MATRIX + ARCHITECTURE + CLEANROOM session 29 | after CK6 | merged (PR #82) |
 | Markdown extension worker | E5 GFM task lists | `Options.task_lists` checkbox recognition at a list item's content start (a `.task_checkbox` leaf; `[ ]`/`[x]`/`[X]` + trailing whitespace; strict shape — the item's first block at the content's first bytes, else literal); disabled `<input type="checkbox">` rendering with valueless `disabled`/`checked` and the render profile's void form (xml-form under `.xhtml`; the profiles agree byte-for-byte); the label scans normally after the checkbox; `--task-lists` CLI flag; docs/TASK-LISTS.md + fixture pair + xhtml hermetic pin + CLI end-to-end test | after the extension wave (issue #92, v1.1) | this PR |
 | shared worker | E6 raw-HTML policy | `html.RenderOptions.raw_html` — the ARCHITECTURE "allowed / escaped / rejected" knob, now implemented: `allowed` (verbatim, the default; XHTML still fails closed), `escaped` (HTML-escapes the bytes — well-formed under both profiles, closing the `pre.` XHTML gap), `rejected` (`error.RawHtmlRejected`, fail closed even in HTML mode); applies uniformly to `.raw_html` inline, `.html_block` (Markdown §4.6 + Textile `==`/`notextile.`), and Textile `pre.` verbatim; `--raw-html allowed|escaped|rejected` CLI flag (render-only, duplicate-rejected); docs/RAW-HTML.md §3 + unit tests + xhtml hermetic pin + CLI battery | after the extension wave (issue #93, v1.1) | this PR |
+| shared worker | F2 deterministic mutation-fuzz wall | `tests/fuzz.zig` — the "dedicated fuzz target" docs/TESTS.md recorded as planned: a fixed-seed PRNG mutates a comptime seed corpus (representative inputs per dialect) into 1,000 derived inputs, each parsed across all three dialects with the extension surface on and the front matter modes, rendered/serialized twice for determinism, and (for Cooklang) scaled — asserting no crash, no leak (test allocator), and byte-deterministic output; failures print the iteration, dialect, and bytes for minimization; wired into `zig build test` as its own step (~5s in Debug) | after the extension wave (issue #94, v1.1) | this PR |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1539,6 +1540,36 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
   arm is exercised but its default behavior is unchanged).
 - **Integration:** after the extension wave; gates re-verified.
 - **State:** this PR (issue #93).
+
+## F2 — Deterministic mutation-fuzz wall (issue #94)
+
+- **Objective:** deliver the "dedicated fuzz target" that docs/TESTS.md
+  has recorded as planned since the adversarial suite landed: a
+  mutation-based fuzz wall over the public
+  `parse(allocator, bytes, dialect, options)` API, wired into the
+  ordinary test gate with a bounded budget.
+- **Normative source:** none — the harness is Oliver-authored test
+  tooling over the project's own adversarial contracts (provenance
+  docs/CLEANROOM.md session 33).
+- **Contract:** tests/fuzz.zig — a fixed-seed PRNG mutates a comptime
+  seed corpus (one representative input per dialect family) with 1–8
+  random edits biased toward parser-relevant bytes, capped at 4 KiB;
+  every derived input is parsed across **all three dialects** with the
+  full extension surface on and the front matter modes, rendered twice
+  for determinism, and (for Cooklang) serialized twice and scaled —
+  asserting completion without crash, leak (the test allocator fails on
+  leaks), or output nondeterminism. The fixed seed makes the run
+  reproducible; a failure prints the iteration, the violation, and the
+  input raw + hex for minimization.
+- **Design:** one `mutate` engine, one `exercise` body per dialect; the
+  step runs in ~5s under the Debug gate (1,000 iterations), sized to
+  the repo's hermetic ethos — deterministic, no filesystem, no
+  external fuzzer.
+- **Tests:** the fuzz wall itself (1 test). 376/376, 652/652, 60/60
+  re-verified.
+- **Parallelism:** yes; no parser or renderer files touched.
+- **Integration:** after the extension wave; gates re-verified.
+- **State:** this PR (issue #94).
 
 ## Deferred architectural cards
 

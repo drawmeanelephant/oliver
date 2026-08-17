@@ -151,12 +151,30 @@ pub fn build(b: *std.Build) void {
     });
     const run_xhtml_tests = b.addRunArtifact(xhtml_tests);
 
+    // Deterministic mutation-fuzz tests (tests/fuzz.zig) over the public
+    // parse API: a fixed-seed PRNG mutates a seed corpus across all three
+    // dialects with the extension surface on, asserting the adversarial
+    // contracts (no crash, no leak, deterministic output; docs/TESTS.md).
+    // Runs in the ordinary test gate with a fixed iteration budget.
+    const fuzz_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/fuzz.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "oliver", .module = oliver_mod },
+            },
+        }),
+    });
+    const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_fixture_tests.step);
     test_step.dependOn(&run_spec_tool_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_xhtml_tests.step);
+    test_step.dependOn(&run_fuzz_tests.step);
 }
 
 /// The package version from build.zig.zon (single source of truth). Zig
