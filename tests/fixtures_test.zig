@@ -1484,6 +1484,11 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .expected = @embedFile("fixtures/markdown/ext-strikethrough.html"),
     },
     .{
+        .name = "ext-task-lists",
+        .input = @embedFile("fixtures/markdown/ext-task-lists.md"),
+        .expected = @embedFile("fixtures/markdown/ext-task-lists.html"),
+    },
+    .{
         .name = "wikilink-basic",
         .input = @embedFile("fixtures/markdown/wikilink-basic.md"),
         .expected = @embedFile("fixtures/markdown/wikilink-basic.html"),
@@ -2548,6 +2553,7 @@ fn renderExtHtml(input: []const u8) !std.ArrayList(u8) {
             .wikilinks = true,
             .callouts = true,
             .smartypants = true,
+            .task_lists = true,
         },
     });
     defer result.deinit();

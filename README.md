@@ -66,9 +66,11 @@ extension in the Markdown frontend: header + delimiter rows, alignment
 colons, escaped `\|`, inline-parsed cells, `<table><thead><tbody>`
 output — docs/TABLES.md), opt-in Markdown extensions (Pandoc-style
 footnotes, definition lists, heading attribute lists, GFM
-strikethrough, Obsidian-style `[[wikilinks]]`, `> [!note]` callouts, and
+strikethrough, GFM `[ ]` task lists, Obsidian-style `[[wikilinks]]`,
+`> [!note]` callouts, and
 smart typography (`smartypants`) — docs/MARKDOWN-EXTENSIONS.md,
-docs/WIKILINKS.md, docs/CALLOUTS.md, docs/SMARTY.md),
+docs/TASK-LISTS.md, docs/WIKILINKS.md, docs/CALLOUTS.md,
+docs/SMARTY.md),
 shared front matter (YAML `---` / TOML `+++`
 sniffed at index 0, stripped before dispatch, parsed into
 `ParseResult.metadata` under a bounded, never-faked subset —
@@ -149,6 +151,8 @@ The callouts extension contract is
 [docs/CALLOUTS.md](docs/CALLOUTS.md).
 The smart typography extension contract is
 [docs/SMARTY.md](docs/SMARTY.md).
+The task lists extension contract is
+[docs/TASK-LISTS.md](docs/TASK-LISTS.md).
 The front matter extension contract is
 [docs/FRONTMATTER.md](docs/FRONTMATTER.md).
 The Cooklang frontend's design contract, source hierarchy, provenance,
@@ -209,7 +213,7 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (369 tests)
+zig build test    # run all tests (375 tests)
 zig build         # build the static library and CLI into zig-out/
 zig build cooklang-conformance   # Cooklang canonical corpus (vendored)
 ```
@@ -307,6 +311,8 @@ oliver render --from cooklang --to xhtml < recipe.cook
 oliver render --from markdown --wikilinks --callouts --smartypants < document.md
 oliver render --from markdown --footnotes --definition-lists --heading-attributes --strikethrough < document.md
 oliver render --from markdown --heading-ids < document.md  # GFM-style auto ids on headings
+oliver render --from markdown --task-lists < document.md  # GFM checkboxes on list items
+oliver render --from markdown --raw-html escaped < document.md  # escape raw HTML (allowed|escaped|rejected)
 oliver render --from markdown --frontmatter yaml < document.md  # --frontmatter works on any frontend
 oliver serialize --from cooklang < recipe.cook   # canonical .cook
 oliver scale --from cooklang --factor 2 < recipe.cook   # scaled .cook

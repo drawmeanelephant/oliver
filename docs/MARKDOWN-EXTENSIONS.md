@@ -2,7 +2,7 @@
 
 **Status:** implemented — opt-in Markdown dialect extensions  \
 **Modules:** `src/markdown.zig` (parse), `src/html.zig` (render), `src/document.zig` (model)  \
-**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
+**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, `--task-lists`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
 
 The Markdown frontend is byte-exact CommonMark 0.31.2 by default (the
 652/652 conformance corpus is green with default options). The extensions
@@ -303,6 +303,28 @@ in docs/SMARTY.md:
 - Example: `"Hello," -- she said...` → `“Hello,” — she said…`.
 - Fixtures: `tests/fixtures/markdown/smartypants-*.md`; unit tests in
   `src/markdown.zig` and `tests/xhtml_test.zig`.
+
+## 9. GFM task lists (`parse: task_lists`)
+
+A checkbox run at the start of a list item's first paragraph content
+(`[ ]` unchecked, `[x]` / `[X]` checked — each followed by a space/tab)
+turns the item into a task item: a `.task_checkbox` leaf becomes the
+paragraph's first inline, rendered as a disabled `<input
+type="checkbox">`. The rest of the paragraph is the label and scans
+normally (emphasis, links, and other extensions work inside it).
+
+- **Recognition is strict** (contract docs/TASK-LISTS.md §2): the
+  checkbox must open the item's very first block, sit at the content's
+  first bytes, and be followed by whitespace. Mid-content, later-
+  paragraph, plain-paragraph, and end-of-content checkboxes stay
+  literal — as does everything when the option is off (the corpus is
+  untouched).
+- Example: `- [x] done` → `<li><input type="checkbox" disabled=""
+  checked="" />done</li>`.
+- The `<input>` is a void element routed through the render profile
+  (XML form under `.xhtml`); the checkbox contributes no plain text.
+- Fixtures: `tests/fixtures/markdown/ext-task-lists.md`; tests in
+  `src/main.zig` (CLI end-to-end) and `tests/xhtml_test.zig`.
 
 ---
 

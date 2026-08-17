@@ -675,3 +675,26 @@ fractions — so every parsed factor can reach `scaleRecipe`;
 constructed directly. (3) `--factor`/`--servings` gain the duplicate
 rejection every other value flag has. No parser implementation source
 was consulted.
+
+Session 31 (E5 GFM task lists) provenance record: the normative source
+is the published GFM specification §6.5 "Task list items (extension)"
+— checkbox forms (`[ ]`/`[x]`/`[X]`), the trailing-whitespace rule
+("followed by whitespace"), the first-paragraph placement, and the
+rendered shape (`<input type="checkbox" disabled="" [checked=""]>`)
+— which is user-facing documentation and clean-room allowed. Chosen
+behaviors the spec leaves open (the checkbox must open the item's very
+first block; end-of-content checkboxes stay literal; the void element
+follows Oliver's html/xhtml profile rather than GFM's unconditional
+` />`) are pinned in docs/TASK-LISTS.md. No parser implementation
+source was consulted.
+
+Session 32 (E6 raw-HTML policy) provenance record: no new upstream
+specification — the knob is Oliver's own renderer policy over
+already-shipped raw-content behavior, designed from the project's own
+ARCHITECTURE.md note ("raw-HTML policy (allowed / escaped / rejected)"
+knob). The `allowed` default keeps the CommonMark reference behavior
+byte-exact; `escaped` reuses the renderer's existing HTML-escaping;
+`rejected` mirrors the XHTML profile's existing fail-closed shape
+(`RawHtmlNotXmlWellFormed`) with a sibling error. The uniform scope
+(Markdown `.raw_html`/`.html_block` and Textile `pre.`) is pinned in
+docs/RAW-HTML.md §3. No parser implementation source was consulted.

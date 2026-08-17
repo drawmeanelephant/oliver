@@ -155,6 +155,12 @@
           "summary": "The opt-in `smartypants` pass: the Textile replacement set in one shared implementation, exemptions, CommonMark pins (shipped, issue #67, v1.0)."
         },
         {
+          "file": "TASK-LISTS.md",
+          "title": "Task lists (extension)",
+          "audience": "dev",
+          "summary": "The opt-in GFM task list items: `[ ]`/`[x]`/`[X]` checkbox recognition at item content start, the `.task_checkbox` node, and the disabled-input rendering (shipped, issue #92, v1.1)."
+        },
+        {
           "file": "IMAGES-MISSION.md",
           "title": "Images mission brief",
           "audience": "dev",

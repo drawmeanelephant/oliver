@@ -55,9 +55,14 @@ pub const RunConfig = struct {
     callouts: bool = false,
     smartypants: bool = false,
     heading_ids: bool = false,
+    task_lists: bool = false,
     /// Front matter mode (`render` with any frontend; null = default
     /// off). Shared by all three frontends (docs/FRONTMATTER.md §3).
     frontmatter: ?oliver.frontmatter.Option = null,
+    /// Raw-HTML policy (`render` with any frontend; docs/RAW-HTML.md §3):
+    /// how Markdown raw-HTML leaves and Textile `pre.` verbatim content
+    /// are emitted. Render-only, like `--to`.
+    raw_html: oliver.html.RawHtmlPolicy = .allowed,
 };
 
 /// Parses the argument vector (excluding the program name) into a
@@ -83,10 +88,13 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var callouts = false;
     var smartypants = false;
     var heading_ids = false;
+    var task_lists = false;
     var frontmatter: ?oliver.frontmatter.Option = null;
+    var raw_html: oliver.html.RawHtmlPolicy = .allowed;
     var saw_to = false;
     var saw_from = false;
     var saw_frontmatter = false;
+    var saw_raw_html = false;
     var saw_factor = false;
     var saw_servings = false;
 
@@ -131,6 +139,21 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
                 profile = .xhtml;
             } else return error.Usage;
             saw_to = true;
+        } else if (std.mem.eql(u8, arg, "--raw-html")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            // A second `--raw-html` would contradict the first; reject
+            // duplicates like the other value flags.
+            if (saw_raw_html) return error.Usage;
+            saw_raw_html = true;
+            const value = args[index];
+            if (std.mem.eql(u8, value, "allowed")) {
+                raw_html = .allowed;
+            } else if (std.mem.eql(u8, value, "escaped")) {
+                raw_html = .escaped;
+            } else if (std.mem.eql(u8, value, "rejected")) {
+                raw_html = .rejected;
+            } else return error.Usage;
         } else if (std.mem.eql(u8, arg, "--factor")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -175,6 +198,8 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             strikethrough = true;
         } else if (std.mem.eql(u8, arg, "--heading-ids")) {
             heading_ids = true;
+        } else if (std.mem.eql(u8, arg, "--task-lists")) {
+            task_lists = true;
         } else if (std.mem.eql(u8, arg, "--frontmatter")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -206,7 +231,8 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     // Markdown-frontend options, and `--frontmatter` is a render
     // option shared by every frontend.
     const ext_flags = footnotes or definition_lists or heading_attributes or
-        strikethrough or wikilinks or callouts or smartypants or heading_ids;
+        strikethrough or wikilinks or callouts or smartypants or heading_ids or
+        task_lists;
     switch (cmd) {
         .render => {
             if (factor_num != null or servings_target != null) return error.Usage;
@@ -215,11 +241,11 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             if (ext_flags and dialect != .markdown) return error.Usage;
         },
         .serialize, .menu => {
-            if (!cooklang or saw_to or factor_num != null or servings_target != null or
+            if (!cooklang or saw_to or saw_raw_html or factor_num != null or servings_target != null or
                 ext_flags or frontmatter != null) return error.Usage;
         },
         .scale => {
-            if (!cooklang or saw_to or ext_flags or frontmatter != null) return error.Usage;
+            if (!cooklang or saw_to or saw_raw_html or ext_flags or frontmatter != null) return error.Usage;
             // Scaling needs exactly one mode: factor or servings.
             if ((factor_num == null) == (servings_target == null)) return error.Usage;
         },
@@ -240,7 +266,9 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .callouts = callouts,
         .smartypants = smartypants,
         .heading_ids = heading_ids,
+        .task_lists = task_lists,
         .frontmatter = frontmatter,
+        .raw_html = raw_html,
     };
 }
 
@@ -336,6 +364,13 @@ pub fn main(init: std.process.Init) !u8 {
                     .{},
                 );
             }
+            if (err == error.RawHtmlRejected) {
+                std.debug.print(
+                    "oliver: --raw-html rejected refuses raw HTML (docs/RAW-HTML.md section 3):\n" ++
+                        "render with --raw-html allowed or --raw-html escaped instead.\n",
+                    .{},
+                );
+            }
             return 1;
         };
         defer gpa.free(html_bytes);
@@ -362,6 +397,7 @@ fn markdownParseOptions(cfg: RunConfig) oliver.ParseOptions {
         .wikilinks = cfg.wikilinks,
         .callouts = cfg.callouts,
         .smartypants = cfg.smartypants,
+        .task_lists = cfg.task_lists,
     };
     if (cfg.frontmatter) |fm| opts.frontmatter = fm;
     return opts;
@@ -383,6 +419,7 @@ fn renderOptionsFor(cfg: RunConfig) oliver.html.RenderOptions {
         .profile = cfg.profile,
         .footnotes = cfg.footnotes,
         .heading_ids = cfg.heading_ids,
+        .raw_html = cfg.raw_html,
     };
 }
 
@@ -438,8 +475,11 @@ fn printUsage() void {
         \\  --wikilinks  --callouts  --smartypants  --footnotes
         \\  --definition-lists  --heading-attributes  --strikethrough
         \\  --heading-ids  (GFM-style auto ids on headings)
+        \\  --task-lists  (GFM checkboxes on list items)
         \\Front matter (render with any frontend, off by default):
         \\  --frontmatter yaml|toml
+        \\Raw HTML (render with any frontend):
+        \\  --raw-html allowed|escaped|rejected  (default allowed)
         \\
     , .{});
 }
@@ -599,6 +639,8 @@ test "cli: markdown extension flags are scoped to render --from markdown" {
     try testing.expect(sp.smartypants);
     const hi = try parseArgs(&.{ "render", "--from", "markdown", "--heading-ids" });
     try testing.expect(hi.heading_ids);
+    const tl = try parseArgs(&.{ "render", "--from", "markdown", "--task-lists" });
+    try testing.expect(tl.task_lists);
     const all = try parseArgs(&.{ "render", "--from", "markdown", "--footnotes", "--definition-lists", "--heading-attributes", "--strikethrough" });
     try testing.expect(all.footnotes and all.definition_lists and all.heading_attributes and all.strikethrough);
 
@@ -606,6 +648,7 @@ test "cli: markdown extension flags are scoped to render --from markdown" {
     try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "textile", "--wikilinks" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "cooklang", "--smartypants" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "textile", "--heading-ids" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "textile", "--task-lists" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--callouts" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", "--footnotes" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", "--wikilinks" }));
@@ -689,6 +732,77 @@ test "cli: the legacy markdown extensions render end to end" {
     defer allocator.free(fn_out);
     try testing.expect(std.mem.indexOf(u8, fn_out, "class=\"footnote-ref\"") != null);
     try testing.expect(std.mem.indexOf(u8, fn_out, "<section class=\"footnotes\"") != null);
+}
+
+test "cli: --task-lists renders GFM checkboxes end to end" {
+    const allocator = std.testing.allocator;
+
+    // Checked and unchecked items get the disabled input; the checkbox is
+    // the item's first content, the rest is the label.
+    const tl = try parseArgs(&.{ "render", "--from", "markdown", "--task-lists" });
+    const tl_out = try renderWith(allocator, tl, "- [ ] foo\n- [x] bar\n");
+    defer allocator.free(tl_out);
+    try testing.expect(std.mem.indexOf(u8, tl_out, "<input type=\"checkbox\" disabled=\"\" />foo") != null);
+    try testing.expect(std.mem.indexOf(u8, tl_out, "<input type=\"checkbox\" disabled=\"\" checked=\"\" />bar") != null);
+
+    // Off by default: the same input keeps the checkbox literal (control).
+    const plain = try parseArgs(&.{ "render", "--from", "markdown" });
+    const plain_out = try renderWith(allocator, plain, "- [ ] foo\n");
+    defer allocator.free(plain_out);
+    try testing.expect(std.mem.indexOf(u8, plain_out, "<input type=\"checkbox\"") == null);
+    try testing.expect(std.mem.indexOf(u8, plain_out, "<li>[ ] foo</li>") != null);
+
+    // Mid-content and plain-paragraph checkboxes stay literal even on.
+    const mid_out = try renderWith(allocator, tl, "- foo [ ] bar\n\n[ ] paragraph\n");
+    defer allocator.free(mid_out);
+    try testing.expect(std.mem.indexOf(u8, mid_out, "<input type=\"checkbox\"") == null);
+    try testing.expect(std.mem.indexOf(u8, mid_out, "<li>foo [ ] bar</li>") != null);
+}
+
+test "cli: --raw-html is a render-only value flag with three policies" {
+    const al = try parseArgs(&.{ "render", "--from", "markdown", "--raw-html", "allowed" });
+    try testing.expectEqual(oliver.html.RawHtmlPolicy.allowed, al.raw_html);
+    const es = try parseArgs(&.{ "render", "--from", "textile", "--raw-html", "escaped" });
+    try testing.expectEqual(oliver.html.RawHtmlPolicy.escaped, es.raw_html);
+    const rej = try parseArgs(&.{ "render", "--from", "cooklang", "--raw-html", "rejected" });
+    try testing.expectEqual(oliver.html.RawHtmlPolicy.rejected, rej.raw_html);
+
+    // The default is `allowed` (verbatim, corpus unchanged).
+    const plain = try parseArgs(&.{ "render", "--from", "markdown" });
+    try testing.expectEqual(oliver.html.RawHtmlPolicy.allowed, plain.raw_html);
+
+    // Invalid values, missing values, and duplicates are usage errors.
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--raw-html", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--raw-html" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--raw-html", "escaped", "--raw-html", "rejected" }));
+
+    // Render-only, like --to: rejected on the other commands.
+    try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--raw-html", "escaped" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", "--raw-html", "escaped" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", "--raw-html", "escaped" }));
+}
+
+test "cli: --raw-html escapes and rejects raw content end to end" {
+    const allocator = std.testing.allocator;
+
+    // Escaped: raw inline and block HTML become escaped text.
+    const es = try parseArgs(&.{ "render", "--from", "markdown", "--raw-html", "escaped" });
+    const es_out = try renderWith(allocator, es, "A <b>bold</b> tag.\n\n<div>\nblock\n</div>\n");
+    defer allocator.free(es_out);
+    try testing.expect(std.mem.indexOf(u8, es_out, "<p>A &lt;b&gt;bold&lt;/b&gt; tag.</p>") != null);
+    try testing.expect(std.mem.indexOf(u8, es_out, "&lt;div&gt;") != null);
+    try testing.expect(std.mem.indexOf(u8, es_out, "<b>") == null);
+
+    // Rejected: the render fails with the policy error (main prints the
+    // actionable hint; the shared renderWith surfaces the error).
+    const rej = try parseArgs(&.{ "render", "--from", "markdown", "--raw-html", "rejected" });
+    try testing.expectError(error.RawHtmlRejected, renderWith(allocator, rej, "A <b>bold</b> tag.\n"));
+
+    // The default passes the bytes through verbatim (control).
+    const plain = try parseArgs(&.{ "render", "--from", "markdown" });
+    const plain_out = try renderWith(allocator, plain, "A <b>bold</b> tag.\n");
+    defer allocator.free(plain_out);
+    try testing.expect(std.mem.indexOf(u8, plain_out, "<p>A <b>bold</b> tag.</p>") != null);
 }
 
 test "cli: --heading-ids renders GFM-style heading ids end to end" {

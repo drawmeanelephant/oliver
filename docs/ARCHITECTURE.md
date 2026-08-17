@@ -131,11 +131,13 @@ Explicit, documented policies:
   characters, and all non-ASCII bytes — is percent-encoded as `%XX`
   (uppercase hex). The encoded href is then HTML-escaped (`&` → `&amp;`).
   Titles are HTML-escaped without percent-encoding.
-- Raw HTML: Markdown raw-HTML leaves are allowed and written verbatim from
-  their source spans; they are not reparsed or escaped. This is the chosen
-  policy for the inline §6.6 slice and the §4.6 HTML blocks (all seven
-  types, `.html_block` leaves). A configurable escaped/rejected mode
-  remains future work.
+- Raw HTML: Markdown raw-HTML leaves are written from their source spans
+  under the `html.RenderOptions.raw_html` policy — `allowed` (verbatim,
+  the default), `escaped` (HTML-escaped into the output, well-formed
+  under both profiles), or `rejected` (`error.RawHtmlRejected`, fail
+  closed even in HTML mode). The policy covers the inline §6.6 slice,
+  the §4.6 HTML blocks (all seven types, `.html_block` leaves), and the
+  Textile `pre.` verbatim form (docs/RAW-HTML.md §3).
 - Serializer profiles: both HTML-family renderers take an
   `OutputProfile` (`html | xhtml`); the default `.html` is byte-unchanged,
   and `.xhtml` is an XML-compatible serialization of the same semantics

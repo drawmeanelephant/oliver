@@ -86,6 +86,19 @@ pub const ResolvedWikilink = struct {
 /// no closures). See `RenderOptions.wikilink_resolver`.
 pub const WikilinkResolver = *const fn (target: []const u8, label: ?[]const u8, ctx: ?*const anyopaque) ResolvedWikilink;
 
+/// The renderer's raw-HTML policy (docs/RAW-HTML.md §3): how raw-content
+/// nodes — Markdown `.raw_html` inline tags and `.html_block` leaves, and
+/// Textile `pre.` verbatim code blocks — are emitted. `.allowed` passes
+/// the source bytes through verbatim (the default, so the CommonMark
+/// corpus stays byte-exact); `.escaped` HTML-escapes them into the output;
+/// `.rejected` fails the render with `RawHtmlRejected` at the first raw
+/// node.
+pub const RawHtmlPolicy = enum {
+    allowed,
+    escaped,
+    rejected,
+};
+
 pub const RenderOptions = struct {
     /// Emit void elements with a trailing slash (`<br />`) instead of the
     /// HTML5 form (`<br>`). Defaults to the CommonMark reference style.
@@ -100,6 +113,17 @@ pub const RenderOptions = struct {
     /// collapsed to `-`, leading/trailing `-` trimmed). Off by default so
     /// the CommonMark corpus stays byte-exact.
     heading_ids: bool = false,
+    /// How raw-content nodes are rendered: Markdown `.raw_html` inline
+    /// tags, `.html_block` leaves (Markdown §4.6; Textile `==`/`notextile.`
+    /// escapes land here too), and Textile `pre.` verbatim code blocks
+    /// (docs/RAW-HTML.md §3). `.allowed` (default) passes the source
+    /// bytes through verbatim — the corpus stays byte-exact, and the
+    /// XHTML profile still fails closed on them
+    /// (`RawHtmlNotXmlWellFormed`). `.escaped` HTML-escapes the bytes into
+    /// the output (well-formed under both profiles — no XHTML rejection).
+    /// `.rejected` fails the render with `RawHtmlRejected` at the first
+    /// raw node, even in HTML mode.
+    raw_html: RawHtmlPolicy = .allowed,
     /// Render Markdown footnotes (the `footnotes` parse extension): each
     /// `[^label]` reference becomes a footnote-ref link numbered in
     /// first-reference order, and a `<section class="footnotes">` block is
@@ -163,6 +187,12 @@ const Footnotes = struct {
 /// emitting possibly-malformed XML or silently rewriting content.
 /// docs/XHTML.md §"Raw HTML policy".
 pub const RawHtmlNotXmlWellFormed = error.RawHtmlNotXmlWellFormed;
+
+/// The renderer's raw-HTML policy rejected a raw-content node. Raised by
+/// the `RenderOptions.raw_html` knob when the policy is `.rejected`
+/// (docs/RAW-HTML.md §3) — fail closed even in HTML mode instead of
+/// passing raw bytes through.
+pub const RawHtmlRejected = error.RawHtmlRejected;
 
 /// Renders `doc` to `writer`.
 ///
@@ -589,14 +619,18 @@ fn writeOpen(
             const code = node.data.code_block;
             // Textile `pre.` renders the content verbatim inside `<pre>`
             // (no `<code>` wrapper, no escaping, no info class;
-            // docs/TEXTILE-PARITY.md §8). Verbatim content cannot be
-            // guaranteed XML-well-formed, so the XHTML profile rejects it.
-            if (options.profile == .xhtml and !code.escape) return RawHtmlNotXmlWellFormed;
+            // docs/TEXTILE-PARITY.md §8). The raw-HTML policy applies to
+            // this verbatim form too (docs/RAW-HTML.md §3): verbatim
+            // content cannot be guaranteed XML-well-formed, so under
+            // `.allowed` the XHTML profile rejects it; `.escaped`
+            // HTML-escapes it (well-formed under both profiles);
+            // `.rejected` fails the render even in HTML mode.
             try writer.writeAll("<pre");
             try writeAttrs(writer, code.attrs);
             if (!code.escape) {
+                if (options.raw_html == .allowed and options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
                 try writer.writeByte('>');
-                try writer.writeAll(code.content);
+                try writeRawContent(writer, options, code.content);
                 try writer.writeAll("</pre>\n");
             } else {
                 try writer.writeAll("><code");
@@ -614,15 +648,17 @@ fn writeOpen(
             }
         },
         .html_block => {
-            // Leaf block: the verbatim container-stripped source lines, no
-            // escaping (the raw-HTML policy of docs/RAW-HTML.md §3). The
-            // XHTML profile is fail-closed: verbatim source cannot be
-            // guaranteed XML-well-formed. Every block is followed by exactly
-            // one `\n`, so an unterminated final line gets one here (the
-            // reference implementation's `cr()`).
-            if (options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
+            // Leaf block: the verbatim container-stripped source lines
+            // (the raw-HTML policy of docs/RAW-HTML.md §3; Textile
+            // `==`/`notextile.` escapes land here too). Under `.allowed`
+            // the XHTML profile is fail-closed: verbatim source cannot be
+            // guaranteed XML-well-formed; `.escaped` escapes the lines;
+            // `.rejected` fails the render. Every block is followed by
+            // exactly one `\n`, so an unterminated final line gets one
+            // here (the reference implementation's `cr()`).
+            if (options.raw_html == .allowed and options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
             const content = node.data.html_block;
-            try writer.writeAll(content);
+            try writeRawContent(writer, options, content);
             if (content.len == 0 or content[content.len - 1] != '\n') try writer.writeByte('\n');
         },
         .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite => {
@@ -738,6 +774,17 @@ fn writeOpen(
             try writeEscaped(writer, resolved.text);
             try writer.writeAll("</a>");
         },
+        .task_checkbox => {
+            // Leaf tag (extension, docs/TASK-LISTS.md §3): a disabled
+            // checkbox input replacing the `[ ]`/`[x]`/`[X]` run at a
+            // task item's content start. GFM's shape is the valueless
+            // `disabled` and, when checked, `checked` attributes; the
+            // void element follows the render profile (XML form under
+            // `.xhtml`), unlike GFM's unconditional ` />`.
+            try writer.writeAll("<input type=\"checkbox\" disabled=\"\"");
+            if (node.data.task_checkbox.checked) try writer.writeAll(" checked=\"\"");
+            try writer.writeAll(if (voidSlash(options)) " />" else ">");
+        },
         .image => {
             // Void element: the whole tag is written on enter and no exit
             // frame is pushed (leaf tag, no children). `src` follows the
@@ -783,11 +830,12 @@ fn writeOpen(
         .raw_html => {
             // Leaf tag: the raw source bytes of the construct, verbatim —
             // no escaping (docs/RAW-HTML.md §3). The span may include line
-            // endings inside a multi-line tag. The XHTML profile is
-            // fail-closed: verbatim source cannot be guaranteed
-            // XML-well-formed.
-            if (options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
-            try writer.writeAll(src[node.span.start..node.span.end]);
+            // endings inside a multi-line tag. The raw-HTML policy decides
+            // verbatim / escaped / rejected; under `.allowed` the XHTML
+            // profile still fails closed, because verbatim source cannot
+            // be guaranteed XML-well-formed (`.escaped` output is).
+            if (options.raw_html == .allowed and options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
+            try writeRawContent(writer, options, src[node.span.start..node.span.end]);
         },
         .soft_break => try writer.writeAll("\n"),
         .hard_break => {
@@ -866,7 +914,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .wikilink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
+        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .wikilink, .task_checkbox, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
     }
 }
 
@@ -974,6 +1022,7 @@ fn collectHeadingText(gpa: std.mem.Allocator, node: *const document.Node, out: *
         .wikilink => try out.appendSlice(gpa, node.data.wikilink.label orelse node.data.wikilink.target),
         .soft_break, .hard_break => try out.append(gpa, ' '),
         .raw_html => {},
+        .task_checkbox => {}, // a checkbox contributes no text to a slug
         .link, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span => {
             for (node.children.items) |c| try collectHeadingText(gpa, c, out);
         },
@@ -1046,6 +1095,19 @@ fn clampHeading(level: u8) u8 {
 /// `RenderOptions.void_trailing_slash` (default CommonMark reference style).
 fn voidSlash(options: RenderOptions) bool {
     return options.profile == .xhtml or options.void_trailing_slash;
+}
+
+/// Emits a raw-content node's bytes under the configured policy
+/// (docs/RAW-HTML.md §3): `.allowed` passes them through verbatim (the
+/// XHTML profile's fail-closed check is applied by the callers),
+/// `.escaped` HTML-escapes them into the output, `.rejected` fails the
+/// render at the first raw node.
+fn writeRawContent(writer: anytype, options: RenderOptions, bytes: []const u8) !void {
+    switch (options.raw_html) {
+        .rejected => return RawHtmlRejected,
+        .escaped => try writeEscaped(writer, bytes),
+        .allowed => try writer.writeAll(bytes),
+    }
 }
 
 /// Writes a valueless boolean-style attribute (e.g. `data-footnote-ref`).
@@ -1681,6 +1743,79 @@ test "html: xhtml profile rejects Textile pre. verbatim code blocks" {
     var xhtml_out = aw2.toArrayList();
     defer xhtml_out.deinit(testing.allocator);
     try testing.expectEqualStrings("<pre><code class=\"language-zig\">a &lt; b &amp; c</code></pre>\n", xhtml_out.items);
+}
+
+test "html: raw-html policy escapes and rejects the raw-content sites" {
+    // Inline raw_html under `.escaped`: the source bytes are HTML-escaped
+    // into the output; under `.rejected` the render fails with
+    // `RawHtmlRejected` even in HTML mode (docs/RAW-HTML.md §3).
+    {
+        const input = "<b>hi</b>";
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = input });
+        defer doc.deinit();
+        const p = try doc.createNode(.paragraph, .{ .start = 0, .end = @intCast(input.len) }, .{ .paragraph = .{} });
+        try doc.appendChild(doc.root, p);
+        try doc.appendChild(p, try doc.createNode(.raw_html, .{ .start = 0, .end = @intCast(input.len) }, .none));
+
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try render(testing.allocator, &aw.writer, &doc, .{ .raw_html = .escaped });
+        var out = aw.toArrayList();
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<p>&lt;b&gt;hi&lt;/b&gt;</p>\n", out.items);
+
+        // `.escaped` is well-formed under `.xhtml` too (no fail-closed
+        // rejection — the escaped bytes are XML-safe).
+        var aw2 = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw2.deinit();
+        try render(testing.allocator, &aw2.writer, &doc, .{ .raw_html = .escaped, .profile = .xhtml });
+
+        var aw3 = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw3.deinit();
+        try testing.expectError(RawHtmlRejected, render(testing.allocator, &aw3.writer, &doc, .{ .raw_html = .rejected }));
+        try testing.expectError(RawHtmlRejected, render(testing.allocator, &aw3.writer, &doc, .{ .raw_html = .rejected, .profile = .xhtml }));
+    }
+    // Block html_block: the same policy contract, plus the trailing-newline
+    // rule on the escaped output.
+    {
+        const input = "<div>\nx\n</div>";
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = input });
+        defer doc.deinit();
+        const html_block = try doc.createNode(.html_block, .{ .start = 0, .end = @intCast(input.len) }, .{ .html_block = input });
+        try doc.appendChild(doc.root, html_block);
+
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try render(testing.allocator, &aw.writer, &doc, .{ .raw_html = .escaped });
+        var out = aw.toArrayList();
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("&lt;div&gt;\nx\n&lt;/div&gt;\n", out.items);
+
+        var aw2 = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw2.deinit();
+        try testing.expectError(RawHtmlRejected, render(testing.allocator, &aw2.writer, &doc, .{ .raw_html = .rejected }));
+    }
+    // Textile `pre.` verbatim code blocks (escape == false) follow the same
+    // policy: `.escaped` escapes the content inside `<pre>`, `.rejected`
+    // fails the render.
+    {
+        var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+        defer doc.deinit();
+        try doc.appendChild(doc.root, try doc.createNode(.code_block, .{ .start = 0, .end = 0 }, .{
+            .code_block = .{ .content = "a < b & c", .escape = false },
+        }));
+
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        try render(testing.allocator, &aw.writer, &doc, .{ .raw_html = .escaped });
+        var out = aw.toArrayList();
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings("<pre>a &lt; b &amp; c</pre>\n", out.items);
+
+        var aw2 = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw2.deinit();
+        try testing.expectError(RawHtmlRejected, render(testing.allocator, &aw2.writer, &doc, .{ .raw_html = .rejected }));
+    }
 }
 
 test "html: xhtml output is deterministic and html mode is unchanged" {
