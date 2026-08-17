@@ -698,3 +698,11 @@ byte-exact; `escaped` reuses the renderer's existing HTML-escaping;
 (`RawHtmlNotXmlWellFormed`) with a sibling error. The uniform scope
 (Markdown `.raw_html`/`.html_block` and Textile `pre.`) is pinned in
 docs/RAW-HTML.md §3. No parser implementation source was consulted.
+
+Session 33 (F2 mutation-fuzz wall) provenance record: no upstream
+specification — the harness is Oliver-authored test tooling over the
+project's own adversarial contracts (completion without crash, leak,
+unbounded recursion, or output nondeterminism; docs/TESTS.md). The seed
+corpus is the project's own representative inputs, and the mutation
+engine is a plain seeded PRNG over byte edits. No parser implementation
+source was consulted.
