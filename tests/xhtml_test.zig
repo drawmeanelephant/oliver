@@ -609,3 +609,60 @@ test "xhtml: smartypants output is well-formed under both profiles (extension)" 
     try wrapFragment(xhtml.items, &wrapped);
     try wellformed.check(wrapped.items);
 }
+
+fn renderTaskListsProfile(input: []const u8, profile: oliver.OutputProfile) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
+        .markdown = .{ .task_lists = true },
+    });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{ .profile = profile });
+    return aw.toArrayList();
+}
+
+test "xhtml: task list inputs are well-formed under both profiles (extension)" {
+    // The checkbox `<input>` is a void element: under `.xhtml` it must
+    // use the XML form (` />`), and the whole fragment must stay
+    // well-formed like any other markdown (docs/TASK-LISTS.md §3).
+    const input = "- [ ] foo\n- [x] bar\n";
+    var html = try renderTaskListsProfile(input, .html);
+    defer html.deinit(std.testing.allocator);
+    // The void element uses the CommonMark-reference trailing slash in
+    // HTML mode too (the `void_trailing_slash` default), so the two
+    // profiles agree byte-for-byte here.
+    try expectRender(html.items, "<ul>\n<li><input type=\"checkbox\" disabled=\"\" />foo</li>\n<li><input type=\"checkbox\" disabled=\"\" checked=\"\" />bar</li>\n</ul>\n", "task lists html");
+    var xhtml = try renderTaskListsProfile(input, .xhtml);
+    defer xhtml.deinit(std.testing.allocator);
+    try expectRender(xhtml.items, html.items, "task lists xhtml vs html");
+    var wrapped = std.ArrayList(u8).empty;
+    defer wrapped.deinit(std.testing.allocator);
+    try wrapFragment(xhtml.items, &wrapped);
+    try wellformed.check(wrapped.items);
+}
+
+fn renderRawHtmlProfile(input: []const u8, profile: oliver.OutputProfile, raw_html: oliver.html.RawHtmlPolicy) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{
+        .profile = profile,
+        .raw_html = raw_html,
+    });
+    return aw.toArrayList();
+}
+
+test "xhtml: escaped raw-HTML policy is well-formed under xhtml" {
+    // Under `.allowed`, raw HTML fails closed in XHTML mode; under
+    // `.escaped` the raw bytes are HTML-escaped into the output, which is
+    // XML-safe, so the profile accepts it (docs/RAW-HTML.md §3).
+    const input = "A <b>bold</b> tag.\n\n<div>\nblock\n</div>\n";
+    var xhtml = try renderRawHtmlProfile(input, .xhtml, .escaped);
+    defer xhtml.deinit(std.testing.allocator);
+    try expectRender(xhtml.items, "<p>A &lt;b&gt;bold&lt;/b&gt; tag.</p>\n&lt;div&gt;\nblock\n&lt;/div&gt;\n", "raw-html escaped xhtml");
+    var wrapped = std.ArrayList(u8).empty;
+    defer wrapped.deinit(std.testing.allocator);
+    try wrapFragment(xhtml.items, &wrapped);
+    try wellformed.check(wrapped.items);
+}

@@ -53,6 +53,8 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 | shared worker | S1 scale-factor grammar alignment | review findings #85–#86: `oliver scale --factor` routes through the library's `parseFactor` (decimals, mixed `1 1/2`, spaces around the slash accepted; leading zeros, `1/2/3`, `some`, over-u32 values rejected) instead of a parallel u32 split parser; `parseFactor` caps at u32 to match `ScaleBy.factor` while `scaleAmount` keeps its u64 path; `--factor`/`--servings` gain duplicate rejection; `scaleWith` is the shared scale path; 3 new tests (parseFactor u32 boundary; factor grammar battery; scale end-to-end); docs/COOKLANG.md §11 + README + TESTS | after #74 and CK7 | merged (PR #87) |
 | Cooklang worker | CK6 string-quantity classify/scale + mixed numbers | public `classifyQuantity` / `parseFactor` / `scaleAmount` over authored amount strings (the exact-rational path, not `parseQuantity`'s f64 decimal arm); `scaleRecipe` becomes a caller of `scaleAmount` on ingredient quantities only; mixed `1 1/2` is a canonical scalable input (emits integer / fraction / terminating decimal); timers/cookware/refs still never scale; `scale-mixed` fixture; docs/COOKLANG.md §11 | after CK3 (issue #76; lets consumers delete a forked string scale) | merged (PR #77) |
 | Cooklang worker | CK7 scale edge-case hardening | review findings on the merged CK6 surface (issues #79–#81): `parseMixedNumber` trims leading/trailing ASCII space/tab (issue #79); `familyOfAmount` reads the decimal family from the source form exactly — no f64/i64 probe, terminating decimals at any magnitude (issue #80); `ScaledAmount.changed` distinguishes a rewrite from an overflow passthrough (issue #81); 3 unit tests pin the whitespace battery, the >i64 terminating cases, and the changed/passthrough triggers; docs/COOKLANG.md §11 + FEATURE-MATRIX + ARCHITECTURE + CLEANROOM session 29 | after CK6 | merged (PR #82) |
+| Markdown extension worker | E5 GFM task lists | `Options.task_lists` checkbox recognition at a list item's content start (a `.task_checkbox` leaf; `[ ]`/`[x]`/`[X]` + trailing whitespace; strict shape — the item's first block at the content's first bytes, else literal); disabled `<input type="checkbox">` rendering with valueless `disabled`/`checked` and the render profile's void form (xml-form under `.xhtml`; the profiles agree byte-for-byte); the label scans normally after the checkbox; `--task-lists` CLI flag; docs/TASK-LISTS.md + fixture pair + xhtml hermetic pin + CLI end-to-end test | after the extension wave (issue #92, v1.1) | this PR |
+| shared worker | E6 raw-HTML policy | `html.RenderOptions.raw_html` — the ARCHITECTURE "allowed / escaped / rejected" knob, now implemented: `allowed` (verbatim, the default; XHTML still fails closed), `escaped` (HTML-escapes the bytes — well-formed under both profiles, closing the `pre.` XHTML gap), `rejected` (`error.RawHtmlRejected`, fail closed even in HTML mode); applies uniformly to `.raw_html` inline, `.html_block` (Markdown §4.6 + Textile `==`/`notextile.`), and Textile `pre.` verbatim; `--raw-html allowed|escaped|rejected` CLI flag (render-only, duplicate-rejected); docs/RAW-HTML.md §3 + unit tests + xhtml hermetic pin + CLI battery | after the extension wave (issue #93, v1.1) | this PR |
 
 ## M1 — Thematic-break / Setext precedence rung
 
@@ -1473,6 +1475,70 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Parallelism:** yes; parsers and renderers untouched.
 - **Integration:** after #74 and CK7; gates re-verified.
 - **State:** merged on main (PR #87).
+
+## E5 — GFM task lists (issue #92)
+
+- **Objective:** implement GFM §6.5 task list items as the next member
+  of the Markdown extension family: `Options.task_lists` (off by
+  default), a `.task_checkbox` model leaf, the disabled-input render
+  arm, and the `--task-lists` CLI flag.
+- **Normative source:** GFM spec §6.5 "Task list items (extension)";
+  clean-room (published spec), provenance docs/CLEANROOM.md.
+- **Contract:** docs/TASK-LISTS.md — recognition is strict: the
+  checkbox must open the item's very first block at the content's
+  first bytes and be followed by a space/tab; mid-content,
+  later-paragraph, plain-paragraph, and end-of-content checkboxes stay
+  literal; the label scans normally after the checkbox (emphasis,
+  links, and the other extensions compose inside it).
+- **Design:** the checkbox decision is made at paragraph-close time
+  (the item's first paragraph, `closeParagraphAs`) and threaded to
+  phase 2 through the pending paragraph job; the inline scan narrows
+  line 0's raw span past the checkbox so its brackets never reach link
+  discovery.
+- **Rendering:** `<input type="checkbox" disabled="" />` (+ a
+  valueless `checked=""` when checked), GFM's attribute order; the
+  void element follows the render profile — html and xhtml agree
+  byte-for-byte (the CommonMark-reference trailing-slash default).
+- **Tests:** fixture pair `ext-task-lists` (unchecked, `[x]`, `[X]`,
+  ordered, and a literal mid-content control), CLI end-to-end with the
+  off-by-default control, scoping rejection on textile render, and an
+  xhtml hermetic pin. 371/371, 652/652, 60/60 re-verified.
+- **Parallelism:** yes; Textile and Cooklang untouched.
+- **Integration:** after the extension wave; gates re-verified.
+- **State:** this PR (issue #92).
+
+## E6 — Raw-HTML policy (issue #93)
+
+- **Objective:** implement the ARCHITECTURE.md "raw-HTML policy
+  (allowed / escaped / rejected)" knob, documented as future work since
+  the §6.6 slice landed: `html.RenderOptions.raw_html` with the
+  `--raw-html` CLI flag.
+- **Normative source:** no new upstream specification — the knob is
+  Oliver's own renderer policy over already-shipped raw-content
+  behavior (provenance docs/CLEANROOM.md session 32); the `allowed`
+  default keeps the CommonMark reference behavior byte-exact.
+- **Contract:** docs/RAW-HTML.md §3 — the policy applies uniformly to
+  every raw-content emission site: the `.raw_html` inline tag, the
+  `.html_block` leaf (Markdown §4.6; Textile `==`/`notextile.` land
+  here too), and the Textile `pre.` verbatim code-block form.
+  `allowed` passes bytes through verbatim (the XHTML profile still
+  fails closed on it); `escaped` HTML-escapes them (well-formed under
+  both profiles — this closes the `pre.` XHTML gap); `rejected` fails
+  the render with `error.RawHtmlRejected` at the first raw node, even
+  in HTML mode.
+- **Design:** one `writeRawContent` helper drives all three arms;
+  `.escaped` reuses the standard `writeEscaped` (which also maps NUL to
+  U+FFFD).
+- **Tests:** an html.zig unit battery (escaped byte pins for all three
+  sites, rejected errors in both profiles), a CLI battery (three
+  values, invalid/missing/duplicate rejection, render-only scoping)
+  plus an end-to-end escaped/rejected/default control, and an xhtml
+  hermetic pin proving escaped output is well-formed under `.xhtml`.
+  375/375, 652/652, 60/60 re-verified.
+- **Parallelism:** yes; Textile and Cooklang untouched (the `pre.`
+  arm is exercised but its default behavior is unchanged).
+- **Integration:** after the extension wave; gates re-verified.
+- **State:** this PR (issue #93).
 
 ## Deferred architectural cards
 

@@ -96,10 +96,19 @@ order is moot by the grammars' mutual exclusion.
   from the source by span — no arena copy, no normalization. The growth
   path's `raw_inline` placeholder is replaced by this tag.
 - **Renderer**: writes `doc.src.bytes[node.span.start..node.span.end]`
-  verbatim — no escaping. The ARCHITECTURE.md "raw-HTML policy
-  (allowed / escaped / rejected)" knob stays a future `RenderOptions`
-  extension; this slice implements the CommonMark behavior, *allowed*
-  (verbatim), which is what the spec examples encode.
+  under the `html.RenderOptions.raw_html` policy — the ARCHITECTURE.md
+  "raw-HTML policy (allowed / escaped / rejected)" knob, implemented
+  (issue #93, v1.1). The default, *allowed* (verbatim), is the
+  CommonMark behavior the spec examples encode; *escaped* HTML-escapes
+  the bytes into the output; *rejected* fails the render with
+  `error.RawHtmlRejected` at the first raw node. The policy applies
+  uniformly to every raw-content emission site: the `.raw_html` inline
+  tag, the `.html_block` leaf (Markdown §4.6 and Textile
+  `==`/`notextile.`), and the Textile `pre.` verbatim code-block form
+  (`code.escape == false`) — escaped content is well-formed under both
+  profiles, so the XHTML fail-closed rejection applies only to
+  *allowed* verbatim passthrough. The CLI exposes it as `--raw-html
+  allowed|escaped|rejected` on `render` with any frontend.
 - **Alt flattening (chosen behavior, spec-silent)**: no spec example
   pins raw HTML inside an image description. Consistent with the other
   leaf inlines (code spans and autolinks contribute their content), a

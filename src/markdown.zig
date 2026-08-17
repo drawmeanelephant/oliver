@@ -155,6 +155,16 @@ pub const Options = struct {
     /// code, autolinks, raw HTML, and link/image payloads are exempt.
     /// Off by default so the CommonMark corpus stays byte-exact.
     smartypants: bool = false,
+    /// GFM task list items: a checkbox run (`[ ]`, `[x]`, `[X]` followed
+    /// by a space/tab) at the very start of a list item's first
+    /// paragraph content turns the item into a task item — the checkbox
+    /// renders as a disabled `<input type="checkbox">`, the rest of the
+    /// paragraph is its label (docs/TASK-LISTS.md). The checkbox must be
+    /// the item's first block and its first bytes; anywhere else (mid-
+    /// paragraph, later blocks, plain paragraphs, no trailing
+    /// whitespace) stays literal. Off by default so the CommonMark
+    /// corpus stays byte-exact.
+    task_lists: bool = false,
 };
 
 const tab_stop: u32 = 4;
@@ -861,7 +871,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     // Phase 2: inline pass, with the full definitions map available.
     for (pending.items) |job| {
         switch (job) {
-            .paragraph => |pp| try parseParagraphInlines(doc, pp.node, pp.lines, &defs, options),
+            .paragraph => |pp| try parseParagraphInlines(doc, pp.node, pp.lines, pp.task_checkbox, &defs, options),
             .heading => |hh| try parseHeadingInlines(doc, hh.node, hh.span, &defs, options),
             .setext_heading => |hh| try parseSetextHeadingInlines(doc, hh.node, hh.lines, &defs, options),
             .table_cell => |tc| try parseTableCellInlines(doc, tc.node, tc.span, &defs, options),
@@ -1311,8 +1321,22 @@ fn isParagraphContinuationText(
 
 /// A block whose inlines are parsed in phase 2, once every link reference
 /// definition is known.
+/// A GFM task list checkbox decided at block-close time (extension,
+/// docs/TASK-LISTS.md §1–§2): `checked` for `[x]`/`[X]` and the span
+/// covering the three checkbox bytes. Threaded through the paragraph's
+/// pending-inline job so phase 2 can emit the `.task_checkbox` node
+/// before scanning the label.
+const TaskCheckboxInfo = struct {
+    checked: bool,
+    span: source.Span,
+};
+
 const PendingInline = union(enum) {
-    paragraph: struct { node: *document.Node, lines: []const Paragraph.LineRef },
+    paragraph: struct {
+        node: *document.Node,
+        lines: []const Paragraph.LineRef,
+        task_checkbox: ?TaskCheckboxInfo = null,
+    },
     heading: struct { node: *document.Node, span: source.Span },
     setext_heading: struct { node: *document.Node, lines: []const Paragraph.LineRef },
     table_cell: struct { node: *document.Node, span: source.Span },
@@ -2434,7 +2458,39 @@ fn closeParagraphAs(
     const data: document.Data = if (node_tag == .paragraph) .{ .paragraph = .{} } else .none;
     const node = try doc.createNode(node_tag, span, data);
     try doc.appendChild(parent, node);
-    try pending.append(doc.allocator(), .{ .paragraph = .{ .node = node, .lines = remaining } });
+
+    // GFM task list recognition (extension, docs/TASK-LISTS.md §1–§2): a
+    // checkbox run (`[ ]` / `[x]` / `[X]` followed by a space/tab) at
+    // the very start of a list item's first paragraph content. The item's
+    // own content indentation was consumed by the container pass, so the
+    // paragraph content starts at the checkbox; `parent` is the item and
+    // the item must have no earlier block (the checkbox opens its very
+    // first block). Anything else — the extension off, a non-paragraph
+    // block, a later paragraph, no trailing whitespace — stays literal.
+    const task_checkbox = blk: {
+        if (options.task_lists and node_tag == .paragraph and parent.tag == .list_item and
+            parent.children.items.len == 1)
+        {
+            const first = remaining[0].content;
+            const bytes = doc.src.bytes;
+            const s = first.start;
+            if (first.end - s >= 4 and bytes[s] == '[' and bytes[s + 2] == ']') {
+                const mark = bytes[s + 1];
+                if ((mark == ' ' or mark == 'x' or mark == 'X') and
+                    (bytes[s + 3] == ' ' or bytes[s + 3] == '\t'))
+                {
+                    break :blk TaskCheckboxInfo{
+                        .checked = mark == 'x' or mark == 'X',
+                        .span = .{ .start = s, .end = s + 3 },
+                    };
+                }
+            }
+        }
+        break :blk null;
+    };
+    try pending.append(doc.allocator(), .{
+        .paragraph = .{ .node = node, .lines = remaining, .task_checkbox = task_checkbox },
+    });
 }
 
 /// A parsed Markdown footnote definition (`[^label]:` extension): the label
@@ -2534,10 +2590,11 @@ fn parseParagraphInlines(
     doc: *document.Document,
     node: *document.Node,
     lines: []const Paragraph.LineRef,
+    task_checkbox: ?TaskCheckboxInfo,
     defs: *Definitions,
     options: Options,
 ) ParseError!void {
-    return parseMultilineBlockInlines(doc, node, lines, defs, options);
+    return parseMultilineBlockInlines(doc, node, lines, task_checkbox, defs, options);
 }
 
 /// Phase 2 inline pass for Setext content. The underline itself is never part
@@ -2550,18 +2607,30 @@ fn parseSetextHeadingInlines(
     defs: *Definitions,
     options: Options,
 ) ParseError!void {
-    return parseMultilineBlockInlines(doc, node, lines, defs, options);
+    return parseMultilineBlockInlines(doc, node, lines, null, defs, options);
 }
 
 fn parseMultilineBlockInlines(
     doc: *document.Document,
     node: *document.Node,
     lines: []const Paragraph.LineRef,
+    task_checkbox: ?TaskCheckboxInfo,
     defs: *Definitions,
     options: Options,
 ) ParseError!void {
     var items = std.ArrayList(InlineItem).empty;
     defer items.deinit(doc.allocator());
+
+    // GFM task list recognition (extension, decided at block-close time
+    // in `closeParagraphAs`): a checkbox at the item's content start
+    // becomes the first item, ahead of the scan, so its brackets never
+    // reach link discovery; the first line's scan starts after the
+    // checkbox and its trailing whitespace (docs/TASK-LISTS.md §1).
+    if (task_checkbox) |cb| {
+        try items.append(doc.allocator(), .{
+            .task_checkbox = .{ .span = .{ .start = cb.span.start, .end = cb.span.end }, .checked = cb.checked },
+        });
+    }
 
     // Discovery runs before scanning: code spans and raw HTML tags may span
     // lines, and their content is opaque to the delimiter/escape/break
@@ -2587,8 +2656,16 @@ fn parseMultilineBlockInlines(
     for (lines, 0..) |ref, i| {
         const has_following_content_line = i + 1 < lines.len;
         const end = analyzeLineEnd(doc.src.bytes, ref.content, has_following_content_line);
-        const start = skipLeadingWhitespace(doc.src.bytes, ref.content);
-        try scanLine(doc, &items, ref.content, .{ .start = start, .end = end.content_end }, constructs.items, &exclude, options);
+        // Line 0 of a task item scans only the label: the raw span is
+        // narrowed past the checkbox (the scan walk starts at `raw.start`,
+        // so the consumed `[`/`]` never become bracket items) and the
+        // leading whitespace after it is skipped like any line start.
+        const raw = if (task_checkbox != null and i == 0)
+            source.Span{ .start = task_checkbox.?.span.end, .end = ref.content.end }
+        else
+            ref.content;
+        const start = skipLeadingWhitespace(doc.src.bytes, raw);
+        try scanLine(doc, &items, raw, .{ .start = start, .end = end.content_end }, constructs.items, &exclude, options);
         if (has_following_content_line) {
             // A line ending inside a construct (code span content — §6.1
             // "line endings are converted to spaces" — or a raw HTML tag)
@@ -2994,6 +3071,21 @@ const InlineItem = union(enum) {
     /// emit time. Leaf item: opaque to the delimiter stack and link
     /// discovery (docs/WIKILINKS.md §2).
     wikilink: WikilinkItem,
+    /// A GFM task list checkbox (`[ ]` / `[x]` / `[X]`, extension):
+    /// `span` covers the three checkbox bytes. Only ever the first item
+    /// of a list item's first paragraph; emitted by the caller ahead of
+    /// the scan (docs/TASK-LISTS.md §1). Leaf item: opaque to the
+    /// delimiter stack and link discovery.
+    task_checkbox: TaskCheckboxItem,
+};
+
+/// A recognized GFM task list checkbox item (extension). See
+/// `InlineItem.task_checkbox`.
+const TaskCheckboxItem = struct {
+    /// The three checkbox bytes `[ ]` / `[x]` / `[X]`.
+    span: source.Span,
+    /// True for `[x]` / `[X]`.
+    checked: bool,
 };
 
 /// A Markdown footnote reference item (extension). See `InlineItem.footnote`.
@@ -3047,6 +3139,7 @@ fn itemSpan(item: InlineItem) source.Span {
         .raw_html => |h| h.span,
         .footnote => |fn_| fn_.span,
         .wikilink => |wk| wk.span,
+        .task_checkbox => |tc| tc.span,
     };
 }
 
@@ -3064,6 +3157,7 @@ fn setItemSpan(item: *InlineItem, span: source.Span) void {
         .raw_html => |*h| h.span = span,
         .footnote => |*fn_| fn_.span = span,
         .wikilink => |*wk| wk.span = span,
+        .task_checkbox => |*tc| tc.span = span,
     }
 }
 
@@ -4719,6 +4813,15 @@ fn emitInlines(
                 });
                 try doc.appendChild(current, node);
             },
+            .task_checkbox => |tc| {
+                // Leaf node (extension, docs/TASK-LISTS.md §1): the first
+                // inline of a task list item's first paragraph. Rendered
+                // as a disabled checkbox input by the renderer.
+                const node = try doc.createNode(.task_checkbox, tc.span, .{
+                    .task_checkbox = .{ .checked = tc.checked },
+                });
+                try doc.appendChild(current, node);
+            },
             .autolink => |al| {
                 // Leaf node: the content between `<` and `>` becomes both
                 // the label and the href (with `mailto:` prepended for
@@ -5065,6 +5168,10 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
             // text when a link/image forms); the case is exhaustive and
             // contributes the raw bytes defensively.
             .wikilink => |wk| try buf.appendSlice(doc.allocator(), doc.src.bytes[wk.content.start..wk.content.end]),
+            // A task checkbox never reaches a description (recognized only
+            // at a list item's content start); contributes nothing
+            // defensively.
+            .task_checkbox => {},
         }
     }
     return buf.toOwnedSlice(doc.allocator());

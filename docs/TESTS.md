@@ -39,8 +39,8 @@ fifth — the XHTML profile suite — is described in its own section below):
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 18 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 299 Markdown (276 CommonMark/GFM +
-   18 extension + 5 frontmatter pairs) and 106 Textile (105 + 1
+   The explicit index contains 300 Markdown (276 CommonMark/GFM +
+   19 extension + 5 frontmatter pairs) and 106 Textile (105 + 1
    frontmatter pair) fixture pairs, plus 11 Cooklang pairs across the
    fixture, frontmatter, serialize, scale, and menu tables.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
@@ -194,9 +194,9 @@ fifth — the XHTML profile suite — is described in its own section below):
    paths (`renderWith` / `scaleWith`, the same paths `main` uses).
    They run as part of the ordinary `zig build test` gate.
 
-The current complete result is **369/369 tests passing** with Zig 0.16.0
-(308 library module tests + 18 fixture/adversarial tests + 7
-conformance-harness tests + 19 CLI argument-parsing tests + 17 XHTML
+The current complete result is **375/375 tests passing** with Zig 0.16.0
+(309 library module tests + 18 fixture/adversarial tests + 7
+conformance-harness tests + 22 CLI argument-parsing tests + 19 XHTML
 profile tests). On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the
 Textile wall stays fully green, and the Cooklang canonical corpus passes

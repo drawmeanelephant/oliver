@@ -142,6 +142,12 @@ pub const Tag = enum {
     /// renderer policy: the default percent-encodes the target as the
     /// href with `label orelse target` as the text.
     wikilink,
+    /// A GFM task list checkbox (Markdown `[ ]` / `[x]` / `[X]` extension,
+    /// docs/TASK-LISTS.md). Leaf: no children. `data.task_checkbox` holds
+    /// whether the box is checked; the node span covers the three
+    /// checkbox bytes. Only ever the first inline node of the first
+    /// paragraph of a list item.
+    task_checkbox,
     /// A raw HTML tag (Markdown §6.6): an open/closing tag, comment,
     /// processing instruction, declaration, or CDATA section. Leaf: no
     /// children. No data payload — the renderer writes the source bytes
@@ -178,13 +184,13 @@ pub const Tag = enum {
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => true,
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => false,
         };
     }
@@ -247,6 +253,9 @@ pub const Data = union(enum) {
     /// `[[target]]` / `[[target|label]]` wikilink (Markdown extension),
     /// both source slices (trimming narrows the span; no copy).
     wikilink: Wikilink,
+    /// `.task_checkbox`: whether a GFM task list checkbox is checked
+    /// (Markdown extension, docs/TASK-LISTS.md).
+    task_checkbox: TaskCheckbox,
     /// `.list`: the list's type, its bullet character or ordered delimiter,
     /// the ordered start number (1 for bullet lists; the first item's number
     /// for ordered), and the tight/loose flag (docs/BLOCKS-PARSING.md §4:
@@ -404,6 +413,13 @@ pub const Autolink = struct {
 pub const Wikilink = struct {
     target: []const u8,
     label: ?[]const u8 = null,
+};
+
+/// `.task_checkbox` payload: whether the GFM task list checkbox is
+/// checked (`[x]` / `[X]`; `[ ]` is unchecked). The node span covers the
+/// three checkbox bytes (docs/TASK-LISTS.md).
+pub const TaskCheckbox = struct {
+    checked: bool,
 };
 
 /// The payload of a `.list` node (Markdown §5.3). `bullet`/`delimiter`
