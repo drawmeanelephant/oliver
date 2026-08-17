@@ -715,3 +715,12 @@ render-to-buffer path for the future C ABI should use
 `std.Io.Writer.Allocating`). The C header, ownership contract, error
 codes, and example are the module's own contract (docs/C-ABI.md). No
 parser implementation source was consulted.
+
+Session 35 (S3 tested Windows binary) provenance record: no upstream
+specification — the change is CI/release infrastructure over Oliver's
+own shipped CLI surface: the same render/`--version` smoke assertions
+the workflow already ran natively for Linux, now executed on a Windows
+runner against the cross-compiled artifact before publishing. The
+`x86_64-windows` target addition and the `needs: [build,
+smoke-windows]` publish gate are issue #95's spec, not new markup
+behavior. No parser implementation source was consulted.

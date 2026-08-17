@@ -14,10 +14,13 @@
 # old commits; the cross-compile matrix below makes that a naming-only
 # change.
 #
-# The matrix is the four platforms consumers actually run. Windows
-# cross-compiles trivially from Zig but would ship untested from a solo
-# maintainer, so it is deliberately excluded until someone needs it.
-# Everything is built on one ubuntu runner: no per-OS runners required.
+# The matrix is the five platforms consumers actually run. Everything is
+# cross-compiled on one ubuntu runner, but Windows is no longer shipped
+# untrusted: a native smoke-test leg on a windows runner executes the
+# same render/`--version` assertions as the Linux binary against the
+# exact artifact that will be published, and the publish job is gated on
+# `needs: [build, smoke-windows]` — the rolling release never ships a
+# binary CI has not executed.
 
 name: Binaries
 
@@ -31,7 +34,7 @@ permissions:
 
 jobs:
   build:
-    name: Build and publish prebuilt binaries
+    name: Build and cross-compile the release matrix
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -50,9 +53,11 @@ jobs:
       - name: Cross-compile the release matrix
         run: |
           mkdir -p dist
-          for target in x86_64-linux x86_64-macos aarch64-linux aarch64-macos; do
+          for target in x86_64-linux x86_64-macos aarch64-linux aarch64-macos x86_64-windows; do
             arch="${target%-*}"
             os="${target#*-}"
+            exe=""
+            [ "$os" = "windows" ] && exe=".exe"
             echo "==> $target"
             # -Dcommit embeds this exact source commit into the binary;
             # `oliver --version` prints it so a pinned consumer can assert
@@ -60,13 +65,14 @@ jobs:
             zig build -Dtarget="$target" -Doptimize=ReleaseSafe \
               -Dcommit="$GITHUB_SHA" \
               --prefix "/tmp/oliver/$target" >/dev/null
-            cp "/tmp/oliver/$target/bin/oliver" "dist/oliver-$os-$arch"
+            cp "/tmp/oliver/$target/bin/oliver$exe" "dist/oliver-$os-$arch$exe"
           done
 
       # Cheap integrity check before anything is published: the native
       # Linux binary must render a known input byte-for-byte and must
-      # report the exact commit that produced it.
-      - name: Smoke-test the native binary
+      # report the exact commit that produced it. The Windows binary
+      # gets the same assertions, natively, in the smoke-windows job.
+      - name: Smoke-test the native Linux binary
         run: |
           test "$(printf '# Hello *world*\n' | dist/oliver-linux-x86_64 render --from markdown)" = \
             '<h1>Hello <em>world</em></h1>'
@@ -77,6 +83,55 @@ jobs:
         run: |
           (cd dist && sha256sum oliver-*) > sha256sums.txt
 
+      # Hand the built artifacts (including the cross-compiled .exe) to
+      # the smoke and publish jobs, so the bytes that get tested are the
+      # bytes that get published.
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: oliver-dist
+          path: |
+            dist/
+            sha256sums.txt
+          if-no-files-found: error
+
+  # The Windows binary is cross-compiled above, so the only honest
+  # question is whether it *runs*. A windows runner executes the same
+  # render/`--version` assertions natively against the exact artifact
+  # that will be published; the publish job is gated on this leg, so the
+  # "untested" caveat is retired rather than papered over.
+  smoke-windows:
+    name: Smoke-test the native Windows binary
+    runs-on: windows-latest
+    timeout-minutes: 15
+    needs: build
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: oliver-dist
+
+      # `shell: bash` keeps the assertions byte-identical to the Linux
+      # leg; Git Bash on the runner executes the .exe directly.
+      - name: Smoke-test the native Windows binary
+        shell: bash
+        run: |
+          test "$(printf '# Hello *world*\n' | dist/oliver-windows-x86_64.exe render --from markdown)" = \
+            '<h1>Hello <em>world</em></h1>'
+          test "$(dist/oliver-windows-x86_64.exe --version)" = \
+            "oliver 1.0.0 (commit $GITHUB_SHA)"
+
+  publish:
+    name: Publish to the builds release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build, smoke-windows]
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: oliver-dist
+
       # Create the release once; on later runs it already exists and only
       # the assets are replaced (--clobber makes re-runs idempotent).
       - name: Publish to the builds release
@@ -86,6 +141,6 @@ jobs:
           if ! gh release view builds >/dev/null 2>&1; then
             gh release create builds \
               --title "Oliver prebuilt binaries" \
-              --notes "Rolling prebuilt binaries for the current tip of main. Download URL: https://github.com/drawmeanelephant/oliver/releases/download/builds/oliver-<os>-<arch>"
+              --notes "Rolling prebuilt binaries for the current tip of main — linux/macos (x86_64, aarch64) and windows-x86_64, each smoke-tested natively in CI before publishing. Download URL: https://github.com/drawmeanelephant/oliver/releases/download/builds/oliver-<os>-<arch>"
           fi
           gh release upload builds dist/* sha256sums.txt --clobber
