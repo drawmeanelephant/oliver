@@ -64,6 +64,10 @@ pub const RunConfig = struct {
     /// how Markdown raw-HTML leaves and Textile `pre.` verbatim content
     /// are emitted. Render-only, like `--to`.
     raw_html: oliver.html.RawHtmlPolicy = .allowed,
+    /// Diagnostics side-channel (`render --diagnostics json`): serialize
+    /// the parse diagnostics to stderr as a JSON array so stdout stays
+    /// pure HTML. Render-only, like `--to`.
+    diagnostics: bool = false,
     /// Serialize output format (`serialize --json`): dump the typed
     /// Recipe model as a JSON document instead of canonical .cook text.
     /// Serialize-only, like `--to` is render-only.
@@ -96,11 +100,13 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var task_lists = false;
     var frontmatter: ?oliver.frontmatter.Option = null;
     var raw_html: oliver.html.RawHtmlPolicy = .allowed;
+    var diagnostics = false;
     var json = false;
     var saw_to = false;
     var saw_from = false;
     var saw_frontmatter = false;
     var saw_raw_html = false;
+    var saw_diagnostics = false;
     var saw_factor = false;
     var saw_servings = false;
 
@@ -219,6 +225,16 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             } else if (std.mem.eql(u8, value, "toml")) {
                 frontmatter = .toml;
             } else return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--diagnostics")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            // A second `--diagnostics` would contradict the first; reject
+            // duplicates like the other value flags. Only `json` is
+            // currently a valid value; the format is the wire contract.
+            if (saw_diagnostics) return error.Usage;
+            saw_diagnostics = true;
+            if (!std.mem.eql(u8, args[index], "json")) return error.Usage;
+            diagnostics = true;
         } else if (std.mem.eql(u8, arg, "--json")) {
             // A second `--json` would contradict the first; reject
             // duplicates like the other flags (the --from rule).
@@ -253,14 +269,14 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         },
         .serialize => {
             if (!cooklang or saw_to or saw_raw_html or factor_num != null or servings_target != null or
-                ext_flags or frontmatter != null) return error.Usage;
+                ext_flags or frontmatter != null or saw_diagnostics) return error.Usage;
         },
         .menu => {
             if (!cooklang or saw_to or saw_raw_html or factor_num != null or servings_target != null or
-                ext_flags or frontmatter != null or json) return error.Usage;
+                ext_flags or frontmatter != null or saw_diagnostics or json) return error.Usage;
         },
         .scale => {
-            if (!cooklang or saw_to or saw_raw_html or ext_flags or frontmatter != null or json) return error.Usage;
+            if (!cooklang or saw_to or saw_raw_html or ext_flags or frontmatter != null or saw_diagnostics or json) return error.Usage;
             // Scaling needs exactly one mode: factor or servings.
             if ((factor_num == null) == (servings_target == null)) return error.Usage;
         },
@@ -284,6 +300,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .task_lists = task_lists,
         .frontmatter = frontmatter,
         .raw_html = raw_html,
+        .diagnostics = diagnostics,
         .json = json,
     };
 }
@@ -327,9 +344,13 @@ pub fn main(init: std.process.Init) !u8 {
         try input.appendSlice(gpa, buf[0..n]);
     }
 
-    // Render directly to stdout through a buffered writer.
+    // Render directly to stdout through a buffered writer. The
+    // `--diagnostics json` side channel writes to stderr so stdout stays
+    // pure HTML (the consumer never parses a mixed stream).
     var out_buf: [4096]u8 = undefined;
     var out_writer = std.Io.File.stdout().writer(init.io, &out_buf);
+    var err_buf: [4096]u8 = undefined;
+    var err_writer = std.Io.File.stderr().writer(init.io, &err_buf);
 
     if (cfg.cooklang) {
         var result = oliver.cooklang.parse(gpa, input.items, cooklangParseOptions(cfg)) catch |err| {
@@ -373,6 +394,11 @@ pub fn main(init: std.process.Init) !u8 {
                 };
             },
             .render => {
+                if (cfg.diagnostics) {
+                    const json = try diagnosticsJson(gpa, result.diagnostics);
+                    defer gpa.free(json);
+                    err_writer.interface.writeAll(json) catch {};
+                }
                 oliver.cooklang_html.render(gpa, &out_writer.interface, &result.recipe, .{ .profile = profile }) catch |err| {
                     std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
                     return 1;
@@ -380,7 +406,7 @@ pub fn main(init: std.process.Init) !u8 {
             },
         }
     } else {
-        const html_bytes = renderWith(gpa, cfg, input.items) catch |err| {
+        const outcome = renderWithDiag(gpa, cfg, input.items) catch |err| {
             std.debug.print("oliver: {s}\n", .{@errorName(err)});
             if (err == error.RawHtmlNotXmlWellFormed) {
                 std.debug.print(
@@ -398,10 +424,15 @@ pub fn main(init: std.process.Init) !u8 {
             }
             return 1;
         };
-        defer gpa.free(html_bytes);
-        out_writer.interface.writeAll(html_bytes) catch {};
+        defer gpa.free(outcome.html);
+        if (outcome.diagnostics_json) |json| {
+            defer gpa.free(json);
+            err_writer.interface.writeAll(json) catch {};
+        }
+        out_writer.interface.writeAll(outcome.html) catch {};
     }
     out_writer.flush() catch {};
+    err_writer.flush() catch {};
     return 0;
 }
 
@@ -446,6 +477,47 @@ fn renderOptionsFor(cfg: RunConfig) oliver.html.RenderOptions {
         .heading_ids = cfg.heading_ids,
         .raw_html = cfg.raw_html,
     };
+}
+
+/// The render outcome: HTML plus the diagnostics JSON side-channel
+/// (null when `--diagnostics` is off). The JSON is built while the parse
+/// result is alive — diagnostics borrow the document's arena — and the
+/// caller writes it to stderr.
+const RenderOutcome = struct {
+    html: []u8,
+    diagnostics_json: ?[]u8 = null,
+};
+
+/// The wire shape of one diagnostic, mirroring `diagnostic.Diagnostic`.
+/// The consumer parses exactly this (docs/issues/oliver-diagnostics-cli.md
+/// in Solipsist).
+const DiagnosticJson = struct {
+    severity: []const u8,
+    code: []const u8,
+    offset: u32,
+    line: u32,
+    column: u32,
+    span: oliver.source.Span,
+    message: []const u8,
+};
+
+/// Serializes diagnostics as a JSON array (always valid JSON — `[]` when
+/// empty). Written to stderr by `--diagnostics json`.
+fn diagnosticsJson(a: std.mem.Allocator, diags: []const oliver.diagnostic.Diagnostic) ![]u8 {
+    const items = try a.alloc(DiagnosticJson, diags.len);
+    defer a.free(items);
+    for (diags, 0..) |d, i| {
+        items[i] = .{
+            .severity = @tagName(d.severity),
+            .code = d.code,
+            .offset = d.offset,
+            .line = d.line,
+            .column = d.column,
+            .span = d.span,
+            .message = d.message,
+        };
+    }
+    return std.json.Stringify.valueAlloc(a, items, .{});
 }
 
 // ---------------------------------------------------------------------------
@@ -699,15 +771,24 @@ fn shifted(span: oliver.source.Span, offset: u32) oliver.source.Span {
 
 /// Renders a Markdown/Textile document with the extension options from
 /// `cfg`. Returns the owned HTML bytes; the caller frees with the same
-/// allocator.
-fn renderWith(a: std.mem.Allocator, cfg: RunConfig, input: []const u8) ![]u8 {
+/// allocator. Diagnostics are serialized when `cfg.diagnostics` is set.
+fn renderWithDiag(a: std.mem.Allocator, cfg: RunConfig, input: []const u8) !RenderOutcome {
     var result = try oliver.parse(a, input, cfg.dialect.?, markdownParseOptions(cfg));
     defer result.deinit();
+    const json = if (cfg.diagnostics) try diagnosticsJson(a, result.diagnostics) else null;
     var aw = std.Io.Writer.Allocating.init(a);
     defer aw.deinit();
     try oliver.html.render(a, &aw.writer, &result.document, renderOptionsFor(cfg));
     var out = aw.toArrayList();
-    return out.toOwnedSlice(a);
+    return .{ .html = try out.toOwnedSlice(a), .diagnostics_json = json };
+}
+
+/// Test-facing wrapper: renders and returns only the HTML (diagnostics
+/// never requested by the tests that call this).
+fn renderWith(a: std.mem.Allocator, cfg: RunConfig, input: []const u8) ![]u8 {
+    const outcome = try renderWithDiag(a, cfg, input);
+    defer if (outcome.diagnostics_json) |json| a.free(json);
+    return outcome.html;
 }
 
 /// Scales a Cooklang recipe with the `--factor` / `--servings` mode from
@@ -1114,6 +1195,58 @@ test "cli: --frontmatter reaches the cooklang render path" {
     var out2 = aw2.toArrayList();
     defer out2.deinit(allocator);
     try testing.expect(std.mem.indexOf(u8, out2.items, "+++") != null);
+}
+
+test "cli: --diagnostics is a render-only value flag accepting json" {
+    const ok = try parseArgs(&.{ "render", "--from", "markdown", "--diagnostics", "json" });
+    try testing.expect(ok.diagnostics);
+    const ck = try parseArgs(&.{ "render", "--from", "cooklang", "--diagnostics", "json" });
+    try testing.expect(ck.diagnostics);
+
+    // Only `json` is a valid value; missing and duplicate values are usage
+    // errors, and the flag belongs to render only (the --to rule).
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--diagnostics", "text" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--diagnostics" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--diagnostics", "json", "--diagnostics", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--diagnostics", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", "--diagnostics", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", "--diagnostics", "json" }));
+}
+
+test "cli: --diagnostics json serializes parse diagnostics to JSON" {
+    const allocator = std.testing.allocator;
+
+    // Unclosed `---` with --frontmatter yaml: the opener is not front
+    // matter (docs/FRONTMATTER.md), the bytes reach markdown unchanged
+    // (thematic break), and the unclosed-frontmatter warning fires.
+    const cfg = try parseArgs(&.{ "render", "--from", "markdown", "--frontmatter", "yaml", "--diagnostics", "json" });
+    const outcome = try renderWithDiag(allocator, cfg, "---\ntitle: x\n");
+    defer allocator.free(outcome.html);
+    const json = outcome.diagnostics_json orelse return error.TestUnexpectedResult;
+    defer allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "unclosed-frontmatter") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"severity\":\"warning\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"line\":1") != null);
+    // The side channel never disturbs the HTML stream.
+    try testing.expect(std.mem.indexOf(u8, outcome.html, "<hr") != null);
+
+    // Clean input serializes an empty array, still valid JSON.
+    const clean = try parseArgs(&.{ "render", "--from", "markdown", "--diagnostics", "json" });
+    const clean_out = try renderWithDiag(allocator, clean, "# Hi\n");
+    defer allocator.free(clean_out.html);
+    const clean_json = clean_out.diagnostics_json orelse return error.TestUnexpectedResult;
+    defer allocator.free(clean_json);
+    try testing.expectEqualStrings("[]", clean_json);
+}
+
+test "cli: --diagnostics json reaches the cooklang render path" {
+    const allocator = std.testing.allocator;
+    const cfg = try parseArgs(&.{ "render", "--from", "cooklang", "--frontmatter", "yaml", "--diagnostics", "json" });
+    var result = try oliver.cooklang.parse(allocator, "---\n+++\nAdd @salt.\n", cooklangParseOptions(cfg));
+    defer result.deinit();
+    const json = try diagnosticsJson(allocator, result.diagnostics);
+    defer allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "unclosed-frontmatter") != null);
 }
 
 // ---------------------------------------------------------------------------
