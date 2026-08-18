@@ -390,6 +390,26 @@ Contract, verified by tests:
 - **Parser fix carried**: empty front matter (`---\n---`) — the
   zero-payload case — parses correctly (no panic) and round-trips.
 
+### Structured dump: `serialize --json`
+
+`oliver serialize --from cooklang --json` writes the typed `Recipe`
+model as one JSON document to stdout instead of canonical `.cook` text
+(canonical text stays the default). The JSON mirrors the model exactly
+— every block/part carries its `kind` discriminator, its values, and
+exact `source.Span`s as half-open byte ranges into the **original
+input** (block/part spans are rebased past any front matter, so the
+whole document is in one coordinate system) — with nulls emitted as
+null and `{ "frontmatter": null, "metadata": null, "blocks": [] }`
+for an empty recipe. Sections flatten to header objects (`name`/
+`name_span`/`span`) with their blocks following at the top level in
+source order, and recipe references (`@./path`) are kept as literal
+text with their span (the pane renders text, not tokens). Parsed front
+matter metadata serializes as `{ "entries": [...] }` when a consumer
+parses with `--frontmatter`; the CLI's serialize command keeps its
+canonical behavior otherwise. This is the wire contract consumed by
+Solipsist's COMPOSE-3 recipe pane (issue #101); the shape is pinned by
+the CLI tests in `src/main.zig`.
+
 ## 11. Scaling (pure semantic operation)
 
 `src/cooklang_scale.zig` is two surfaces on one exact-rational grammar:

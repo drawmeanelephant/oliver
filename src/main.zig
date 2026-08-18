@@ -4,6 +4,7 @@
 //!     oliver render    --from textile  [--to html|xhtml] < document.textile
 //!     oliver render    --from cooklang [--to html|xhtml] < recipe.cook
 //!     oliver serialize --from cooklang < recipe.cook > canonical.cook
+//!     oliver serialize --from cooklang --json < recipe.cook  # typed model dump
 //!     oliver scale --from cooklang --factor 2 < recipe.cook > doubled.cook
 //!     oliver scale --from cooklang --factor 3/2 < recipe.cook
 //!     oliver scale --from cooklang --servings 4 < recipe.cook
@@ -63,6 +64,10 @@ pub const RunConfig = struct {
     /// how Markdown raw-HTML leaves and Textile `pre.` verbatim content
     /// are emitted. Render-only, like `--to`.
     raw_html: oliver.html.RawHtmlPolicy = .allowed,
+    /// Serialize output format (`serialize --json`): dump the typed
+    /// Recipe model as a JSON document instead of canonical .cook text.
+    /// Serialize-only, like `--to` is render-only.
+    json: bool = false,
 };
 
 /// Parses the argument vector (excluding the program name) into a
@@ -91,6 +96,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var task_lists = false;
     var frontmatter: ?oliver.frontmatter.Option = null;
     var raw_html: oliver.html.RawHtmlPolicy = .allowed;
+    var json = false;
     var saw_to = false;
     var saw_from = false;
     var saw_frontmatter = false;
@@ -213,6 +219,11 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             } else if (std.mem.eql(u8, value, "toml")) {
                 frontmatter = .toml;
             } else return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            // A second `--json` would contradict the first; reject
+            // duplicates like the other flags (the --from rule).
+            if (json) return error.Usage;
+            json = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.Help;
         } else if (std.mem.eql(u8, arg, "--version")) {
@@ -235,17 +246,21 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         task_lists;
     switch (cmd) {
         .render => {
-            if (factor_num != null or servings_target != null) return error.Usage;
+            if (factor_num != null or servings_target != null or json) return error.Usage;
             // The Markdown extensions cannot apply to Textile or
             // Cooklang; rejecting them keeps the strict scoping rule.
             if (ext_flags and dialect != .markdown) return error.Usage;
         },
-        .serialize, .menu => {
+        .serialize => {
             if (!cooklang or saw_to or saw_raw_html or factor_num != null or servings_target != null or
                 ext_flags or frontmatter != null) return error.Usage;
         },
+        .menu => {
+            if (!cooklang or saw_to or saw_raw_html or factor_num != null or servings_target != null or
+                ext_flags or frontmatter != null or json) return error.Usage;
+        },
         .scale => {
-            if (!cooklang or saw_to or saw_raw_html or ext_flags or frontmatter != null) return error.Usage;
+            if (!cooklang or saw_to or saw_raw_html or ext_flags or frontmatter != null or json) return error.Usage;
             // Scaling needs exactly one mode: factor or servings.
             if ((factor_num == null) == (servings_target == null)) return error.Usage;
         },
@@ -269,6 +284,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .task_lists = task_lists,
         .frontmatter = frontmatter,
         .raw_html = raw_html,
+        .json = json,
     };
 }
 
@@ -323,10 +339,19 @@ pub fn main(init: std.process.Init) !u8 {
         defer result.deinit();
         switch (cfg.command) {
             .serialize => {
-                oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
-                    std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
-                    return 1;
-                };
+                if (cfg.json) {
+                    const json = recipeJson(gpa, &result.recipe) catch |err| {
+                        std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
+                        return 1;
+                    };
+                    defer gpa.free(json);
+                    out_writer.interface.writeAll(json) catch {};
+                } else {
+                    oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
+                        std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
+                        return 1;
+                    };
+                }
             },
             .scale => {
                 const scaled = scaleWith(gpa, input.items, cfg) catch |err| {
@@ -423,6 +448,255 @@ fn renderOptionsFor(cfg: RunConfig) oliver.html.RenderOptions {
     };
 }
 
+// ---------------------------------------------------------------------------
+// The `serialize --json` typed-model dump (issue #101).
+// ---------------------------------------------------------------------------
+
+/// The wire shape of the typed Recipe model — the COMPOSE-3 contract the
+/// Solipsist compose pane decodes. Every value mirrors `cooklang.Recipe`
+/// exactly (spans included, nulls emitted as null), with two deliberate
+/// flattenings pinned by the issue's contract:
+/// - Blocks carry a `kind` discriminator; sections emit only their header
+///   (`name`/`name_span`/`span`) and their blocks follow at the top level
+///   in source order, so the pane renders one linear sequence.
+/// - Recipe references (`@./path`) have no typed part in the contract;
+///   the token is kept as literal text with its span (the pane renders
+///   text, not tokens).
+const RecipeJson = struct {
+    frontmatter: ?FrontmatterJson,
+    metadata: ?oliver.frontmatter.Metadata,
+    blocks: []BlockJson,
+};
+
+const FrontmatterJson = struct {
+    raw: []const u8,
+    span: oliver.source.Span,
+};
+
+const BlockJson = union(enum) {
+    step: StepJson,
+    section: SectionJson,
+    note: NoteJson,
+
+    pub fn jsonStringify(self: BlockJson, out: anytype) !void {
+        switch (self) {
+            .step => |s| try out.write(s),
+            .section => |s| try out.write(s),
+            .note => |n| try out.write(n),
+        }
+    }
+};
+
+const StepJson = struct {
+    kind: []const u8 = "step",
+    span: oliver.source.Span,
+    parts: []PartJson,
+};
+
+const SectionJson = struct {
+    kind: []const u8 = "section",
+    name: []const u8,
+    name_span: oliver.source.Span,
+    span: oliver.source.Span,
+};
+
+const NoteJson = struct {
+    kind: []const u8 = "note",
+    text: []const u8,
+    span: oliver.source.Span,
+};
+
+const PartJson = union(enum) {
+    text: TextJson,
+    ingredient: IngredientJson,
+    cookware: CookwareJson,
+    timer: TimerJson,
+    line_break: LineBreakJson,
+
+    pub fn jsonStringify(self: PartJson, out: anytype) !void {
+        switch (self) {
+            .text => |t| try out.write(t),
+            .ingredient => |ig| try out.write(ig),
+            .cookware => |cw| try out.write(cw),
+            .timer => |tm| try out.write(tm),
+            .line_break => |lb| try out.write(lb),
+        }
+    }
+};
+
+const TextJson = struct {
+    kind: []const u8 = "text",
+    text: []const u8,
+    span: oliver.source.Span,
+};
+
+const IngredientJson = struct {
+    kind: []const u8 = "ingredient",
+    name: []const u8,
+    name_span: oliver.source.Span,
+    quantity: ?[]const u8,
+    quantity_span: oliver.source.Span,
+    units: ?[]const u8,
+    units_span: oliver.source.Span,
+    preparation: ?[]const u8,
+    span: oliver.source.Span,
+};
+
+const CookwareJson = struct {
+    kind: []const u8 = "cookware",
+    name: []const u8,
+    name_span: oliver.source.Span,
+    quantity: ?[]const u8,
+    quantity_span: oliver.source.Span,
+    span: oliver.source.Span,
+};
+
+const TimerJson = struct {
+    kind: []const u8 = "timer",
+    name: []const u8,
+    name_span: oliver.source.Span,
+    quantity: ?[]const u8,
+    quantity_span: oliver.source.Span,
+    units: ?[]const u8,
+    units_span: oliver.source.Span,
+    span: oliver.source.Span,
+};
+
+const LineBreakJson = struct {
+    kind: []const u8 = "line_break",
+    span: oliver.source.Span,
+};
+
+/// Serializes the typed Recipe model as a JSON document (always valid
+/// JSON — the empty recipe is `{"frontmatter":null,"metadata":null,
+/// "blocks":[]}`). The wire types borrow the recipe (and its arena), so
+/// the caller must keep the parse result alive while the JSON is built.
+/// Returns owned bytes; the caller frees with the same allocator.
+fn recipeJson(a: std.mem.Allocator, recipe: *const oliver.cooklang.Recipe) ![]u8 {
+    // Block/part spans are relative to the front matter-stripped body the
+    // parser rebound `recipe.source` to; rebase them into the original
+    // input so every span in the document is in one coordinate system
+    // (the pane holds the original bytes). `recipe.frontmatter.span` is
+    // already input-relative, and the body starts exactly at its end.
+    const body_offset: u32 = if (recipe.frontmatter) |fm| fm.span.end else 0;
+
+    var blocks = std.ArrayList(BlockJson).empty;
+    defer blocks.deinit(a);
+    // One owned parts slice per step; the wire types only need to live
+    // through Stringify, so they are freed as soon as the JSON is built.
+    var owned_parts = std.ArrayList([]PartJson).empty;
+    defer {
+        for (owned_parts.items) |p| a.free(p);
+        owned_parts.deinit(a);
+    }
+    try appendBlocksJson(a, &blocks, &owned_parts, recipe.blocks, body_offset, recipe.source.bytes);
+
+    const doc = RecipeJson{
+        .frontmatter = if (recipe.frontmatter) |fm| .{ .raw = fm.raw, .span = fm.span } else null,
+        .metadata = recipe.metadata,
+        .blocks = try blocks.toOwnedSlice(a),
+    };
+    defer a.free(doc.blocks);
+    return std.json.Stringify.valueAlloc(a, doc, .{});
+}
+
+/// Appends `blocks` as JSON blocks, recursing through sections: a section
+/// emits its header object and then its blocks continue at the same level
+/// (the contract's flat, source-ordered sequence). `offset` is the body
+/// start in input coordinates; `bytes` is the body for literal slices.
+/// Each step's parts slice is recorded in `owned_parts` so the caller can
+/// free it once the JSON document is materialized.
+fn appendBlocksJson(
+    a: std.mem.Allocator,
+    out: *std.ArrayList(BlockJson),
+    owned_parts: *std.ArrayList([]PartJson),
+    blocks: []const oliver.cooklang.Block,
+    offset: u32,
+    bytes: []const u8,
+) !void {
+    for (blocks) |block| {
+        switch (block) {
+            .step => |step| {
+                var parts = std.ArrayList(PartJson).empty;
+                defer parts.deinit(a);
+                for (step.parts) |part| {
+                    switch (part) {
+                        .text => |t| try parts.append(a, .{ .text = .{
+                            .text = t.text,
+                            .span = shifted(t.span, offset),
+                        } }),
+                        .line_break => |lb| try parts.append(a, .{ .line_break = .{ .span = shifted(lb, offset) } }),
+                        .ingredient => |ig| {
+                            if (ig.is_recipe_reference) {
+                                // The contract has no recipe-reference
+                                // kind: the pane renders the token as
+                                // literal text (issue #101).
+                                try parts.append(a, .{ .text = .{
+                                    .text = bytes[ig.span.start..ig.span.end],
+                                    .span = shifted(ig.span, offset),
+                                } });
+                            } else {
+                                try parts.append(a, .{ .ingredient = .{
+                                    .name = ig.name,
+                                    .name_span = shifted(ig.name_span, offset),
+                                    .quantity = ig.quantity,
+                                    .quantity_span = shifted(ig.quantity_span, offset),
+                                    .units = ig.units,
+                                    .units_span = shifted(ig.units_span, offset),
+                                    .preparation = ig.preparation,
+                                    .span = shifted(ig.span, offset),
+                                } });
+                            }
+                        },
+                        .cookware => |cw| try parts.append(a, .{ .cookware = .{
+                            .name = cw.name,
+                            .name_span = shifted(cw.name_span, offset),
+                            .quantity = cw.quantity,
+                            .quantity_span = shifted(cw.quantity_span, offset),
+                            .span = shifted(cw.span, offset),
+                        } }),
+                        .timer => |tm| try parts.append(a, .{ .timer = .{
+                            .name = tm.name,
+                            .name_span = shifted(tm.name_span, offset),
+                            .quantity = tm.quantity,
+                            .quantity_span = shifted(tm.quantity_span, offset),
+                            .units = tm.units,
+                            .units_span = shifted(tm.units_span, offset),
+                            .span = shifted(tm.span, offset),
+                        } }),
+                    }
+                }
+                const parts_slice = try parts.toOwnedSlice(a);
+                try owned_parts.append(a, parts_slice);
+                try out.append(a, .{ .step = .{
+                    .span = shifted(step.span, offset),
+                    .parts = parts_slice,
+                } });
+            },
+            .section => |sec| {
+                try out.append(a, .{ .section = .{
+                    .name = sec.name,
+                    .name_span = shifted(sec.name_span, offset),
+                    .span = shifted(sec.span, offset),
+                } });
+                try appendBlocksJson(a, out, owned_parts, sec.blocks, offset, bytes);
+            },
+            .note => |note| try out.append(a, .{ .note = .{
+                .text = note.text,
+                .span = shifted(note.span, offset),
+            } }),
+        }
+    }
+}
+
+/// Rebased into the original input coordinate system (`offset` is the
+/// body start). The parser's spans are body-relative, so every span gets
+/// the body offset added; the bound `input.len <= maxInt(u32)` keeps the
+/// addition overflow-free.
+fn shifted(span: oliver.source.Span, offset: u32) oliver.source.Span {
+    return .{ .start = span.start + offset, .end = span.end + offset };
+}
+
 /// Renders a Markdown/Textile document with the extension options from
 /// `cfg`. Returns the owned HTML bytes; the caller frees with the same
 /// allocator.
@@ -459,14 +733,15 @@ fn scaleWith(a: std.mem.Allocator, input: []const u8, cfg: RunConfig) ![]u8 {
 fn printUsage() void {
     std.debug.print(
         \\usage: oliver render --from <markdown|textile|cooklang> [--to <html|xhtml>]
-        \\       oliver serialize --from cooklang
+        \\       oliver serialize --from cooklang [--json]
         \\       oliver scale --from cooklang (--factor <scalable> | --servings <n>)
         \\       oliver menu --from cooklang
         \\       oliver --version
         \\
         \\Reads a document from stdin and writes rendered HTML to stdout
         \\(XHTML fragment with --to xhtml). serialize/scale write canonical
-        \\Cooklang text; menu writes the day/meal text dump. --version prints
+        \\Cooklang text (serialize --json dumps the typed Recipe model as
+        \\JSON instead); menu writes the day/meal text dump. --version prints
         \\the version and the embedded source commit (CI builds).
         \\scale --factor accepts the same scalable quantity forms as amounts
         \\(2, 1/2, 1.5, 1 1/2; quote values containing spaces).
@@ -839,4 +1114,147 @@ test "cli: --frontmatter reaches the cooklang render path" {
     var out2 = aw2.toArrayList();
     defer out2.deinit(allocator);
     try testing.expect(std.mem.indexOf(u8, out2.items, "+++") != null);
+}
+
+// ---------------------------------------------------------------------------
+// `serialize --json` tests (issue #101).
+// ---------------------------------------------------------------------------
+
+/// Parses `input` and returns the owned JSON dump of the typed model.
+fn serializeJsonT(allocator: std.mem.Allocator, input: []const u8, options: oliver.cooklang.ParseOptions) ![]u8 {
+    var result = try oliver.cooklang.parse(allocator, input, options);
+    defer result.deinit();
+    return recipeJson(allocator, &result.recipe);
+}
+
+test "cli: --json is a serialize-only value-less flag" {
+    const ok = try parseArgs(&.{ "serialize", "--from", "cooklang", "--json" });
+    try testing.expect(ok.json);
+    try testing.expectEqual(Command.serialize, ok.command);
+
+    // A second `--json` would contradict the first (the --from rule).
+    try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--json", "--json" }));
+
+    // Serialize-only: rejected on render, scale, and menu (the --to rule).
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "cooklang", "--json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", "--json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", "--json" }));
+}
+
+test "cli: serialize --json dumps an empty recipe" {
+    const allocator = std.testing.allocator;
+    const json = try serializeJsonT(allocator, "", .{});
+    defer allocator.free(json);
+    try testing.expectEqualStrings("{\"frontmatter\":null,\"metadata\":null,\"blocks\":[]}", json);
+}
+
+test "cli: serialize --json dumps the typed model for a representative recipe" {
+    const allocator = std.testing.allocator;
+    // A step with an ingredient (quantity+units), cookware, and a timer;
+    // a section whose blocks follow it; a note — the contract's block
+    // kinds, with the section flattened to a header.
+    const input = "Add @ground black pepper{2%g} and #pan{2}, then ~{25%minutes}.\n" ++
+        "= Sauce\n" ++
+        "Mix @cheese{100%g}(grated).\n" ++
+        "\n" ++
+        "> keep it moving\n";
+    const json = try serializeJsonT(allocator, input, .{});
+    defer allocator.free(json);
+
+    // Step parts carry their kind, values, and exact spans.
+    try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"step\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"ingredient\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"name\":\"ground black pepper\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"name_span\":{\"start\":5,\"end\":24}") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"quantity\":\"2\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"quantity_span\":{\"start\":25,\"end\":26}") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"units\":\"g\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"units_span\":{\"start\":27,\"end\":28}") != null);
+    // Nulls are emitted as null, per the contract.
+    try testing.expect(std.mem.indexOf(u8, json, "\"preparation\":null") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"span\":{\"start\":4,\"end\":29}") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"cookware\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"name\":\"pan\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"timer\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"units\":\"minutes\"") != null);
+
+    // Sections are headers; the note carries its text.
+    try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"section\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"name\":\"Sauce\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"name_span\":{\"start\":65,\"end\":70}") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"note\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"text\":\"keep it moving\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"preparation\":\"grated\"") != null);
+    // The section's content follows the header at the top level (source
+    // order): the note appears after the section object.
+    const sec = std.mem.indexOf(u8, json, "\"kind\":\"section\"").?;
+    const note = std.mem.indexOf(u8, json, "\"kind\":\"note\"").?;
+    try testing.expect(sec < note);
+}
+
+test "cli: serialize --json rebases spans into the original source" {
+    const allocator = std.testing.allocator;
+    // Front matter is stripped before parsing, so block/part spans are
+    // body-relative; the dump must rebase them so every span is a half-
+    // open byte range into the original input (frontmatter ends at 17,
+    // the step starts at 17).
+    const input = "---\ntitle: x\n---\nAdd @salt.\n";
+    const json = try serializeJsonT(allocator, input, .{});
+    defer allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "\"raw\":\"title: x\\n\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"span\":{\"start\":0,\"end\":17}") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"span\":{\"start\":17,\"end\":27}") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"name_span\":{\"start\":22,\"end\":26}") != null);
+    // Braces-less tokens keep null quantity/units with their (empty) spans.
+    try testing.expect(std.mem.indexOf(u8, json, "\"quantity\":null") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"quantity_span\":{\"start\":26,\"end\":26}") != null);
+}
+
+test "cli: serialize --json dumps parsed front matter metadata" {
+    const allocator = std.testing.allocator;
+    const input = "---\ntitle: x\nservings: 2\n---\nAdd @salt.\n";
+    const json = try serializeJsonT(allocator, input, .{ .frontmatter = .yaml });
+    defer allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "\"metadata\":{\"entries\":[" ++
+        "{\"key\":\"title\",\"value\":{\"scalar\":\"x\"}}," ++
+        "{\"key\":\"servings\",\"value\":{\"scalar\":\"2\"}}]}") != null);
+
+    // Without --frontmatter yaml, the payload stays raw and metadata is
+    // null (the same input, default options).
+    const raw = try serializeJsonT(allocator, input, .{});
+    defer allocator.free(raw);
+    try testing.expect(std.mem.indexOf(u8, raw, "\"metadata\":null") != null);
+}
+
+test "cli: serialize --json keeps recipe references as literal text" {
+    const allocator = std.testing.allocator;
+    const input = "Pour over with @./sauces/Hollandaise{150%g}.\n";
+    const json = try serializeJsonT(allocator, input, .{});
+    defer allocator.free(json);
+    // The contract has no recipe-reference part kind: the token is text
+    // with its exact span, and no ingredient is emitted for it.
+    try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"text\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"text\":\"@./sauces/Hollandaise{150%g}\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"span\":{\"start\":15,\"end\":43}") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"ingredient\"") == null);
+}
+
+test "cli: serialize --json leaves canonical .cook output untouched" {
+    const allocator = std.testing.allocator;
+    const input = "Mix @flour{200%g} and @water{100%ml}.\n";
+    var result = try oliver.cooklang.parse(allocator, input, .{});
+    defer result.deinit();
+    // Dumping the JSON first is read-only: the canonical text must match
+    // the plain serialize output byte for byte.
+    const json = try recipeJson(allocator, &result.recipe);
+    defer allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "\"quantity\":\"200\"") != null);
+
+    var aw = std.Io.Writer.Allocating.init(allocator);
+    defer aw.deinit();
+    try oliver.cooklang_serialize.serialize(allocator, &aw.writer, &result.recipe, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(allocator);
+    try testing.expectEqualStrings("Mix @flour{200%g} and @water{100%ml}.\n", out.items);
 }

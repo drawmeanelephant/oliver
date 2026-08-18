@@ -343,6 +343,7 @@ oliver render --from markdown --task-lists < document.md  # GFM checkboxes on li
 oliver render --from markdown --raw-html escaped < document.md  # escape raw HTML (allowed|escaped|rejected)
 oliver render --from markdown --frontmatter yaml < document.md  # --frontmatter works on any frontend
 oliver serialize --from cooklang < recipe.cook   # canonical .cook
+oliver serialize --from cooklang --json < recipe.cook  # typed Recipe model as JSON
 oliver scale --from cooklang --factor 2 < recipe.cook   # scaled .cook
 oliver scale --from cooklang --factor 1.5 < recipe.cook # decimals and mixed work too
 oliver scale --from cooklang --servings 4 < recipe.cook  # via servings
