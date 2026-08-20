@@ -184,7 +184,7 @@ emit them in a fixed documented order.
 | ATX/Setext heading | `hN.` heading | `.heading` (level) |
 | (no Markdown equivalent) | Textile block attributes `p(...).`, `hN{...}.`, `bq>.` (`{style}`, `(class#id)`, `[lang]`, alignment, padding) | ordered `attrs` (style/class/id/lang) on `.paragraph` / `.heading` / `.block_quote` (docs/TEXTILE-PARITY.md §8) |
 | (no Markdown equivalent) | Textile `bq.:URL` block-quote citation | `cite` URL on `.block_quote` (docs/TEXTILE-PARITY.md §12) |
-| thematic break | (planned) | `.thematic_break` |
+| thematic break | — | `.thematic_break` |
 | fenced code block | `bc.` / `pre.` | `.code_block` (owned content/info; `pre.` sets the verbatim `escape` flag, docs/TEXTILE-PARITY.md §9) |
 | HTML block (Markdown §4.6 types 6/7) | (Textile has no HTML blocks; literal) | `.html_block` (owned verbatim content) |
 | `emphasis` / `strong` | Textile `_x_` / `*x*` | `.emphasis` / `.strong` |
@@ -203,7 +203,7 @@ emit them in a fixed documented order.
 | GFM pipe table (GFM §4.10) | Textile `|a|b|` tables (`|_. header|`, `table<mods>.`, colspan/rowspan, alignment propagation) | `.table` → `.table_row` → `.table_cell` (alignment on the table, header/colspan/rowspan/attrs on the cell). Deliberate render differences (docs/TEXTILE-PARITY.md §6): GFM emits `<thead>`/`<tbody>` sections and `align` attributes and trims cell whitespace; Textile emits flat rows with `style` attributes and preserves cell whitespace verbatim |
 | plain text | plain text | `.text` |
 | newline in paragraph | newline in paragraph | `.soft_break` (MD) / `.hard_break` (Textile) |
-| `*x*` / `**x**` | `_x_` / `*x*` (Textile, planned) | `.emphasis` / `.strong` |
+| `*x*` / `**x**` | `_x_` / `*x*` | `.emphasis` / `.strong` |
 
 Front matter is **not part of the document IR**: the shared pre-pass
 (`src/frontmatter.zig`) strips the block before dispatch and exposes the

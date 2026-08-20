@@ -26,7 +26,7 @@ The documentation is written for two audiences:
 | CommonMark 0.31.2 corpus | **652/652**, 0 mismatches |
 | Cooklang canonical corpus | **60/60** |
 | Textile fixture wall | fully green |
-| Test suite | **384/384** |
+| Test suite | **394/394** |
 
 Both conformance gates run in CI on every push/PR
 (`zig build spec-conformance -- spec.txt --gate` and
