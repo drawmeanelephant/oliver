@@ -213,7 +213,7 @@ zig build spec-conformance -- spec.txt
 | **Total** | **652/652** |
 
 ```bash
-zig build test    # run all tests (384 tests)
+zig build test    # run all tests (394 tests)
 zig build         # build the static library and CLI into zig-out/
 zig build cooklang-conformance   # Cooklang canonical corpus (vendored)
 ```
