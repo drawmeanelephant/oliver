@@ -18,11 +18,14 @@
 const std = @import("std");
 const oliver = @import("oliver");
 const meta = @import("meta.zig");
+const wrap = @import("wrap.zig");
 
 comptime {
-    // Force analysis so `zig build test` runs `src/meta.zig` tests via the
-    // CLI test binary (like `src/oliver.zig` forces cooklang modules).
+    // Force analysis so `zig build test` runs `src/meta.zig` and
+    // `src/wrap.zig` tests via the CLI test binary (like
+    // `src/oliver.zig` forces cooklang modules).
     _ = meta;
+    _ = wrap;
 }
 
 // Injected by build.zig: the package version and the source commit SHA
@@ -39,6 +42,7 @@ pub const Command = enum {
     scale,
     menu,
     meta,
+    wrap,
 };
 
 /// The full command-line configuration, decided by `parseArgs`. `command`
@@ -86,6 +90,12 @@ pub const RunConfig = struct {
     /// (keeps the wire extensible). Meta-only, like `json` is
     /// serialize-only.
     meta_format: bool = false,
+    /// Wrap command paths: template, meta-json, assets-root, body.
+    /// All four are required for `wrap`; unused by other commands.
+    wrap_template: ?[]const u8 = null,
+    wrap_meta_json: ?[]const u8 = null,
+    wrap_assets_root: ?[]const u8 = null,
+    wrap_body: ?[]const u8 = null,
 };
 
 /// Parses the argument vector (excluding the program name) into a
@@ -125,6 +135,14 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var saw_factor = false;
     var saw_servings = false;
     var saw_format = false;
+    var wrap_template: ?[]const u8 = null;
+    var wrap_meta_json: ?[]const u8 = null;
+    var wrap_assets_root: ?[]const u8 = null;
+    var wrap_body: ?[]const u8 = null;
+    var saw_wrap_template = false;
+    var saw_wrap_meta_json = false;
+    var saw_wrap_assets_root = false;
+    var saw_wrap_body = false;
 
     var index: usize = 0;
     while (index < args.len) : (index += 1) {
@@ -266,6 +284,30 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             saw_format = true;
             if (!std.mem.eql(u8, args[index], "json")) return error.Usage;
             meta_format = true;
+        } else if (std.mem.eql(u8, arg, "--template")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_wrap_template) return error.Usage;
+            saw_wrap_template = true;
+            wrap_template = args[index];
+        } else if (std.mem.eql(u8, arg, "--meta-json")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_wrap_meta_json) return error.Usage;
+            saw_wrap_meta_json = true;
+            wrap_meta_json = args[index];
+        } else if (std.mem.eql(u8, arg, "--assets-root")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_wrap_assets_root) return error.Usage;
+            saw_wrap_assets_root = true;
+            wrap_assets_root = args[index];
+        } else if (std.mem.eql(u8, arg, "--body")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_wrap_body) return error.Usage;
+            saw_wrap_body = true;
+            wrap_body = args[index];
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.Help;
         } else if (std.mem.eql(u8, arg, "--version")) {
@@ -274,9 +316,11 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     }
 
     // Exactly one subcommand names the operation, and every command
-    // needs an input frontend.
+    // needs an input frontend — except `wrap`, which reads files.
     const cmd = command orelse return error.Usage;
-    if (!cooklang and dialect == null) return error.Usage;
+    if (cmd != .wrap) {
+        if (!cooklang and dialect == null) return error.Usage;
+    }
     // Flags must belong to the command they are given with: `--to`
     // selects the renderer profile (render only), `--factor` /
     // `--servings` configure scaling (scale only), serialize/scale/menu
@@ -312,9 +356,18 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         },
         .meta => {
             if (saw_to or saw_raw_html or factor_num != null or servings_target != null or
-                ext_flags or frontmatter != null or saw_diagnostics or json) return error.Usage;
+                ext_flags or frontmatter != null or saw_diagnostics or json or
+                saw_wrap_template or saw_wrap_meta_json or saw_wrap_assets_root or saw_wrap_body) return error.Usage;
             // Meta requires --from (any frontend) and --format json.
             if (!meta_format) return error.Usage;
+        },
+        .wrap => {
+            // Wrap has its own flag set: --template, --meta-json,
+            // --assets-root, --body (all required). No other flags.
+            if (saw_from or saw_to or saw_raw_html or saw_frontmatter or
+                saw_diagnostics or saw_format or json or meta_format or
+                factor_num != null or servings_target != null or ext_flags) return error.Usage;
+            if (!saw_wrap_template or !saw_wrap_meta_json or !saw_wrap_assets_root or !saw_wrap_body) return error.Usage;
         },
     }
     return .{
@@ -339,6 +392,10 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .diagnostics = diagnostics,
         .json = json,
         .meta_format = meta_format,
+        .wrap_template = wrap_template,
+        .wrap_meta_json = wrap_meta_json,
+        .wrap_assets_root = wrap_assets_root,
+        .wrap_body = wrap_body,
     };
 }
 
@@ -367,6 +424,21 @@ pub fn main(init: std.process.Init) !u8 {
     };
     const profile = cfg.profile;
 
+    // Render directly to stdout through a buffered writer. The
+    // `--diagnostics json` side channel writes to stderr so stdout stays
+    // pure HTML (the consumer never parses a mixed stream).
+    var out_buf: [4096]u8 = undefined;
+    var out_writer = std.Io.File.stdout().writer(init.io, &out_buf);
+    var err_buf: [4096]u8 = undefined;
+    var err_writer = std.Io.File.stderr().writer(init.io, &err_buf);
+
+    // `oliver wrap` reads three files (template, meta-json, body) from
+    // disk and writes the resolved template to stdout. It does not use
+    // stdin.
+    if (cfg.command == .wrap) {
+        return wrapDispatch(gpa, init.io, cfg, &out_writer, &err_writer);
+    }
+
     // `oliver meta` is filesystem-free and dialect-agnostic at the wire
     // level (YAML-only for S1, 7-string JSON). It bypasses the dialect
     // dispatch so `meta` works uniformly for markdown/textile/cooklang.
@@ -384,14 +456,6 @@ pub fn main(init: std.process.Init) !u8 {
         if (n == 0) break;
         try input.appendSlice(gpa, buf[0..n]);
     }
-
-    // Render directly to stdout through a buffered writer. The
-    // `--diagnostics json` side channel writes to stderr so stdout stays
-    // pure HTML (the consumer never parses a mixed stream).
-    var out_buf: [4096]u8 = undefined;
-    var out_writer = std.Io.File.stdout().writer(init.io, &out_buf);
-    var err_buf: [4096]u8 = undefined;
-    var err_writer = std.Io.File.stderr().writer(init.io, &err_buf);
 
     // `meta` bypasses the dialect dispatch — it always projects the same
     // YAML frontmatter shape regardless of --from (markdown/textile/cooklang).
@@ -459,7 +523,7 @@ pub fn main(init: std.process.Init) !u8 {
                     return 1;
                 };
             },
-            .meta => unreachable,
+            .meta, .wrap => unreachable,
         }
     } else {
         const outcome = renderWithDiag(gpa, cfg, input.items) catch |err| {
@@ -874,6 +938,7 @@ fn printUsage() void {
         \\       oliver scale --from cooklang (--factor <scalable> | --servings <n>)
         \\       oliver menu --from cooklang
         \\       oliver meta --from <markdown|textile|cooklang> --format json
+        \\       oliver wrap --template <file> --meta-json <json> --assets-root <prefix> --body <file>
         \\       oliver --version
         \\
         \\Reads a document from stdin and writes rendered HTML to stdout
@@ -881,8 +946,12 @@ fn printUsage() void {
         \\Cooklang text (serialize --json dumps the typed Recipe model as
         \\JSON instead); menu writes the day/meal text dump. meta reads a
         \\document from stdin and writes the 7-field frontmatter JSON to
-        \\stdout (--format json only). --version prints the version and the
-        \\embedded source commit (CI builds).
+        \\stdout (--format json only). wrap reads --template, --meta-json,
+        \\--body files and --assets-root prefix, resolves the 7-token
+        \\template dialect ($title$/$description$/$author$/$date$/$palette$
+        \\/$assets_root$/$body$, html-escaped meta + literal assets/body),
+        \\and writes the result to stdout. --version prints the version and
+        \\the embedded source commit (CI builds).
         \\scale --factor accepts the same scalable quantity forms as amounts
         \\(2, 1/2, 1.5, 1 1/2; quote values containing spaces).
         \\
@@ -902,6 +971,66 @@ fn printUsage() void {
 fn usage() u8 {
     printUsage();
     return 1;
+}
+
+// ---------------------------------------------------------------------------
+// The `wrap` command dispatch: reads three files from disk, resolves the
+// template dialect, and writes the result to stdout.
+// ---------------------------------------------------------------------------
+
+/// Reads a file into allocated memory. Returns the owned bytes; the caller
+/// frees with the same allocator. The file is closed before return.
+fn readFileAlloc(gpa: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    // Use a streaming reader to fill a growing buffer.
+    var buf = std.ArrayList(u8).empty;
+    errdefer buf.deinit(gpa);
+    var tmp: [8192]u8 = undefined;
+    while (true) {
+        const n = file.readStreaming(io, &.{&tmp}) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
+        if (n == 0) break;
+        try buf.appendSlice(gpa, tmp[0..n]);
+    }
+    return try buf.toOwnedSlice(gpa);
+}
+
+/// Dispatches the `oliver wrap` command: reads --template, --meta-json,
+/// --body files and --assets-root from disk, resolves the template dialect,
+/// and writes the result to stdout. Returns the exit code (0 = success).
+fn wrapDispatch(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    cfg: RunConfig,
+    out_writer: anytype,
+    err_writer: anytype,
+) !u8 {
+    _ = err_writer;
+    const meta_json = readFileAlloc(gpa, io, cfg.wrap_meta_json.?) catch |err| {
+        std.debug.print("oliver wrap: cannot read --meta-json {s}: {s}\n", .{ cfg.wrap_meta_json.?, @errorName(err) });
+        return 1;
+    };
+    defer gpa.free(meta_json);
+    const template = readFileAlloc(gpa, io, cfg.wrap_template.?) catch |err| {
+        std.debug.print("oliver wrap: cannot read --template {s}: {s}\n", .{ cfg.wrap_template.?, @errorName(err) });
+        return 1;
+    };
+    defer gpa.free(template);
+    const body = readFileAlloc(gpa, io, cfg.wrap_body.?) catch |err| {
+        std.debug.print("oliver wrap: cannot read --body {s}: {s}\n", .{ cfg.wrap_body.?, @errorName(err) });
+        return 1;
+    };
+    defer gpa.free(body);
+
+    wrap.wrap(gpa, meta_json, template, body, cfg.wrap_assets_root.?, &out_writer.interface) catch |err| {
+        std.debug.print("oliver wrap: {s}\n", .{@errorName(err)});
+        return 1;
+    };
+    out_writer.flush() catch {};
+    return 0;
 }
 
 /// `--version` is a requested outcome: print the package version and, for
