@@ -255,10 +255,12 @@ pub fn htmlEscape(out: anytype, text: []const u8) !void {
 
 const testing = std.testing;
 
-const full_meta = \\
+const full_meta =
+    \\
     \\{"title":"Hi","description":"A page","author":"Bob","date":"2026-01-01","palette":"dark","template":"","render_profile":""}
 ;
-const empty_meta = \\
+const empty_meta =
+    \\
     \\{"title":"","description":"","author":"","date":"","palette":"","template":"","render_profile":""}
 ;
 
