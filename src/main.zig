@@ -19,13 +19,15 @@ const std = @import("std");
 const oliver = @import("oliver");
 const meta = @import("meta.zig");
 const wrap = @import("wrap.zig");
+const rewrite = @import("rewrite.zig");
 
 comptime {
-    // Force analysis so `zig build test` runs `src/meta.zig` and
-    // `src/wrap.zig` tests via the CLI test binary (like
-    // `src/oliver.zig` forces cooklang modules).
+    // Force analysis so `zig build test` runs `src/meta.zig`,
+    // `src/wrap.zig`, and `src/rewrite.zig` tests via the CLI test binary
+    // (like `src/oliver.zig` forces cooklang modules).
     _ = meta;
     _ = wrap;
+    _ = rewrite;
 }
 
 // Injected by build.zig: the package version and the source commit SHA
@@ -895,6 +897,12 @@ fn shifted(span: oliver.source.Span, offset: u32) oliver.source.Span {
 fn renderWithDiag(a: std.mem.Allocator, cfg: RunConfig, input: []const u8) !RenderOutcome {
     var result = try oliver.parse(a, input, cfg.dialect.?, markdownParseOptions(cfg));
     defer result.deinit();
+    // Phase 6 S3: native link rewriting (.md/.textile/.cook → .html) at AST
+    // level, between parse and render. Deterministic, arena-owned, and
+    // profile-agnostic — covers both `html` and `xhtml` (`--to xhtml`).
+    // Only `.link.href` and `.image.src` leaves are rewritten;
+    // `html_block`/`raw_html` are left verbatim (fail-closed).
+    try rewrite.rewriteDocument(&result.document);
     const json = if (cfg.diagnostics) try diagnosticsJson(a, result.diagnostics) else null;
     var aw = std.Io.Writer.Allocating.init(a);
     defer aw.deinit();
