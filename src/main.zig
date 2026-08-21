@@ -20,14 +20,19 @@ const oliver = @import("oliver");
 const meta = @import("meta.zig");
 const wrap = @import("wrap.zig");
 const rewrite = @import("rewrite.zig");
+const plan = @import("plan.zig");
+const manifest = @import("manifest.zig");
 
 comptime {
     // Force analysis so `zig build test` runs `src/meta.zig`,
-    // `src/wrap.zig`, and `src/rewrite.zig` tests via the CLI test binary
+    // `src/wrap.zig`, `src/rewrite.zig`, `src/plan.zig`, and
+    // `src/manifest.zig` tests via the CLI test binary
     // (like `src/oliver.zig` forces cooklang modules).
     _ = meta;
     _ = wrap;
     _ = rewrite;
+    _ = plan;
+    _ = manifest;
 }
 
 // Injected by build.zig: the package version and the source commit SHA
@@ -45,6 +50,8 @@ pub const Command = enum {
     menu,
     meta,
     wrap,
+    plan,
+    manifest,
 };
 
 /// The full command-line configuration, decided by `parseArgs`. `command`
@@ -98,6 +105,20 @@ pub const RunConfig = struct {
     wrap_meta_json: ?[]const u8 = null,
     wrap_assets_root: ?[]const u8 = null,
     wrap_body: ?[]const u8 = null,
+    /// Plan command paths (13-col TSV). All required for `plan`.
+    plan_content_dir: ?[]const u8 = null,
+    plan_output_dir: ?[]const u8 = null,
+    plan_template_dir: ?[]const u8 = null,
+    plan_meta_dir: ?[]const u8 = null,
+    plan_default_template: ?[]const u8 = null,
+    plan_oliver_bin: ?[]const u8 = null,
+    plan_root_dir: ?[]const u8 = null,
+    plan_dry_run: ?[]const u8 = null,
+    plan_verbose: ?[]const u8 = null,
+    /// Manifest command.
+    manifest_path: ?[]const u8 = null,
+    manifest_add: ?[]const u8 = null,
+    manifest_verify: bool = false,
 };
 
 /// Parses the argument vector (excluding the program name) into a
@@ -145,6 +166,30 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var saw_wrap_meta_json = false;
     var saw_wrap_assets_root = false;
     var saw_wrap_body = false;
+    var plan_content_dir: ?[]const u8 = null;
+    var plan_output_dir: ?[]const u8 = null;
+    var plan_template_dir: ?[]const u8 = null;
+    var plan_meta_dir: ?[]const u8 = null;
+    var plan_default_template: ?[]const u8 = null;
+    var plan_oliver_bin: ?[]const u8 = null;
+    var plan_root_dir: ?[]const u8 = null;
+    var plan_dry_run: ?[]const u8 = null;
+    var plan_verbose: ?[]const u8 = null;
+    var saw_plan_content_dir = false;
+    var saw_plan_output_dir = false;
+    var saw_plan_template_dir = false;
+    var saw_plan_meta_dir = false;
+    var saw_plan_default_template = false;
+    var saw_plan_oliver_bin = false;
+    var saw_plan_root_dir = false;
+    var saw_plan_dry_run = false;
+    var saw_plan_verbose = false;
+    var manifest_path: ?[]const u8 = null;
+    var manifest_add: ?[]const u8 = null;
+    var manifest_verify = false;
+    var saw_manifest = false;
+    var saw_manifest_add = false;
+    var saw_manifest_verify = false;
 
     var index: usize = 0;
     while (index < args.len) : (index += 1) {
@@ -164,6 +209,12 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         } else if (std.mem.eql(u8, arg, "meta")) {
             if (command != null) return error.Usage;
             command = .meta;
+        } else if (std.mem.eql(u8, arg, "plan")) {
+            if (command != null) return error.Usage;
+            command = .plan;
+        } else if (std.mem.eql(u8, arg, "manifest")) {
+            if (command != null) return error.Usage;
+            command = .manifest;
         } else if (std.mem.eql(u8, arg, "--from")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -310,6 +361,80 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             if (saw_wrap_body) return error.Usage;
             saw_wrap_body = true;
             wrap_body = args[index];
+        } else if (std.mem.eql(u8, arg, "--content-dir")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_plan_content_dir) return error.Usage;
+            saw_plan_content_dir = true;
+            plan_content_dir = args[index];
+        } else if (std.mem.eql(u8, arg, "--output-dir")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_plan_output_dir) return error.Usage;
+            saw_plan_output_dir = true;
+            plan_output_dir = args[index];
+        } else if (std.mem.eql(u8, arg, "--template-dir")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_plan_template_dir) return error.Usage;
+            saw_plan_template_dir = true;
+            plan_template_dir = args[index];
+        } else if (std.mem.eql(u8, arg, "--meta-dir")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_plan_meta_dir) return error.Usage;
+            saw_plan_meta_dir = true;
+            plan_meta_dir = args[index];
+        } else if (std.mem.eql(u8, arg, "--default-template")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_plan_default_template) return error.Usage;
+            saw_plan_default_template = true;
+            plan_default_template = args[index];
+        } else if (std.mem.eql(u8, arg, "--oliver-bin")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_plan_oliver_bin) return error.Usage;
+            saw_plan_oliver_bin = true;
+            plan_oliver_bin = args[index];
+        } else if (std.mem.eql(u8, arg, "--root-dir")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_plan_root_dir) return error.Usage;
+            saw_plan_root_dir = true;
+            plan_root_dir = args[index];
+        } else if (std.mem.eql(u8, arg, "--dry-run")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_plan_dry_run) return error.Usage;
+            saw_plan_dry_run = true;
+            const v = args[index];
+            if (!std.mem.eql(u8, v, "true") and !std.mem.eql(u8, v, "false")) return error.Usage;
+            plan_dry_run = v;
+        } else if (std.mem.eql(u8, arg, "--verbose")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_plan_verbose) return error.Usage;
+            saw_plan_verbose = true;
+            const v = args[index];
+            if (!std.mem.eql(u8, v, "true") and !std.mem.eql(u8, v, "false")) return error.Usage;
+            plan_verbose = v;
+        } else if (std.mem.eql(u8, arg, "--manifest")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_manifest) return error.Usage;
+            saw_manifest = true;
+            manifest_path = args[index];
+        } else if (std.mem.eql(u8, arg, "--add")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_manifest_add) return error.Usage;
+            saw_manifest_add = true;
+            manifest_add = args[index];
+        } else if (std.mem.eql(u8, arg, "--verify")) {
+            if (saw_manifest_verify) return error.Usage;
+            saw_manifest_verify = true;
+            manifest_verify = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.Help;
         } else if (std.mem.eql(u8, arg, "--version")) {
@@ -318,9 +443,10 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     }
 
     // Exactly one subcommand names the operation, and every command
-    // needs an input frontend — except `wrap`, which reads files.
+    // needs an input frontend — except `wrap`/`plan`/`manifest`, which
+    // are filesystem operations, not frontends.
     const cmd = command orelse return error.Usage;
-    if (cmd != .wrap) {
+    if (cmd != .wrap and cmd != .plan and cmd != .manifest) {
         if (!cooklang and dialect == null) return error.Usage;
     }
     // Flags must belong to the command they are given with: `--to`
@@ -369,7 +495,31 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             if (saw_from or saw_to or saw_raw_html or saw_frontmatter or
                 saw_diagnostics or saw_format or json or meta_format or
                 factor_num != null or servings_target != null or ext_flags) return error.Usage;
+            if (saw_plan_content_dir or saw_plan_output_dir or saw_plan_template_dir or saw_plan_meta_dir or
+                saw_plan_default_template or saw_plan_oliver_bin or saw_plan_root_dir or saw_plan_dry_run or saw_plan_verbose or
+                saw_manifest or saw_manifest_add or saw_manifest_verify) return error.Usage;
             if (!saw_wrap_template or !saw_wrap_meta_json or !saw_wrap_assets_root or !saw_wrap_body) return error.Usage;
+        },
+        .plan => {
+            // Plan has its own flag set: 9 required flags. No other flags.
+            if (saw_from or saw_to or saw_raw_html or saw_frontmatter or
+                saw_diagnostics or saw_format or json or meta_format or
+                factor_num != null or servings_target != null or ext_flags) return error.Usage;
+            if (saw_wrap_template or saw_wrap_meta_json or saw_wrap_assets_root or saw_wrap_body) return error.Usage;
+            if (saw_manifest or saw_manifest_add or saw_manifest_verify) return error.Usage;
+            if (!saw_plan_content_dir or !saw_plan_output_dir or !saw_plan_template_dir or !saw_plan_meta_dir or
+                !saw_plan_default_template or !saw_plan_oliver_bin or !saw_plan_root_dir or !saw_plan_dry_run or !saw_plan_verbose) return error.Usage;
+        },
+        .manifest => {
+            // Manifest: --manifest required, exactly one of --add or --verify.
+            if (saw_from or saw_to or saw_raw_html or saw_frontmatter or
+                saw_diagnostics or saw_format or json or meta_format or
+                factor_num != null or servings_target != null or ext_flags) return error.Usage;
+            if (saw_wrap_template or saw_wrap_meta_json or saw_wrap_assets_root or saw_wrap_body) return error.Usage;
+            if (saw_plan_content_dir or saw_plan_output_dir or saw_plan_template_dir or saw_plan_meta_dir or
+                saw_plan_default_template or saw_plan_oliver_bin or saw_plan_root_dir or saw_plan_dry_run or saw_plan_verbose) return error.Usage;
+            if (!saw_manifest) return error.Usage;
+            if ((saw_manifest_add and saw_manifest_verify) or (!saw_manifest_add and !saw_manifest_verify)) return error.Usage;
         },
     }
     return .{
@@ -398,6 +548,18 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .wrap_meta_json = wrap_meta_json,
         .wrap_assets_root = wrap_assets_root,
         .wrap_body = wrap_body,
+        .plan_content_dir = plan_content_dir,
+        .plan_output_dir = plan_output_dir,
+        .plan_template_dir = plan_template_dir,
+        .plan_meta_dir = plan_meta_dir,
+        .plan_default_template = plan_default_template,
+        .plan_oliver_bin = plan_oliver_bin,
+        .plan_root_dir = plan_root_dir,
+        .plan_dry_run = plan_dry_run,
+        .plan_verbose = plan_verbose,
+        .manifest_path = manifest_path,
+        .manifest_add = manifest_add,
+        .manifest_verify = manifest_verify,
     };
 }
 
@@ -439,6 +601,18 @@ pub fn main(init: std.process.Init) !u8 {
     // stdin.
     if (cfg.command == .wrap) {
         return wrapDispatch(gpa, init.io, cfg, &out_writer, &err_writer);
+    }
+
+    // `oliver plan` walks the content tree and emits the 13-col batch TSV
+    // to stdout. It does not use stdin.
+    if (cfg.command == .plan) {
+        return planDispatch(gpa, init.io, cfg, &out_writer, &err_writer);
+    }
+
+    // `oliver manifest` appends to or verifies the manifest file. It does
+    // not use stdin.
+    if (cfg.command == .manifest) {
+        return manifestDispatch(gpa, init.io, cfg, &out_writer, &err_writer);
     }
 
     // `oliver meta` is filesystem-free and dialect-agnostic at the wire
@@ -525,7 +699,7 @@ pub fn main(init: std.process.Init) !u8 {
                     return 1;
                 };
             },
-            .meta, .wrap => unreachable,
+            .meta, .wrap, .plan, .manifest => unreachable,
         }
     } else {
         const outcome = renderWithDiag(gpa, cfg, input.items) catch |err| {
@@ -947,6 +1121,8 @@ fn printUsage() void {
         \\       oliver menu --from cooklang
         \\       oliver meta --from <markdown|textile|cooklang> --format json
         \\       oliver wrap --template <file> --meta-json <json> --assets-root <prefix> --body <file>
+        \\       oliver plan --content-dir <dir> --output-dir <dir> --template-dir <dir> --meta-dir <dir> --default-template <file> --oliver-bin <bin> --root-dir <dir> --dry-run <bool> --verbose <bool>
+        \\       oliver manifest --manifest <file> [--add <rel> | --verify]
         \\       oliver --version
         \\
         \\Reads a document from stdin and writes rendered HTML to stdout
@@ -958,8 +1134,10 @@ fn printUsage() void {
         \\--body files and --assets-root prefix, resolves the 7-token
         \\template dialect ($title$/$description$/$author$/$date$/$palette$
         \\/$assets_root$/$body$, html-escaped meta + literal assets/body),
-        \\and writes the result to stdout. --version prints the version and
-        \\the embedded source commit (CI builds).
+        \\and writes the result to stdout. plan walks --content-dir for
+        \\*.md/*.textile/*.cook and writes the 13-col batch TSV to stdout.
+        \\manifest --add dedups --manifest or --verify exits 0. --version prints
+        \\the version and the embedded source commit (CI builds).
         \\scale --factor accepts the same scalable quantity forms as amounts
         \\(2, 1/2, 1.5, 1 1/2; quote values containing spaces).
         \\
@@ -1038,6 +1216,42 @@ fn wrapDispatch(
         return 1;
     };
     out_writer.flush() catch {};
+    return 0;
+}
+
+/// Dispatches `oliver plan`: walks --content-dir and writes the 13-col TSV
+/// to stdout. On basename collision exits 1 with a message on stderr.
+fn planDispatch(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    cfg: RunConfig,
+    out_writer: anytype,
+    err_writer: anytype,
+) !u8 {
+    _ = err_writer;
+    plan.run(gpa, io, cfg.plan_content_dir.?, cfg.plan_output_dir.?, cfg.plan_template_dir.?, cfg.plan_meta_dir.?, cfg.plan_default_template.?, cfg.plan_oliver_bin.?, cfg.plan_root_dir.?, cfg.plan_dry_run.?, cfg.plan_verbose.?, &out_writer.interface) catch |err| {
+        if (err == error.Collision) return 1;
+        std.debug.print("oliver plan: {s}\n", .{@errorName(err)});
+        return 1;
+    };
+    out_writer.flush() catch {};
+    return 0;
+}
+
+/// Dispatches `oliver manifest`: --add dedups or --verify no-ops.
+fn manifestDispatch(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    cfg: RunConfig,
+    out_writer: anytype,
+    err_writer: anytype,
+) !u8 {
+    _ = out_writer;
+    _ = err_writer;
+    manifest.run(gpa, io, cfg.manifest_path.?, cfg.manifest_add, cfg.manifest_verify) catch |err| {
+        std.debug.print("oliver manifest: {s}\n", .{@errorName(err)});
+        return 1;
+    };
     return 0;
 }
 
