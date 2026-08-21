@@ -209,6 +209,9 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         } else if (std.mem.eql(u8, arg, "meta")) {
             if (command != null) return error.Usage;
             command = .meta;
+        } else if (std.mem.eql(u8, arg, "wrap")) {
+            if (command != null) return error.Usage;
+            command = .wrap;
         } else if (std.mem.eql(u8, arg, "plan")) {
             if (command != null) return error.Usage;
             command = .plan;
