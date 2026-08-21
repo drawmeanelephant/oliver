@@ -9,6 +9,7 @@
 //!     oliver scale --from cooklang --factor 3/2 < recipe.cook
 //!     oliver scale --from cooklang --servings 4 < recipe.cook
 //!     oliver menu --from cooklang < plan.menu   # day/meal text dump
+//!     oliver meta --from <markdown|textile|cooklang> --format json < file > meta.json
 //!
 //! All parser and renderer semantics live in the library; this file only
 //! handles arguments and stdio. It uses the Zig 0.16 `std.process.Init`
@@ -16,6 +17,14 @@
 
 const std = @import("std");
 const oliver = @import("oliver");
+const meta = @import("meta.zig");
+
+comptime {
+    // Force analysis so `zig build test` runs `src/meta.zig` tests via the
+    // CLI test binary (like `src/oliver.zig` forces cooklang modules).
+    _ = meta;
+}
+
 // Injected by build.zig: the package version and the source commit SHA
 // (CI passes -Dcommit=$GITHUB_SHA). `oliver --version` prints them so a
 // downloaded binary can prove which commit it was built from.
@@ -29,6 +38,7 @@ pub const Command = enum {
     serialize,
     scale,
     menu,
+    meta,
 };
 
 /// The full command-line configuration, decided by `parseArgs`. `command`
@@ -72,6 +82,10 @@ pub const RunConfig = struct {
     /// Recipe model as a JSON document instead of canonical .cook text.
     /// Serialize-only, like `--to` is render-only.
     json: bool = false,
+    /// Meta output format (`meta --format json`): required, only `json`
+    /// (keeps the wire extensible). Meta-only, like `json` is
+    /// serialize-only.
+    meta_format: bool = false,
 };
 
 /// Parses the argument vector (excluding the program name) into a
@@ -102,6 +116,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var raw_html: oliver.html.RawHtmlPolicy = .allowed;
     var diagnostics = false;
     var json = false;
+    var meta_format = false;
     var saw_to = false;
     var saw_from = false;
     var saw_frontmatter = false;
@@ -109,6 +124,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var saw_diagnostics = false;
     var saw_factor = false;
     var saw_servings = false;
+    var saw_format = false;
 
     var index: usize = 0;
     while (index < args.len) : (index += 1) {
@@ -125,6 +141,9 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         } else if (std.mem.eql(u8, arg, "menu")) {
             if (command != null) return error.Usage;
             command = .menu;
+        } else if (std.mem.eql(u8, arg, "meta")) {
+            if (command != null) return error.Usage;
+            command = .meta;
         } else if (std.mem.eql(u8, arg, "--from")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -240,6 +259,13 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             // duplicates like the other flags (the --from rule).
             if (json) return error.Usage;
             json = true;
+        } else if (std.mem.eql(u8, arg, "--format")) {
+            if (index + 1 >= args.len) return error.Usage;
+            index += 1;
+            if (saw_format) return error.Usage;
+            saw_format = true;
+            if (!std.mem.eql(u8, args[index], "json")) return error.Usage;
+            meta_format = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.Help;
         } else if (std.mem.eql(u8, arg, "--version")) {
@@ -262,23 +288,33 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         task_lists;
     switch (cmd) {
         .render => {
-            if (factor_num != null or servings_target != null or json) return error.Usage;
+            if (factor_num != null or servings_target != null or json or meta_format) return error.Usage;
+            if (saw_format) return error.Usage;
             // The Markdown extensions cannot apply to Textile or
             // Cooklang; rejecting them keeps the strict scoping rule.
             if (ext_flags and dialect != .markdown) return error.Usage;
         },
         .serialize => {
             if (!cooklang or saw_to or saw_raw_html or factor_num != null or servings_target != null or
-                ext_flags or frontmatter != null or saw_diagnostics) return error.Usage;
+                ext_flags or frontmatter != null or saw_diagnostics or meta_format) return error.Usage;
+            if (saw_format) return error.Usage;
         },
         .menu => {
             if (!cooklang or saw_to or saw_raw_html or factor_num != null or servings_target != null or
-                ext_flags or frontmatter != null or saw_diagnostics or json) return error.Usage;
+                ext_flags or frontmatter != null or saw_diagnostics or json or meta_format) return error.Usage;
+            if (saw_format) return error.Usage;
         },
         .scale => {
-            if (!cooklang or saw_to or saw_raw_html or ext_flags or frontmatter != null or saw_diagnostics or json) return error.Usage;
+            if (!cooklang or saw_to or saw_raw_html or ext_flags or frontmatter != null or saw_diagnostics or json or meta_format) return error.Usage;
+            if (saw_format) return error.Usage;
             // Scaling needs exactly one mode: factor or servings.
             if ((factor_num == null) == (servings_target == null)) return error.Usage;
+        },
+        .meta => {
+            if (saw_to or saw_raw_html or factor_num != null or servings_target != null or
+                ext_flags or frontmatter != null or saw_diagnostics or json) return error.Usage;
+            // Meta requires --from (any frontend) and --format json.
+            if (!meta_format) return error.Usage;
         },
     }
     return .{
@@ -302,6 +338,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .raw_html = raw_html,
         .diagnostics = diagnostics,
         .json = json,
+        .meta_format = meta_format,
     };
 }
 
@@ -330,6 +367,10 @@ pub fn main(init: std.process.Init) !u8 {
     };
     const profile = cfg.profile;
 
+    // `oliver meta` is filesystem-free and dialect-agnostic at the wire
+    // level (YAML-only for S1, 7-string JSON). It bypasses the dialect
+    // dispatch so `meta` works uniformly for markdown/textile/cooklang.
+
     // Read all of stdin into memory.
     var input = std.ArrayList(u8).empty;
     defer input.deinit(gpa);
@@ -351,6 +392,20 @@ pub fn main(init: std.process.Init) !u8 {
     var out_writer = std.Io.File.stdout().writer(init.io, &out_buf);
     var err_buf: [4096]u8 = undefined;
     var err_writer = std.Io.File.stderr().writer(init.io, &err_buf);
+
+    // `meta` bypasses the dialect dispatch — it always projects the same
+    // YAML frontmatter shape regardless of --from (markdown/textile/cooklang).
+    if (cfg.command == .meta) {
+        const json = meta.extractJson(gpa, input.items) catch |err| {
+            std.debug.print("oliver: meta failed: {s}\n", .{@errorName(err)});
+            return 1;
+        };
+        defer gpa.free(json);
+        out_writer.interface.writeAll(json) catch {};
+        out_writer.flush() catch {};
+        err_writer.flush() catch {};
+        return 0;
+    }
 
     if (cfg.cooklang) {
         var result = oliver.cooklang.parse(gpa, input.items, cooklangParseOptions(cfg)) catch |err| {
@@ -404,6 +459,7 @@ pub fn main(init: std.process.Init) !u8 {
                     return 1;
                 };
             },
+            .meta => unreachable,
         }
     } else {
         const outcome = renderWithDiag(gpa, cfg, input.items) catch |err| {
@@ -817,13 +873,16 @@ fn printUsage() void {
         \\       oliver serialize --from cooklang [--json]
         \\       oliver scale --from cooklang (--factor <scalable> | --servings <n>)
         \\       oliver menu --from cooklang
+        \\       oliver meta --from <markdown|textile|cooklang> --format json
         \\       oliver --version
         \\
         \\Reads a document from stdin and writes rendered HTML to stdout
         \\(XHTML fragment with --to xhtml). serialize/scale write canonical
         \\Cooklang text (serialize --json dumps the typed Recipe model as
-        \\JSON instead); menu writes the day/meal text dump. --version prints
-        \\the version and the embedded source commit (CI builds).
+        \\JSON instead); menu writes the day/meal text dump. meta reads a
+        \\document from stdin and writes the 7-field frontmatter JSON to
+        \\stdout (--format json only). --version prints the version and the
+        \\embedded source commit (CI builds).
         \\scale --factor accepts the same scalable quantity forms as amounts
         \\(2, 1/2, 1.5, 1 1/2; quote values containing spaces).
         \\
@@ -1390,4 +1449,74 @@ test "cli: serialize --json leaves canonical .cook output untouched" {
     var out = aw.toArrayList();
     defer out.deinit(allocator);
     try testing.expectEqualStrings("Mix @flour{200%g} and @water{100%ml}.\n", out.items);
+}
+
+test "cli: meta --from and --format json are required and scoped" {
+    const ok = try parseArgs(&.{ "meta", "--from", "markdown", "--format", "json" });
+    try testing.expectEqual(Command.meta, ok.command);
+    try testing.expect(ok.meta_format);
+    try testing.expectEqual(oliver.Dialect.markdown, ok.dialect.?);
+    const ok2 = try parseArgs(&.{ "meta", "--from", "textile", "--format", "json" });
+    try testing.expectEqual(oliver.Dialect.textile, ok2.dialect.?);
+    const ok3 = try parseArgs(&.{ "meta", "--from", "cooklang", "--format", "json" });
+    try testing.expect(ok3.cooklang);
+
+    // Missing or invalid flags are usage errors.
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--format", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "xml" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "asciidoc", "--format", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--from", "textile", "--format", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", "--format", "json" }));
+
+    // Flags must belong to meta: --to, --frontmatter, --diagnostics, --json, markdown extensions rejected.
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", "--to", "html" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", "--frontmatter", "yaml" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", "--diagnostics", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", "--json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", "--wikilinks" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "textile", "--format", "json", "--callouts" }));
+
+    // And meta flags are rejected on other commands.
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--format", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--format", "json" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--frontmatter", "yaml", "--format", "json" }));
+}
+
+test "cli: meta --help is a requested outcome" {
+    try testing.expectError(error.Help, parseArgs(&.{ "meta", "--from", "markdown", "--help" }));
+    try testing.expectError(error.Help, parseArgs(&.{ "meta", "--help" }));
+    try testing.expectError(error.Help, parseArgs(&.{"--help"}));
+}
+
+test "cli: meta extracts 7-string JSON end to end" {
+    const allocator = std.testing.allocator;
+    const input = "---\ntitle: Probe\ndescription: hi\nauthor: Ada\n---\nbody\n";
+    const json = try meta.extractJson(allocator, input);
+    defer allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "\"title\":\"Probe\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"description\":\"hi\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"author\":\"Ada\"") != null);
+    // Exactly 7 keys, always strings, missing → "".
+    try testing.expect(std.mem.indexOf(u8, json, "\"date\":\"\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"template\":\"\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"palette\":\"\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"render_profile\":\"\"") != null);
+}
+
+test "cli: meta render path is unaffected — flag-gated frontmatter still required" {
+    const allocator = std.testing.allocator;
+    // Default render keeps --- as thematic break (no auto-strip in S1).
+    const plain = try parseArgs(&.{ "render", "--from", "markdown" });
+    const plain_out = try renderWith(allocator, plain, "---\ntitle: x\n---\n\n# Doc\n");
+    defer allocator.free(plain_out);
+    try testing.expect(std.mem.indexOf(u8, plain_out, "<hr") != null);
+
+    // With explicit frontmatter, the fence is consumed.
+    const fm = try parseArgs(&.{ "render", "--from", "markdown", "--frontmatter", "yaml" });
+    const fm_out = try renderWith(allocator, fm, "---\ntitle: x\n---\n\n# Doc\n");
+    defer allocator.free(fm_out);
+    try testing.expect(std.mem.indexOf(u8, fm_out, "<h1>Doc</h1>") != null);
+    try testing.expect(std.mem.indexOf(u8, fm_out, "<hr") == null);
 }
