@@ -134,13 +134,17 @@ jobs:
 
       # Create the release once; on later runs it already exists and only
       # the assets are replaced (--clobber makes re-runs idempotent).
+      # This job has no checkout (it only ships artifacts), so gh cannot
+      # discover the repository from a .git directory — every call passes
+      # -R explicitly or dies with "failed to run git: fatal: not a git
+      # repository" (issue #117).
       - name: Publish to the builds release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view builds >/dev/null 2>&1; then
-            gh release create builds \
+          if ! gh release view builds -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create builds -R "$GITHUB_REPOSITORY" \
               --title "Oliver prebuilt binaries" \
               --notes "Rolling prebuilt binaries for the current tip of main — linux/macos (x86_64, aarch64) and windows-x86_64, each smoke-tested natively in CI before publishing. Download URL: https://github.com/drawmeanelephant/oliver/releases/download/builds/oliver-<os>-<arch>"
           fi
-          gh release upload builds dist/* sha256sums.txt --clobber
+          gh release upload builds dist/* sha256sums.txt --clobber -R "$GITHUB_REPOSITORY"
