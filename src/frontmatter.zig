@@ -754,6 +754,17 @@ test "frontmatter: double-quoted escapes decode" {
     try testing.expectEqualStrings("a\"b\\c", v);
 }
 
+test "frontmatter yaml: quoted scalars may contain \": \" (issue #120)" {
+    // A quoted scalar is opaque; an embedded colon+space is data, not a
+    // mapping indicator (only bare scalars reject `": "`).
+    var out = try preprocessT(testing.allocator, "---\ntitle: \"Has: Colon\"\nsingle: 'S: C'\n---\n", .yaml, true);
+    defer out.arena.deinit();
+    const m = out.result.block.?.metadata.?;
+    try testing.expectEqual(@as(usize, 0), out.diags.items.len);
+    try testing.expectEqualStrings("Has: Colon", entry(m, "title").?.scalar);
+    try testing.expectEqualStrings("S: C", entry(m, "single").?.scalar);
+}
+
 test "frontmatter yaml: lists, nested maps, comments, last wins" {
     var out = try preprocessT(
         testing.allocator,
