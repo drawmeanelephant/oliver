@@ -110,16 +110,11 @@ fn extractMeta(a: std.mem.Allocator, input: []const u8) !Meta {
                 i += 1;
                 continue;
             }
-            // Bare indicators that are out-of-subset for a scalar → "".
-            // But allow scalar values that happen to contain `:` later? `splitYamlKey`
-            // already split at first colon, so `rest` may contain `:`; that's
-            // out-of-subset per frontmatter (`value # comment` or `a: b` in value).
-            // For S1 we treat any value containing ` #` or `: ` as out-of-subset → "".
-            if (trimmed.len > 0 and isOutOfSubsetScalar(trimmed)) {
-                if (is_target) setField(&meta, kv.key, "");
-                i += 1;
-                continue;
-            }
+            // Out-of-subset classification happens inside `decodeScalar`,
+            // after the quoted forms: a quoted scalar may legally contain
+            // ` #` or `: ` (e.g. `title: "Has: Colon"`); only bare scalars
+            // with those sequences are out-of-subset. Decoding failure
+            // (malformed quotes, bare out-of-subset) → "".
             const decoded = try decodeScalar(a, trimmed);
             if (decoded) |s| {
                 if (is_target) setField(&meta, kv.key, normalize(s));
@@ -319,8 +314,10 @@ fn collectBlock(a: std.mem.Allocator, lines: []const PayloadLine, start: usize) 
 }
 
 fn isOutOfSubsetScalar(s: []const u8) bool {
-    // Mirrors frontmatter.parseScalar reject: leading indicators &*!|> etc,
-    // and inline comment or embedded `a: b`.
+    // Mirrors `frontmatter.parseScalar`'s bare-form rejects: leading
+    // indicators &*!|> etc, and inline comment or embedded `a: b`. Only
+    // ever applied to bare (unquoted) scalars — callers try the quoted
+    // forms first, so a quoted scalar may legally contain ` #` or `: `.
     if (s.len == 0) return false;
     if (std.mem.indexOfScalar(u8, "&*!|>[]{}#,?%@`", s[0]) != null) {
         // `|`/`>` already handled as block; `[`/`{` handled earlier; other
@@ -493,6 +490,55 @@ test "meta: ugly quoted title decoding" {
     const json = try extractJson(testing.allocator, "---\ntitle: \"An \\\"Ugly\\\" Quoted Title\"\n---\n");
     defer testing.allocator.free(json);
     try testing.expect(std.mem.indexOf(u8, json, "\"title\":\"An \\\"Ugly\\\" Quoted Title\"") != null);
+}
+
+test "meta: quoted scalars may contain \": \" (issue #120)" {
+    // A quoted scalar is opaque; an embedded colon+space must not
+    // classify the value as out-of-subset.
+    const out = try extractJson(testing.allocator, "---\ntitle: \"Has: Colon\"\n---\n");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings(
+        "{\"title\":\"Has: Colon\",\"description\":\"\",\"author\":\"\",\"date\":\"\",\"template\":\"\",\"palette\":\"\",\"render_profile\":\"\"}",
+        out,
+    );
+
+    // Not title-specific: every target key with a quoted `": "` scalar
+    // extracts (the issue's three-key characterization).
+    const out2 = try extractJson(
+        testing.allocator,
+        "---\ntitle: \"T: t\"\ndescription: \"Desc: here\"\nauthor: \"A: B\"\n---\n",
+    );
+    defer testing.allocator.free(out2);
+    try testing.expect(std.mem.indexOf(u8, out2, "\"title\":\"T: t\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out2, "\"description\":\"Desc: here\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out2, "\"author\":\"A: B\"") != null);
+
+    // Single-quoted literal form.
+    const out3 = try extractJson(testing.allocator, "---\ntitle: 'Single: Colon'\n---\n");
+    defer testing.allocator.free(out3);
+    try testing.expect(std.mem.indexOf(u8, out3, "\"title\":\"Single: Colon\"") != null);
+
+    // Colon without a following space was never affected.
+    const out4 = try extractJson(testing.allocator, "---\ntitle: \"NoSpace:Colon\"\n---\n");
+    defer testing.allocator.free(out4);
+    try testing.expect(std.mem.indexOf(u8, out4, "\"title\":\"NoSpace:Colon\"") != null);
+
+    // Trailing colon+space inside the quotes survives verbatim.
+    const out5 = try extractJson(testing.allocator, "---\ntitle: \"Trailing: \"\n---\n");
+    defer testing.allocator.free(out5);
+    try testing.expect(std.mem.indexOf(u8, out5, "\"title\":\"Trailing: \"") != null);
+
+    // The bare forms stay out-of-subset: an embedded `a: b`, an inline
+    // comment, and a leading indicator all still project "".
+    const out6 = try extractJson(testing.allocator, "---\ntitle: Unquoted: Colon Value\n---\n");
+    defer testing.allocator.free(out6);
+    try testing.expect(std.mem.indexOf(u8, out6, "\"title\":\"\"") != null);
+    const out7 = try extractJson(testing.allocator, "---\ntitle: bare # comment\n---\n");
+    defer testing.allocator.free(out7);
+    try testing.expect(std.mem.indexOf(u8, out7, "\"title\":\"\"") != null);
+    const out8 = try extractJson(testing.allocator, "---\ntitle: !bang\n---\n");
+    defer testing.allocator.free(out8);
+    try testing.expect(std.mem.indexOf(u8, out8, "\"title\":\"\"") != null);
 }
 
 test "meta: BOM → no frontmatter" {
