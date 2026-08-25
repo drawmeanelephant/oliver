@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-12T00:00:00Z
-summary: Contract for the inline-images slice of Oliver's Markdown frontend, derived from CommonMark section 6.7: implemented.
+summary: "Contract for the inline-images slice of Oliver's Markdown frontend, derived from CommonMark section 6.7: implemented."
 ---
 
 # Oliver Inline Parsing: Images

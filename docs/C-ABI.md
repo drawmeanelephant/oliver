@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-16T00:00:00Z
-summary: The stable C ABI for embedding Oliver from C, Rust, Python, Node, and other FFI consumers: the oliver_render / oliver_free surface, the memory-ownership contract, the error codes, and the CI-compiled example.
+summary: "The stable C ABI for embedding Oliver from C, Rust, Python, Node, and other FFI consumers: the oliver_render / oliver_free surface, the memory-ownership contract, the error codes, and the CI-compiled example."
 ---
 
 # C ABI

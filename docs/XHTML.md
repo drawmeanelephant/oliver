@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-14T00:00:00Z
-summary: The XHTML output profile: same normalized IR, same semantics, an XML-compatible serialization, with a fail-closed raw-HTML policy and a mechanical well-formedness gate.
+summary: "The XHTML output profile: same normalized IR, same semantics, an XML-compatible serialization, with a fail-closed raw-HTML policy and a mechanical well-formedness gate."
 ---
 
 # XHTML output profile

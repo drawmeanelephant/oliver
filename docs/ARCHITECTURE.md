@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-13T00:00:00Z
-summary: Oliver is a small, freestanding markup parsing and rendering library in Zig: markup infrastructure, not a publishing framework.
+summary: "Oliver is a small, freestanding markup parsing and rendering library in Zig: markup infrastructure, not a publishing framework."
 ---
 
 # Oliver Architecture

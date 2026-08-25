@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-14T00:00:00Z
-summary: How Oliver publishes this docs tree to GitHub Pages with a pinned Boris binary: profile, plan, artifact, and audit contracts.
+summary: "How Oliver publishes this docs tree to GitHub Pages with a pinned Boris binary: profile, plan, artifact, and audit contracts."
 ---
 
 # GitHub Pages publication

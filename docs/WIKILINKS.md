@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-16T00:00:00Z
-summary: The opt-in modular wikilinks extension ([[target]] / [[target|label]]) in the Markdown frontend: shape, precedence, fallbacks, and the resolver policy.
+summary: "The opt-in modular wikilinks extension ([[target]] / [[target|label]]) in the Markdown frontend: shape, precedence, fallbacks, and the resolver policy."
 ---
 
 # Wikilinks (extension)

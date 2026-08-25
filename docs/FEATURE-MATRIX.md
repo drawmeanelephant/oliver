@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-14T00:00:00Z
-summary: Oliver's feature matrix: implemented, planned, and deferred items across the Markdown frontend.
+summary: "Oliver's feature matrix: implemented, planned, and deferred items across the Markdown frontend."
 ---
 
 # Oliver Feature Matrix

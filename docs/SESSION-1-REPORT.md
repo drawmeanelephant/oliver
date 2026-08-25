@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-14T00:00:00Z
-summary: The first Oliver session: repository foundation, specification research, feature matrix, document model, and the smallest vertical slice.
+summary: "The first Oliver session: repository foundation, specification research, feature matrix, document model, and the smallest vertical slice."
 ---
 
 # Session 1 Report

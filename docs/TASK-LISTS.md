@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-16T00:00:00Z
-summary: The opt-in GFM task list items extension ([ ] / [x] / [X] checkboxes) in the Markdown frontend: shape, recognition rules, chosen behaviors, and rendering.
+summary: "The opt-in GFM task list items extension ([ ] / [x] / [X] checkboxes) in the Markdown frontend: shape, recognition rules, chosen behaviors, and rendering."
 ---
 
 # Task lists (extension)
