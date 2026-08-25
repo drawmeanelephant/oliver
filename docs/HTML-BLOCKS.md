@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-12T00:00:00Z
-summary: Contract for Oliver's HTML block handling (section 4.6): all seven types implemented, scorecard 44/44.
+summary: "Contract for Oliver's HTML block handling (section 4.6): all seven types implemented, scorecard 44/44."
 ---
 
 # Markdown HTML blocks (§4.6)

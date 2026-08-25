@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-13T00:00:00Z
-summary: Tests are product contracts: zig build test runs six suites covering library modules, fixtures, conformance, CLI parsing, the XHTML profile, and the fuzz wall.
+summary: "Tests are product contracts: zig build test runs six suites covering library modules, fixtures, conformance, CLI parsing, the XHTML profile, and the fuzz wall."
 ---
 
 # Oliver tests and fixtures

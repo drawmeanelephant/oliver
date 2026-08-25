@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-12T00:00:00Z
-summary: Contract for Oliver's container-block algorithm: block quotes and lists share the container stack (CommonMark section 5).
+summary: "Contract for Oliver's container-block algorithm: block quotes and lists share the container stack (CommonMark section 5)."
 ---
 
 # Oliver Block Parsing: Container Blocks (Block Quotes, Lists)

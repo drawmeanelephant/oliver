@@ -1,6 +1,6 @@
 ---
 published_at: 2026-08-13T00:00:00Z
-summary: The normalized typed document is the contract between dialect frontends and every future renderer: not HTML-shaped.
+summary: "The normalized typed document is the contract between dialect frontends and every future renderer: not HTML-shaped."
 ---
 
 # Oliver Document Model
