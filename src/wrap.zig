@@ -1,27 +1,40 @@
 //! Phase 6 S2 — template dialect for `oliver wrap`.
 //!
-//! Implements the 7-token dialect (`oliver-contract.md:115-145`):
+//! Implements the shared template contract v2 (`oliver-contract.md`
+//! §Template and input contract, rotkeeper #244): the original 7 tokens
+//! plus the extended metadata tokens:
 //!
-//!   $title$ $description$ $author$ $date$ $palette$  → html_escape
+//!   $title$ $description$ $author$ $date$ $palette$
+//!   $version$ $subtitle$ $tags$ $asset_meta$
+//!   $navigation$ $warnings$                            → html_escape
 //!   $assets_root$ $body$                              → literal
 //!
-//! Conditional blocks: `$if(name)$...$endif$` for the five meta fields
-//! (title→palette, first `$endif$` closes, no nesting, verbatim unknown).
-//! Empty/null → block removed; all `$if$` resolved before literal subs.
+//! Conditional blocks: `$if(name)$...$endif$` for every meta field
+//! (first `$endif$` closes, no nesting, verbatim unknown). Empty/null →
+//! block removed; absent known field → empty; all `$if$` resolved before
+//! literal subs.
 //!
 //! The library stays filesystem-free; this is pure bytes in → bytes out.
 
 const std = @import("std");
 
-/// The JSON wire type for the 5 meta fields. Unknown fields are
-/// silently ignored (the S1 contract also ships `template` and
-/// `render_profile` which we don't need here).
+/// The JSON wire type for the meta fields. Unknown fields are silently
+/// ignored (the S1 contract also ships `template` and `render_profile`
+/// which we don't need here). The extended v2 keys (version, subtitle,
+/// tags, asset_meta, navigation, warnings) are scalars the adapter feeds
+/// from bones/config/version and the source frontmatter.
 const MetaJson = struct {
     title: ?[]const u8 = null,
     description: ?[]const u8 = null,
     author: ?[]const u8 = null,
     date: ?[]const u8 = null,
     palette: ?[]const u8 = null,
+    version: ?[]const u8 = null,
+    subtitle: ?[]const u8 = null,
+    tags: ?[]const u8 = null,
+    asset_meta: ?[]const u8 = null,
+    navigation: ?[]const u8 = null,
+    warnings: ?[]const u8 = null,
 };
 
 /// The JSON parse result. The `value` field contains the 5 optional
@@ -30,8 +43,8 @@ const MetaJson = struct {
 pub const ParsedMeta = std.json.Parsed(MetaJson);
 
 /// Resolves a field name to its value (for `$if$` lookup and substitution).
-/// Returns empty string for missing/null fields (the S1 contract
-/// guarantees all 7 keys, but being defensive is free).
+/// Returns empty string for missing/null fields (the contract
+/// guarantees all keys, but being defensive is free).
 fn fieldVal(m: ParsedMeta, name: []const u8) []const u8 {
     const v = m.value;
     if (std.mem.eql(u8, name, "title")) return v.title orelse "";
@@ -39,6 +52,12 @@ fn fieldVal(m: ParsedMeta, name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "author")) return v.author orelse "";
     if (std.mem.eql(u8, name, "date")) return v.date orelse "";
     if (std.mem.eql(u8, name, "palette")) return v.palette orelse "";
+    if (std.mem.eql(u8, name, "version")) return v.version orelse "";
+    if (std.mem.eql(u8, name, "subtitle")) return v.subtitle orelse "";
+    if (std.mem.eql(u8, name, "tags")) return v.tags orelse "";
+    if (std.mem.eql(u8, name, "asset_meta")) return v.asset_meta orelse "";
+    if (std.mem.eql(u8, name, "navigation")) return v.navigation orelse "";
+    if (std.mem.eql(u8, name, "warnings")) return v.warnings orelse "";
     return "";
 }
 
@@ -146,13 +165,20 @@ fn stripIfs(a: std.mem.Allocator, template: []const u8, m: ParsedMeta) ![]u8 {
     return out.toOwnedSlice(a);
 }
 
-/// Whether `name` is one of the five recognized meta fields.
+/// Whether `name` is one of the recognized meta fields (v1 five +
+/// v2 extended set).
 fn isKnownField(name: []const u8) bool {
     return std.mem.eql(u8, name, "title") or
         std.mem.eql(u8, name, "description") or
         std.mem.eql(u8, name, "author") or
         std.mem.eql(u8, name, "date") or
-        std.mem.eql(u8, name, "palette");
+        std.mem.eql(u8, name, "palette") or
+        std.mem.eql(u8, name, "version") or
+        std.mem.eql(u8, name, "subtitle") or
+        std.mem.eql(u8, name, "tags") or
+        std.mem.eql(u8, name, "asset_meta") or
+        std.mem.eql(u8, name, "navigation") or
+        std.mem.eql(u8, name, "warnings");
 }
 
 /// Finds the next occurrence of byte `ch` in `haystack` starting at `from`.
@@ -176,9 +202,9 @@ fn findEndif(template: []const u8, from: usize) ?usize {
 // Phase 2: literal token substitution.
 // ---------------------------------------------------------------------------
 
-/// Substitutes the 7 recognized tokens: 5 html-escaped meta fields,
-/// plus `$assets_root$` and `$body$` as literals. Unknown `$word$`
-/// passes verbatim.
+/// Substitutes the recognized tokens: html-escaped meta fields
+/// (v1 five + v2 extended set), plus `$assets_root$` and `$body$` as
+/// literals. Unknown `$word$` passes verbatim.
 fn substitute(
     template: []const u8,
     m: ParsedMeta,
@@ -299,6 +325,53 @@ test "wrap: unknown tokens pass verbatim" {
     const out = try wrapT(template, empty_meta, "", "./");
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("$unknown$ and $also_unknown$", out);
+}
+
+// --- v2 extended tokens (rotkeeper #244 shared template contract) ---
+
+const v2_meta =
+    \\
+    \\{"title":"T","description":"D","author":"","date":"","palette":"","version":"0.7.0","subtitle":"Sub & Title","tags":"a, b","asset_meta":"index.md — Filed Systems","navigation":"","warnings":""}
+;
+
+test "wrap: v2 extended tokens substitute (escaped)" {
+    const template = "v:$version$|sub:$subtitle$|tags:$tags$|am:$asset_meta$";
+    const out = try wrapT(template, v2_meta, "", "");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("v:0.7.0|sub:Sub &amp; Title|tags:a, b|am:index.md — Filed Systems", out);
+}
+
+test "wrap: v2 token html escaping" {
+    const meta_json =
+        \\{"title":"","description":"","author":"","date":"","palette":"","version":"<0.7.0 & beta>","subtitle":"","tags":"","asset_meta":"","navigation":"","warnings":""}
+    ;
+    const template = "$version$";
+    const out = try wrapT(template, meta_json, "", "");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("&lt;0.7.0 &amp; beta&gt;", out);
+}
+
+test "wrap: v2 absent known token substitutes empty" {
+    // empty_meta carries no v2 keys; known-but-absent → empty string.
+    const template = "[$version$][$tags$][$asset_meta$]";
+    const out = try wrapT(template, empty_meta, "", "");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("[][][]", out);
+}
+
+test "wrap: v2 $if$ gating keeps non-empty" {
+    const template = "V:$if(version)$[$version$]$endif$ T:$if(tags)$[$tags$]$endif$";
+    const out = try wrapT(template, v2_meta, "", "");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("V:[0.7.0] T:[a, b]", out);
+}
+
+test "wrap: v2 $if$ gating removes empty/absent" {
+    const template = "V:$if(version)$X$endif$ N:$if(navigation)$X$endif$ W:$if(warnings)$X$endif$";
+    const out = try wrapT(template, v2_meta, "", "");
+    defer testing.allocator.free(out);
+    // version non-empty → kept; navigation/warnings present-but-empty → removed.
+    try testing.expectEqualStrings("V:X N: W:", out);
 }
 
 // --- html escaping ---
