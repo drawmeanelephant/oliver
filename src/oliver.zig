@@ -72,7 +72,7 @@ comptime {
     _ = c_abi;
 }
 
-pub const version = "1.0.0";
+pub const version = "1.1.0";
 
 /// The input dialect. Both dialects converge into the same document model.
 pub const Dialect = enum {
