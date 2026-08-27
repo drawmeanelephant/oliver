@@ -14,15 +14,23 @@
 //! block removed; absent known field → empty; all `$if$` resolved before
 //! literal subs.
 //!
+//! v3 generic hook (rotkeeper #269): **any key present in `--meta-json`
+//! beyond the typed set becomes an interpolatable token** — no upstream
+//! rebuild needed to add a frontmatter field. String values substitute
+//! html-escaped; null → empty; other scalars stringify; objects/arrays
+//! render as compact JSON. `$if$` gating extends to every present key;
+//! keys absent from meta-json still pass through verbatim.
+//!
 //! The library stays filesystem-free; this is pure bytes in → bytes out.
 
 const std = @import("std");
 
-/// The JSON wire type for the meta fields. Unknown fields are silently
-/// ignored (the S1 contract also ships `template` and `render_profile`
-/// which we don't need here). The extended v2 keys (version, subtitle,
-/// tags, asset_meta, navigation, warnings) are scalars the adapter feeds
-/// from bones/config/version and the source frontmatter.
+/// The JSON wire type for the typed meta fields. Unknown fields are
+/// silently ignored (the S1 contract also ships `template` and
+/// `render_profile` which we don't need here). The extended v2 keys
+/// (version, subtitle, tags, asset_meta, navigation, warnings) are
+/// scalars the adapter feeds from bones/config/version and the source
+/// frontmatter. Any other key is handled generically via `extras` (v3).
 const MetaJson = struct {
     title: ?[]const u8 = null,
     description: ?[]const u8 = null,
@@ -37,15 +45,22 @@ const MetaJson = struct {
     warnings: ?[]const u8 = null,
 };
 
-/// The JSON parse result. The `value` field contains the 5 optional
-/// strings; the arena owns the backing memory. The caller must keep
-/// this struct alive while accessing `value` fields.
-pub const ParsedMeta = std.json.Parsed(MetaJson);
+/// The resolved meta for template interpolation. `value` holds the typed
+/// v1/v2 fields; `extras` borrows the full object map from the dynamic
+/// parse so any other key is interpolatable (v3 generic hook). `scratch`
+/// is an arena for stringified non-string extras; the caller keeps the
+/// underlying parses and arena alive while accessing fields.
+pub const ParsedMeta = struct {
+    value: MetaJson = .{},
+    extras: std.json.ObjectMap = .{},
+    scratch: std.mem.Allocator,
+};
 
 /// Resolves a field name to its value (for `$if$` lookup and substitution).
 /// Returns empty string for missing/null fields (the contract
-/// guarantees all keys, but being defensive is free).
-fn fieldVal(m: ParsedMeta, name: []const u8) []const u8 {
+/// guarantees all keys, but being defensive is free). Typed v1/v2 fields
+/// resolve first; then the v3 generic extras map — any present key.
+fn fieldVal(a: std.mem.Allocator, m: ParsedMeta, name: []const u8) ![]const u8 {
     const v = m.value;
     if (std.mem.eql(u8, name, "title")) return v.title orelse "";
     if (std.mem.eql(u8, name, "description")) return v.description orelse "";
@@ -58,12 +73,33 @@ fn fieldVal(m: ParsedMeta, name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "asset_meta")) return v.asset_meta orelse "";
     if (std.mem.eql(u8, name, "navigation")) return v.navigation orelse "";
     if (std.mem.eql(u8, name, "warnings")) return v.warnings orelse "";
+    if (m.extras.get(name)) |val| return try extraString(a, m, val);
     return "";
 }
 
+/// Renders an extras value as text: strings as-is, null → empty, other
+/// scalars stringified, objects/arrays as compact JSON. Non-string
+/// results are duplicated into the scratch arena.
+fn extraString(a: std.mem.Allocator, m: ParsedMeta, val: std.json.Value) ![]const u8 {
+    return switch (val) {
+        .null => "",
+        .string => |s| s,
+        .bool => |b| if (b) "true" else "false",
+        .integer => |i| try std.fmt.allocPrint(m.scratch, "{d}", .{i}),
+        .float => |f| try std.fmt.allocPrint(m.scratch, "{d}", .{f}),
+        .number_string => |s| s,
+        .array, .object => blk: {
+            var aw = std.Io.Writer.Allocating.init(a);
+            defer aw.deinit();
+            try std.json.Stringify.value(val, .{}, &aw.writer);
+            break :blk try m.scratch.dupe(u8, aw.written());
+        },
+    };
+}
+
 /// Whether the given name is a recognized meta field with a non-empty value.
-fn isNonEmpty(m: ParsedMeta, name: []const u8) bool {
-    return fieldVal(m, name).len > 0;
+fn isNonEmpty(a: std.mem.Allocator, m: ParsedMeta, name: []const u8) !bool {
+    return (try fieldVal(a, m, name)).len > 0;
 }
 
 /// Resolves the template dialect into the output writer.
@@ -82,19 +118,34 @@ pub fn wrap(
     assets_root: []const u8,
     out: anytype,
 ) !void {
-    // Parse the meta JSON. The `parsed` struct owns the arena that backs
-    // the string slices; it must stay alive until we're done reading them.
-    var parsed = std.json.parseFromSlice(MetaJson, a, meta_json, .{
+    // Parse the meta JSON twice: a typed parse for the v1/v2 fields
+    // (string/null, unknown keys ignored) and a dynamic parse for the
+    // v3 extras map (any key, any JSON type). Both arenas stay alive
+    // through interpolation; the scratch arena owns stringified extras.
+    var typed = std.json.parseFromSlice(MetaJson, a, meta_json, .{
         .ignore_unknown_fields = true,
     }) catch return error.MetaJsonParseError;
-    defer parsed.deinit();
+    defer typed.deinit();
+
+    var root = std.json.parseFromSlice(std.json.Value, a, meta_json, .{}) catch return error.MetaJsonParseError;
+    defer root.deinit();
+    if (root.value != .object) return error.MetaJsonParseError;
+
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+
+    const meta = ParsedMeta{
+        .value = typed.value,
+        .extras = root.value.object,
+        .scratch = scratch.allocator(),
+    };
 
     // Phase 1: strip $if(name)$...$endif$ blocks.
-    const stripped = try stripIfs(a, template, parsed);
+    const stripped = try stripIfs(a, template, meta);
     defer a.free(stripped);
 
-    // Phase 2: substitute the 7 literal tokens.
-    try substitute(stripped, parsed, body, assets_root, out);
+    // Phase 2: substitute the literal tokens.
+    try substitute(a, stripped, meta, body, assets_root, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -153,9 +204,9 @@ fn stripIfs(a: std.mem.Allocator, template: []const u8, m: ParsedMeta) ![]u8 {
         const after_endif = end.? + 7; // len of "$endif$"
 
         // Unknown name → verbatim passthrough.
-        if (!isKnownField(name)) {
+        if (!isKnownField(m, name)) {
             try out.appendSlice(a, template[fs..after_endif]);
-        } else if (isNonEmpty(m, name)) {
+        } else if (try isNonEmpty(a, m, name)) {
             try out.appendSlice(a, interior);
         }
         // else: known field but empty → block removed (skip).
@@ -165,9 +216,14 @@ fn stripIfs(a: std.mem.Allocator, template: []const u8, m: ParsedMeta) ![]u8 {
     return out.toOwnedSlice(a);
 }
 
-/// Whether `name` is one of the recognized meta fields (v1 five +
-/// v2 extended set).
-fn isKnownField(name: []const u8) bool {
+/// Whether `name` is one of the typed meta fields (v1 five + v2 extended
+/// set) or present in the v3 extras map.
+fn isKnownField(m: ParsedMeta, name: []const u8) bool {
+    return typedKnownField(name) or m.extras.contains(name);
+}
+
+/// Whether `name` is one of the typed v1/v2 meta fields.
+fn typedKnownField(name: []const u8) bool {
     return std.mem.eql(u8, name, "title") or
         std.mem.eql(u8, name, "description") or
         std.mem.eql(u8, name, "author") or
@@ -206,6 +262,7 @@ fn findEndif(template: []const u8, from: usize) ?usize {
 /// (v1 five + v2 extended set), plus `$assets_root$` and `$body$` as
 /// literals. Unknown `$word$` passes verbatim.
 fn substitute(
+    a: std.mem.Allocator,
     template: []const u8,
     m: ParsedMeta,
     body: []const u8,
@@ -235,8 +292,8 @@ fn substitute(
             try out.writeAll(assets_root);
         } else if (std.mem.eql(u8, name, "body")) {
             try out.writeAll(body);
-        } else if (isKnownField(name)) {
-            try htmlEscape(out, fieldVal(m, name));
+        } else if (isKnownField(m, name)) {
+            try htmlEscape(out, try fieldVal(a, m, name));
         } else {
             // Unknown token: verbatim (including $ delimiters).
             try out.writeAll(template[dollar..i]);
@@ -372,6 +429,61 @@ test "wrap: v2 $if$ gating removes empty/absent" {
     defer testing.allocator.free(out);
     // version non-empty → kept; navigation/warnings present-but-empty → removed.
     try testing.expectEqualStrings("V:X N: W:", out);
+}
+
+// --- v3 generic hook (rotkeeper #269 reusable frontmatter injection) ---
+
+const generic_meta =
+    \\{"title":"T","description":"","author":"","date":"","palette":"","version":"","subtitle":"","tags":"","asset_meta":"","navigation":"","warnings":"","page_type":"404","slug":"/tomb","count":7,"draft":false,"nested":{"a":1},"evil":"<x & y>"}
+;
+
+test "wrap: v3 any meta-json key substitutes (no upstream change needed)" {
+    const template = "pt:$page_type$|slug:$slug$";
+    const out = try wrapT(template, generic_meta, "", "");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("pt:404|slug:/tomb", out);
+}
+
+test "wrap: v3 non-string extras stringify (escaped like every token)" {
+    const template = "c:$count$|d:$draft$|n:$nested$";
+    const out = try wrapT(template, generic_meta, "", "");
+    defer testing.allocator.free(out);
+    // Scalars stringify plainly; the nested object renders as compact JSON,
+    // then html-escaped like any other token (renders as {"a":1} in HTML).
+    try testing.expectEqualStrings("c:7|d:false|n:{&quot;a&quot;:1}", out);
+}
+
+test "wrap: v3 extras html-escaped" {
+    const template = "$evil$";
+    const out = try wrapT(template, generic_meta, "", "");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("&lt;x &amp; y&gt;", out);
+}
+
+test "wrap: v3 $if$ gating on generic keys" {
+    const template = "P:$if(page_type)$[$page_type$]$endif$ M:$if(missing_key)$X$endif$";
+    const out = try wrapT(template, generic_meta, "", "");
+    defer testing.allocator.free(out);
+    // page_type present+non-empty → kept; missing_key absent → verbatim.
+    try testing.expectEqualStrings("P:[404] M:$if(missing_key)$X$endif$", out);
+}
+
+test "wrap: v3 absent key passes verbatim" {
+    const template = "A:$missing_key$";
+    const out = try wrapT(template, generic_meta, "", "");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("A:$missing_key$", out);
+}
+
+test "wrap: v3 generic key with null value gates off" {
+    const meta_json =
+        \\{"title":"","description":"","author":"","date":"","palette":"","version":"","subtitle":"","tags":"","asset_meta":"","navigation":"","warnings":"","page_type":null}
+    ;
+    const template = "X:$if(page_type)$[$page_type$]$endif$";
+    const out = try wrapT(template, meta_json, "", "");
+    defer testing.allocator.free(out);
+    // null → empty → block removed.
+    try testing.expectEqualStrings("X:", out);
 }
 
 // --- html escaping ---
