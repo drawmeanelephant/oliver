@@ -205,11 +205,16 @@ which is not part of the library.
 
 ## Non-goals (consumers build these)
 
-Filesystem discovery, project graphs, site navigation, templates, content
-databases, publication workflows, network access, subprocess execution,
-plugin discovery, environment inspection, application state, static-site
+Filesystem discovery, project graphs, site navigation, templates
+(including Knap — [docs/KNAP.md](KNAP.html)), content databases,
+publication workflows, network access, subprocess execution, plugin
+discovery, environment inspection, application state, static-site
 generation, source repositories, frontmatter semantics, wiki links,
 includes/transclusion, syntax-highlighting subprocesses.
+
+Knap sits *upstream* of Oliver: it turns data into Markdown. Oliver
+parses that Markdown. `oliver wrap` interpolates HTML chrome *after*
+render and is not a Knap engine.
 
 ## Provisional decisions (revisit deliberately)
 

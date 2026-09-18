@@ -724,3 +724,12 @@ runner against the cross-compiled artifact before publishing. The
 `x86_64-windows` target addition and the `needs: [build,
 smoke-windows]` publish gate are issue #95's spec, not new markup
 behavior. No parser implementation source was consulted.
+
+Session 36 (Knap boundary) provenance record: user-facing Knap
+documentation only — <https://knap.md> (variables, filters, logic,
+API), the GitHub README / CHANGELOG / package.json (version 0.6.0,
+MIT), and the Markdown Handbook news post. No Knap parser, tokenizer,
+filter, or CLI implementation source was consulted. The decision is
+that Knap is not an Oliver frontend (docs/KNAP.md): it emits Markdown
+which Oliver already parses; `{{ }}` / `{% %}` / `{# #}` stay
+CommonMark text (fixture `knap-literal`).

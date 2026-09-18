@@ -39,7 +39,7 @@ fifth — the XHTML profile suite — and sixth — the fuzz wall — are descri
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 18 tests in `tests/fixtures_test.zig`.
-   The explicit index contains 300 Markdown (276 CommonMark/GFM +
+   The explicit index contains 320 Markdown (296 CommonMark/GFM +
    19 extension + 5 frontmatter pairs) and 106 Textile (105 + 1
    frontmatter pair) fixture pairs, plus 11 Cooklang pairs across the
    fixture, frontmatter, serialize, scale, and menu tables.
@@ -55,7 +55,8 @@ fifth — the XHTML profile suite — and sixth — the fuzz wall — are descri
    byte-for-byte plus alignment colons, escaped pipes including the
    `<code>|</code>` code-span form, container nesting, inline-parsed
    cells, padding/truncation, and literal non-table fallbacks;
-   docs/TABLES.md); the Textile wall covers `bq.`
+   docs/TABLES.md); the `knap-literal` pair pins unrendered Knap
+   template braces and tags as CommonMark text (docs/KNAP.md); the Textile wall covers `bq.`
    quotes, `@code@` spans, the full phrase-modifier family
    (strong/emphasis/bold/italic/del/ins/sup/sub/span, big/small
    `++x++`/`--x--` with the em-dash interplay — a matched `--` pair is
@@ -194,7 +195,7 @@ fifth — the XHTML profile suite — and sixth — the fuzz wall — are descri
    paths (`renderWith` / `scaleWith`, the same paths `main` uses).
    They run as part of the ordinary `zig build test` gate.
 
-The current complete result is **394/394 tests passing** with Zig 0.16.0
+The current complete result is **466/466 tests passing** with Zig 0.16.0
 (317 library module tests — including 8 C-ABI tests over the exported
 `oliver_render`/`oliver_free` surface — + 18 fixture/adversarial tests + 7
 conformance-harness tests + 32 CLI argument-parsing tests + 19 XHTML
