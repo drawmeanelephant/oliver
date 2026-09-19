@@ -826,19 +826,37 @@ fn tryToken(ps: *ParaState, marker_pos: usize, line_end: usize) ParseError!?Toke
     const i = marker_pos + 1;
     // Scan the potential name region: word characters (non-P — symbols
     // like `🧂` count), spaces (part of multiword names), hyphens, and
-    // the `.`/`/` of recipe-reference paths. It stops at `{` (the
-    // braced/multiword form), at a token marker (`@`/`#`/`~`), or at any
-    // other P-category punctuation — so `@salt, @ground black pepper{2}`
-    // keeps `@salt` single-word (the `,` ends the region; this is how the
-    // spec's own `@salt and @ground black pepper{}` example parses), while
-    // `@ground black pepper{2}` and `@1000 island dressing{ }` reach the
-    // `{` and keep the whole phrase as the name.
+    // the `.`/`/` of recipe-reference paths. It stops at `{` — but only
+    // when that `{` touches the name, i.e. the braced/multiword form
+    // (see the adjacency check below) — at a token marker (`@`/`#`/`~`),
+    // or at any other P-category punctuation — so `@salt,
+    // @ground black pepper{2}` keeps `@salt` single-word (the `,` ends
+    // the region; this is how the spec's own `@salt and @ground black
+    // pepper{}` example parses), while `@ground black pepper{2}` and
+    // `@1000 island dressing{ }` reach the `{` and keep the whole phrase
+    // as the name.
     var brace: ?usize = null;
     {
         var j = i;
         while (j < line_end) {
             if (unicode.decode(bytes, j)) |c| {
                 if (c == '{') {
+                    // Contract (§Name termination): the multiword form's
+                    // `{` must touch the name — no whitespace between
+                    // the name's last character and the brace. A `{`
+                    // reached across whitespace is prose, not a name
+                    // terminator (`@salt into the {bowl}` names `salt`
+                    // and keeps `{bowl}` literal text), so the token
+                    // degrades to the single-word form. The preceding
+                    // code point is decoded whole, not just the last
+                    // byte, so multibyte whitespace still separates.
+                    var touching = true;
+                    if (j > i) {
+                        var s2 = j - 1;
+                        while (s2 > i and (bytes[s2] & 0xC0) == 0x80) s2 -= 1;
+                        if (unicode.decode(bytes, s2)) |pc| touching = !unicode.isWhitespace(pc);
+                    }
+                    if (!touching) break;
                     brace = j;
                     break;
                 }
@@ -1236,6 +1254,50 @@ test "cooklang: cookware single and multiword" {
     const cw = step.parts[3].cookware;
     try std.testing.expectEqualStrings("2", cw.quantity.?);
     try std.testing.expectEqual(Quantity{ .int = 2 }, cw.numeric.?);
+}
+
+test "cooklang: distant brace does not terminate the name (#907 adjacency)" {
+    // Contract (§Name termination): the multiword form's `{` must touch
+    // the name. A `{` later in the sentence is prose, not a terminator:
+    // `salt` stays a one-word name with no quantity, and `the {bowl}`
+    // stays literal step text instead of being swallowed as an amount.
+    var res = try parseT(std.testing.allocator, "Add @salt into the {bowl} and stir.");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try expectParts(step.parts, &.{"salt"});
+    const ig = step.parts[1].ingredient;
+    try std.testing.expect(ig.quantity == null);
+    try std.testing.expect(ig.numeric == null);
+    try std.testing.expectEqualStrings(" into the {bowl} and stir.", step.parts[2].text.text);
+}
+
+test "cooklang: whitespace before the brace breaks the braced form" {
+    var res = try parseT(std.testing.allocator, "Use @pepper {2} grams.");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try expectParts(step.parts, &.{"pepper"});
+    const ig = step.parts[1].ingredient;
+    try std.testing.expect(ig.quantity == null);
+    try std.testing.expectEqualStrings(" {2} grams.", step.parts[2].text.text);
+}
+
+test "cooklang: touching brace still forms the multiword name with quantity" {
+    var res = try parseT(std.testing.allocator, "Add @ground black pepper{2} now.");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try expectParts(step.parts, &.{"ground black pepper"});
+    const ig = step.parts[1].ingredient;
+    try std.testing.expectEqualStrings("2", ig.quantity.?);
+}
+
+test "cooklang: unnamed timer form keeps its touching brace" {
+    var res = try parseT(std.testing.allocator, "Rest ~{25%minutes} then taste.");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try expectParts(step.parts, &.{""});
+    const tm = step.parts[1].timer;
+    try std.testing.expectEqualStrings("25", tm.quantity.?);
+    try std.testing.expectEqualStrings("minutes", tm.units.?);
 }
 
 test "cooklang: emoji stays in the name; punctuation and whitespace end it" {
