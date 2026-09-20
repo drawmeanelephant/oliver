@@ -1297,6 +1297,9 @@ test "cooklang: multibyte whitespace before the brace also breaks the braced for
     try expectParts(step.parts, &.{"pepper"});
     const ig = step.parts[1].ingredient;
     try std.testing.expect(ig.quantity == null);
+    // The separated prose stays literal step text (review finding: pin the
+    // fallback fully, not just name+quantity).
+    try std.testing.expectEqualStrings("\u{2009}{2} grams.", step.parts[2].text.text);
 }
 
 test "cooklang: touching brace still forms the multiword name with quantity" {
