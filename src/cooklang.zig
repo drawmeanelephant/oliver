@@ -18,14 +18,17 @@
 //! recorded in docs/COOKLANG.md and docs/CLEANROOM.md session 21.
 //!
 //! Chosen behaviors (pinned by tests; see docs/COOKLANG.md §4):
-//! - A token's multiword name runs to the first `{` on the line, but the
-//!   region stops early at a following token marker (`@`/`#`/`~`), at
-//!   P-category punctuation, and at non-`-`/`.`/`/` boundaries — so the
-//!   spec's own `@salt and @ground black pepper{}` parses as two
-//!   ingredients (the raw EBNF would name the whole run). With no `{`,
-//!   the token is single-word (first word, ending at Unicode whitespace
-//!   or P-category punctuation — symbols stay in names, per the corpus's
-//!   `@🧂`).
+//! - A token's multiword name runs to a `{` that touches the name — the
+//!   contract's adjacency rule; a `{` reached across whitespace ends the
+//!   name scan and the token degrades to the single-word form (so `@salt
+//!   into the {bowl}` names `salt` and keeps `{bowl}` as literal text).
+//!   The region also stops early at a following token marker
+//!   (`@`/`#`/`~`), at P-category punctuation, and at non-`-`/`.`/`/`
+//!   boundaries — so the spec's own `@salt and @ground black pepper{}`
+//!   parses as two ingredients (the raw EBNF would name the whole run).
+//!   With no touching `{`, the token is single-word (first word, ending
+//!   at Unicode whitespace or P-category punctuation — symbols stay in
+//!   names, per the corpus's `@🧂`).
 //! - Invalid token shapes degrade to literal text (the corpus's invalid
 //!   tests), never errors: the marker must be followed by a non-
 //!   whitespace character, braces must close on the line, and a single
@@ -812,7 +815,9 @@ const Token = struct {
 
 /// Attempts to parse a token starting at the marker byte `marker_pos`.
 /// Returns null (the marker stays literal text) when the shape is
-/// invalid. Multiword names run to the first `{` on the line; with no
+/// invalid. Multiword names run to a `{` that touches the name (the
+/// contract's adjacency rule — a `{` reached across whitespace is prose,
+/// and the token degrades to the single-word form); with no touching
 /// `{`, the name is the first word (Unicode whitespace or P-category
 /// punctuation ends it; symbols stay in the name, per the corpus's `@🧂`).
 fn tryToken(ps: *ParaState, marker_pos: usize, line_end: usize) ParseError!?Token {
@@ -1276,6 +1281,19 @@ test "cooklang: whitespace before the brace breaks the braced form" {
     const ig = step.parts[1].ingredient;
     try std.testing.expect(ig.quantity == null);
     try std.testing.expectEqualStrings(" {2} grams.", step.parts[2].text.text);
+}
+
+test "cooklang: multibyte whitespace before the brace also breaks the braced form" {
+    // The adjacency check decodes the preceding code point whole (walking
+    // back over UTF-8 continuation bytes), so U+2009 thin space separates
+    // exactly like ASCII space — the guard must not degrade to a last-byte
+    // comparison.
+    var res = try parseT(std.testing.allocator, "Use @pepper\u{2009}{2} grams.");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try expectParts(step.parts, &.{"pepper"});
+    const ig = step.parts[1].ingredient;
+    try std.testing.expect(ig.quantity == null);
 }
 
 test "cooklang: touching brace still forms the multiword name with quantity" {
