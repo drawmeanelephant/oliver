@@ -23,6 +23,9 @@ recipe semantics are richer than prose markup — ingredients,
 quantities, units, cookware, and timers survive parsing as typed data,
 never as decorated text.
 
+Knap is not a frontend. It is a template language that emits Markdown;
+Oliver parses that Markdown. The boundary is [docs/KNAP.md](KNAP.html).
+
 ## Markdown
 
 Full CommonMark 0.31.2 conformance. Block syntax: paragraphs, ATX and
@@ -104,4 +107,5 @@ YAML). Derived operations over the same model:
   [Textile docs](index.html#textile-frontend) ·
   [Cooklang contract](COOKLANG.html)
 - [Architecture](ARCHITECTURE.html) · [Document model](DOCUMENT-MODEL.html)
-  · [Feature matrix](FEATURE-MATRIX.html) · [Tests](TESTS.html)
+  · [Feature matrix](FEATURE-MATRIX.html) · [Knap boundary](KNAP.html) ·
+  [Tests](TESTS.html)

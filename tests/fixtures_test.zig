@@ -1449,6 +1449,13 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/table-literal.md"),
         .expected = @embedFile("fixtures/markdown/table-literal.html"),
     },
+    // Unrendered Knap source is CommonMark: `{{ }}` / `{% %}` / `{# #}`
+    // stay literal text. Knap is not a frontend (docs/KNAP.md).
+    .{
+        .name = "knap-literal",
+        .input = @embedFile("fixtures/markdown/knap-literal.md"),
+        .expected = @embedFile("fixtures/markdown/knap-literal.html"),
+    },
 };
 
 /// Markdown-extension fixtures (footnotes, definition lists, heading

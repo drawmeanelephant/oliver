@@ -10,10 +10,12 @@ Cooklang ──> typed Recipe (its own model) ─> deterministic HTML / XHTML po
 
 Oliver parses a byte slice into a typed document (or, for Cooklang, a typed
 Recipe) and renders it deterministically. No filesystem, templates, site
-graphs, plugins, or publication — consumers build that around Oliver. It is a
-clean-room implementation of the behavior specified by CommonMark, published
-Textile syntax documentation, and the Cooklang specification and canonical
-corpus ([docs/CLEANROOM.md](docs/CLEANROOM.md)).
+graphs, plugins, or publication — consumers build that around Oliver. Knap,
+a template language that emits Markdown, is not a frontend
+([docs/KNAP.md](docs/KNAP.md)). Oliver is a clean-room implementation of
+the behavior specified by CommonMark, published Textile syntax
+documentation, and the Cooklang specification and canonical corpus
+([docs/CLEANROOM.md](docs/CLEANROOM.md)).
 
 The name honors Oliver, the Weimaraner of Dean Allen, who created Textile
 and photographed his dog daily at
