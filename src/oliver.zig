@@ -31,7 +31,7 @@ pub const document = @import("document.zig");
 pub const markdown = @import("markdown.zig");
 pub const textile = @import("textile.zig");
 pub const html = @import("html.zig");
-/// The renderer output profile (`.html` or `.xhtml`); shared by the
+/// The renderer output profile (`.html`, `.xhtml`, `.html4_strict`); shared by the
 /// Document renderer (`html.RenderOptions.profile`) and the Cooklang
 /// renderer (`cooklang_html.RenderOptions.profile`). docs/XHTML.md.
 pub const OutputProfile = html.OutputProfile;

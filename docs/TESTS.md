@@ -412,6 +412,17 @@ fixture wall) covers the `.xhtml` serializer profile end to end
   namespace-aware test-only wrapper and validated; the checker itself
   distinguishes clean from poisoned input.
 
+## HTML 4.01 Strict profile suite
+
+`tests/html4_strict_test.zig` is wired into `zig build test`. It compares
+unchanged structures to default HTML, pins the profile-specific Cooklang,
+footnote, and task-list differences, and checks raw-content, invalid-ID, and
+non-1 ordered-list errors. `tests/html4_strict_valid.zig` wraps representative
+Markdown, Textile, Cooklang and opt-in-extension fragments in a minimal
+test-only HTML document and checks the emitted Strict subset's vocabulary,
+attributes, selected nesting rules, and required nonempty table bodies. This is a hermetic subset gate,
+not a full SGML DTD validator (docs/HTML4-STRICT.md).
+
 ## Commands
 
 ```bash

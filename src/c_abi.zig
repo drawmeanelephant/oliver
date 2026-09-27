@@ -42,6 +42,11 @@ pub const Error = enum(c_int) {
     raw_html_rejected = 3,
     raw_html_not_xml_well_formed = 4,
     invalid_argument = 5,
+    raw_html_not_html4_strict = 6,
+    ordered_list_start_not_html4_strict = 7,
+    invalid_html4_strict_id = 8,
+    duplicate_html4_strict_id = 9,
+    empty_table_not_html4_strict = 10,
 };
 
 /// An owned render result. On success (`error_code == ok`), `data`
@@ -130,7 +135,7 @@ const vtable: std.mem.Allocator.VTable = .{
 /// is `invalid_argument`.
 const DialectC = enum(c_int) { markdown = 0, textile = 1 };
 const FrontmatterC = enum(c_int) { none = 0, yaml = 1, toml = 2 };
-const ProfileC = enum(c_int) { html = 0, xhtml = 1 };
+const ProfileC = enum(c_int) { html = 0, xhtml = 1, html4_strict = 2 };
 const RawHtmlC = enum(c_int) { allowed = 0, escaped = 1, rejected = 2 };
 
 /// Markdown parse-extension bitmask (parse side of
@@ -186,6 +191,7 @@ pub export fn oliver_render(
     const profile_c: ProfileC = switch (profile) {
         0 => .html,
         1 => .xhtml,
+        2 => .html4_strict,
         else => return err(Error.invalid_argument),
     };
     const raw_c: RawHtmlC = switch (raw_html) {
@@ -260,6 +266,7 @@ fn renderImpl(
         .profile = switch (profile) {
             .html => .html,
             .xhtml => .xhtml,
+            .html4_strict => .html4_strict,
         },
         .raw_html = switch (raw_html) {
             .allowed => .allowed,
@@ -290,6 +297,11 @@ fn mapError(e: anyerror) Error {
         error.OutOfMemory => .out_of_memory,
         error.RawHtmlRejected => .raw_html_rejected,
         error.RawHtmlNotXmlWellFormed => .raw_html_not_xml_well_formed,
+        error.RawHtmlNotHtml4Strict => .raw_html_not_html4_strict,
+        error.OrderedListStartNotHtml4Strict => .ordered_list_start_not_html4_strict,
+        error.InvalidHtml4StrictId => .invalid_html4_strict_id,
+        error.DuplicateHtml4StrictId => .duplicate_html4_strict_id,
+        error.EmptyTableNotHtml4Strict => .empty_table_not_html4_strict,
         else => @panic("oliver_render: unhandled error"),
     };
 }
@@ -391,6 +403,27 @@ test "c-abi: xhtml fails closed on raw html with the well-formedness code" {
     const buf = render(&arena, "<div>\nraw\n</div>\n", 0, 0, 0, 1, 0, 0, 0);
     try std.testing.expectEqual(@as(c_int, 4), buf.error_code);
     try std.testing.expect(buf.data == null);
+}
+
+test "c-abi: html4-strict selects profile and returns typed failures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const ok = render(&arena, "- [x] done\n", 0, 0, MarkdownFlag.task_lists, 2, 0, 0, 0);
+    try std.testing.expectEqual(@as(c_int, 0), ok.error_code);
+    defer oliver_free(testFree, &arena, ok);
+    try std.testing.expect(std.mem.indexOf(u8, ok.data.?[0..ok.len], "disabled=\"disabled\" checked=\"checked\">") != null);
+    const raw = render(&arena, "<b>raw</b>\n", 0, 0, 0, 2, 0, 0, 0);
+    try std.testing.expectEqual(@as(c_int, 6), raw.error_code);
+    try std.testing.expect(raw.data == null);
+    const list = render(&arena, "3. item\n", 0, 0, 0, 2, 0, 0, 0);
+    try std.testing.expectEqual(@as(c_int, 7), list.error_code);
+    try std.testing.expect(list.data == null);
+    const invalid = render(&arena, "h1(#123). Heading\n", 1, 0, 0, 2, 0, 0, 0);
+    try std.testing.expectEqual(@as(c_int, 8), invalid.error_code);
+    try std.testing.expect(invalid.data == null);
+    const duplicate = render(&arena, "# Same\n\n# Same\n", 0, 0, 0, 2, 0, 1, 0);
+    try std.testing.expectEqual(@as(c_int, 9), duplicate.error_code);
+    try std.testing.expect(duplicate.data == null);
 }
 
 test "c-abi: raw_html escaped renders well-formed under both profiles" {

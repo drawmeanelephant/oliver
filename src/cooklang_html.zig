@@ -57,15 +57,16 @@ const html_mod = @import("html.zig");
 pub const OutputProfile = html_mod.OutputProfile;
 
 pub const RenderOptions = struct {
-    /// The output profile: `.html` (default) or `.xhtml`.
+    /// The output profile: `.html` (default), `.xhtml`, or `.html4_strict`.
     profile: OutputProfile = .html,
 };
 
 pub fn render(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.Recipe, options: RenderOptions) !void {
-    try writer.writeAll("<article class=\"recipe\">\n");
-    try writeIngredientsIndex(gpa, writer, recipe.blocks);
+    const strict = options.profile == .html4_strict;
+    try writer.writeAll(if (strict) "<div class=\"recipe\">\n" else "<article class=\"recipe\">\n");
+    try writeIngredientsIndex(gpa, writer, recipe.blocks, options.profile);
     try renderBlocks(writer, recipe.blocks, options.profile);
-    try writer.writeAll("</article>\n");
+    try writer.writeAll(if (strict) "</div>\n" else "</article>\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +84,7 @@ const IndexItem = struct {
 /// Writes the ingredients index (once per distinct name, in first-
 /// appearance order, recursing into sections). Nothing is written when
 /// the recipe has no ingredient or reference tokens.
-fn writeIngredientsIndex(gpa: std.mem.Allocator, writer: anytype, blocks: []const cooklang.Block) !void {
+fn writeIngredientsIndex(gpa: std.mem.Allocator, writer: anytype, blocks: []const cooklang.Block, profile: OutputProfile) !void {
     var items = std.ArrayList(IndexItem).empty;
     defer items.deinit(gpa);
     var seen = std.StringHashMap(void).init(gpa);
@@ -91,18 +92,25 @@ fn writeIngredientsIndex(gpa: std.mem.Allocator, writer: anytype, blocks: []cons
     try collectIngredients(gpa, blocks, &items, &seen);
     if (items.items.len == 0) return;
 
-    try writer.writeAll("<section class=\"ingredients\">\n<h2>Ingredients</h2>\n<ul>\n");
+    try writer.writeAll(if (profile == .html4_strict)
+        "<div class=\"ingredients\">\n<h2>Ingredients</h2>\n<ul>\n"
+    else
+        "<section class=\"ingredients\">\n<h2>Ingredients</h2>\n<ul>\n");
     for (items.items) |item| {
         if (item.is_recipe_reference) {
-            try writer.writeAll("<li class=\"recipe-ref\" data-ref=\"");
-            try escapeInto(writer, item.name, true);
-            try writer.writeAll("\">");
+            try writer.writeAll("<li class=\"recipe-ref\"");
+            if (profile != .html4_strict) {
+                try writer.writeAll(" data-ref=\"");
+                try escapeInto(writer, item.name, true);
+                try writer.writeByte('"');
+            }
+            try writer.writeByte('>');
             try escapeInto(writer, item.name, false);
             try writer.writeAll("</li>\n");
             continue;
         }
         try writer.writeAll("<li class=\"ingredient\"");
-        try writeQuantity(writer, item.quantity, item.units);
+        try writeQuantity(writer, item.quantity, item.units, profile);
         try writer.writeAll(">");
         if (item.quantity) |q| {
             if (q.len > 0) {
@@ -125,7 +133,7 @@ fn writeIngredientsIndex(gpa: std.mem.Allocator, writer: anytype, blocks: []cons
         }
         try writer.writeAll("</li>\n");
     }
-    try writer.writeAll("</ul>\n</section>\n");
+    try writer.writeAll(if (profile == .html4_strict) "</ul>\n</div>\n" else "</ul>\n</section>\n");
 }
 
 fn collectIngredients(
@@ -183,16 +191,16 @@ fn renderBlocks(writer: anytype, blocks: []const cooklang.Block, profile: Output
                     try writer.writeAll("</ol>\n");
                     ol_open = false;
                 }
-                try writer.writeAll("<aside class=\"note\">");
+                try writer.writeAll(if (profile == .html4_strict) "<div class=\"note\">" else "<aside class=\"note\">");
                 try escapeInto(writer, note.text, false);
-                try writer.writeAll("</aside>\n");
+                try writer.writeAll(if (profile == .html4_strict) "</div>\n" else "</aside>\n");
             },
             .section => |section| {
                 if (ol_open) {
                     try writer.writeAll("</ol>\n");
                     ol_open = false;
                 }
-                try writer.writeAll("<section>\n");
+                try writer.writeAll(if (profile == .html4_strict) "<div>\n" else "<section>\n");
                 // An unnamed section (`= `) gets no empty heading.
                 if (section.name.len > 0) {
                     try writer.writeAll("<h2>");
@@ -200,7 +208,7 @@ fn renderBlocks(writer: anytype, blocks: []const cooklang.Block, profile: Output
                     try writer.writeAll("</h2>\n");
                 }
                 try renderBlocks(writer, section.blocks, profile);
-                try writer.writeAll("</section>\n");
+                try writer.writeAll(if (profile == .html4_strict) "</div>\n" else "</section>\n");
             },
         }
     }
@@ -213,15 +221,19 @@ fn renderPart(writer: anytype, part: cooklang.Part, profile: OutputProfile) !voi
         .line_break => try writer.writeAll(if (profile == .xhtml) "<br />" else "<br>"),
         .ingredient => |ig| {
             if (ig.is_recipe_reference) {
-                try writer.writeAll("<span class=\"recipe-ref\" data-ref=\"");
-                try escapeInto(writer, ig.name, true);
-                try writer.writeAll("\">");
+                try writer.writeAll("<span class=\"recipe-ref\"");
+                if (profile != .html4_strict) {
+                    try writer.writeAll(" data-ref=\"");
+                    try escapeInto(writer, ig.name, true);
+                    try writer.writeByte('"');
+                }
+                try writer.writeByte('>');
                 try escapeInto(writer, ig.name, false);
                 try writer.writeAll("</span>");
                 return;
             }
             try writer.writeAll("<span class=\"ingredient\"");
-            try writeQuantity(writer, ig.quantity, ig.units);
+            try writeQuantity(writer, ig.quantity, ig.units, profile);
             try writer.writeAll(">");
             try escapeInto(writer, ig.name, false);
             if (ig.preparation) |prep| {
@@ -233,20 +245,22 @@ fn renderPart(writer: anytype, part: cooklang.Part, profile: OutputProfile) !voi
         },
         .cookware => |cw| {
             try writer.writeAll("<span class=\"cookware\"");
-            try writeQuantity(writer, cw.quantity, null);
+            try writeQuantity(writer, cw.quantity, null, profile);
             try writer.writeAll(">");
             try escapeInto(writer, cw.name, false);
             try writer.writeAll("</span>");
         },
         .timer => |tm| {
-            try writer.writeAll("<time class=\"timer\"");
-            try writeQuantity(writer, tm.quantity, tm.units);
+            try writer.writeAll(if (profile == .html4_strict) "<span class=\"timer\"" else "<time class=\"timer\"");
+            try writeQuantity(writer, tm.quantity, tm.units, profile);
             var dur_buf: [32]u8 = undefined;
-            if (tm.quantity) |q| {
-                if (isoDuration(q, tm.units, &dur_buf)) |dur| {
-                    try writer.writeAll(" datetime=\"");
-                    try writer.writeAll(dur);
-                    try writer.writeAll("\"");
+            if (profile != .html4_strict) {
+                if (tm.quantity) |q| {
+                    if (isoDuration(q, tm.units, &dur_buf)) |dur| {
+                        try writer.writeAll(" datetime=\"");
+                        try writer.writeAll(dur);
+                        try writer.writeAll("\"");
+                    }
                 }
             }
             try writer.writeAll(">");
@@ -279,14 +293,15 @@ fn renderPart(writer: anytype, part: cooklang.Part, profile: OutputProfile) !voi
                     if (u.len > 0) try escapeInto(writer, u, false);
                 }
             }
-            try writer.writeAll("</time>");
+            try writer.writeAll(if (profile == .html4_strict) "</span>" else "</time>");
         },
     }
 }
 
 /// Writes the `data-quantity`/`data-units` attributes for a token,
 /// omitting empty values (no braces, or empty braces).
-fn writeQuantity(writer: anytype, quantity: ?[]const u8, units: ?[]const u8) !void {
+fn writeQuantity(writer: anytype, quantity: ?[]const u8, units: ?[]const u8, profile: OutputProfile) !void {
+    if (profile == .html4_strict) return;
     if (quantity) |q| {
         if (q.len > 0) {
             try writer.writeAll(" data-quantity=\"");

@@ -60,6 +60,12 @@
           "summary": "The same IR and semantics under an XML-compatible serialization: fragment semantics, the fail-closed raw-HTML policy, and the well-formedness gate."
         },
         {
+          "file": "HTML4-STRICT.md",
+          "title": "HTML 4.01 Strict output profile",
+          "audience": "dev",
+          "summary": "HTML 4.01 Strict fragment mappings, semantic tradeoffs, fail-closed content, and the hermetic subset gate."
+        },
+        {
           "file": "COMMONMARK-EXPECTATIONS.md",
           "title": "CommonMark expectations",
           "audience": "dev",

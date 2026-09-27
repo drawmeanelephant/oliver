@@ -53,6 +53,8 @@ consume directly. The map below mirrors it.
 - [XHTML output profile](XHTML.html) — the same IR and semantics under
   an XML-compatible serialization, the fail-closed raw-HTML policy, and
   the well-formedness gate
+- [HTML 4.01 Strict output profile](HTML4-STRICT.html) — Strict fragment
+  mappings, unsupported content, and the hermetic subset gate
 - [CommonMark expectations](COMMONMARK-EXPECTATIONS.html) — the
   classified conformance expectation set behind the 652/652 gate
 

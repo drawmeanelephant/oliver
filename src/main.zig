@@ -1,8 +1,8 @@
 //! Provisional CLI: a thin adapter over the library for shell integration.
 //!
-//!     oliver render    --from markdown [--to html|xhtml] < document.md
-//!     oliver render    --from textile  [--to html|xhtml] < document.textile
-//!     oliver render    --from cooklang [--to html|xhtml] < recipe.cook
+//!     oliver render    --from markdown [--to html|xhtml|html4-strict] < document.md
+//!     oliver render    --from textile  [--to html|xhtml|html4-strict] < document.textile
+//!     oliver render    --from cooklang [--to html|xhtml|html4-strict] < recipe.cook
 //!     oliver serialize --from cooklang < recipe.cook > canonical.cook
 //!     oliver serialize --from cooklang --json < recipe.cook  # typed model dump
 //!     oliver scale --from cooklang --factor 2 < recipe.cook > doubled.cook
@@ -242,6 +242,8 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
                 profile = .html;
             } else if (std.mem.eql(u8, value, "xhtml")) {
                 profile = .xhtml;
+            } else if (std.mem.eql(u8, value, "html4-strict")) {
+                profile = .html4_strict;
             } else return error.Usage;
             saw_to = true;
         } else if (std.mem.eql(u8, arg, "--raw-html")) {
@@ -714,6 +716,21 @@ pub fn main(init: std.process.Init) !u8 {
                     .{},
                 );
             }
+            if (err == error.RawHtmlNotHtml4Strict) {
+                std.debug.print("oliver: --to html4-strict rejects verbatim HTML; use --raw-html escaped or --to html (docs/HTML4-STRICT.md).\n", .{});
+            }
+            if (err == error.OrderedListStartNotHtml4Strict) {
+                std.debug.print("oliver: --to html4-strict cannot preserve an ordered list starting other than 1 (docs/HTML4-STRICT.md).\n", .{});
+            }
+            if (err == error.InvalidHtml4StrictId) {
+                std.debug.print("oliver: --to html4-strict requires HTML 4.01-compatible id values (docs/HTML4-STRICT.md).\n", .{});
+            }
+            if (err == error.DuplicateHtml4StrictId) {
+                std.debug.print("oliver: --to html4-strict requires unique id values (docs/HTML4-STRICT.md).\n", .{});
+            }
+            if (err == error.EmptyTableNotHtml4Strict) {
+                std.debug.print("oliver: --to html4-strict requires at least one table row (docs/HTML4-STRICT.md).\n", .{});
+            }
             if (err == error.RawHtmlRejected) {
                 std.debug.print(
                     "oliver: --raw-html rejected refuses raw HTML (docs/RAW-HTML.md section 3):\n" ++
@@ -1129,7 +1146,8 @@ fn printUsage() void {
         \\       oliver --version
         \\
         \\Reads a document from stdin and writes rendered HTML to stdout
-        \\(XHTML fragment with --to xhtml). serialize/scale write canonical
+        \\(XHTML with --to xhtml; HTML 4.01 Strict with --to html4-strict).
+        \\serialize/scale write canonical
         \\Cooklang text (serialize --json dumps the typed Recipe model as
         \\JSON instead); menu writes the day/meal text dump. meta reads a
         \\document from stdin and writes the 7-field frontmatter JSON to
@@ -1295,6 +1313,19 @@ test "cli: --to xhtml reaches the cooklang render path" {
     try testing.expect(cfg.cooklang);
     try testing.expectEqual(oliver.OutputProfile.xhtml, cfg.profile);
     try testing.expectEqual(Command.render, cfg.command);
+}
+test "cli: html4-strict selects both frontends and fails closed" {
+    const md = try parseArgs(&.{ "render", "--from", "markdown", "--to", "html4-strict" });
+    try testing.expectEqual(oliver.OutputProfile.html4_strict, md.profile);
+    const ck = try parseArgs(&.{ "render", "--from", "cooklang", "--to", "html4-strict" });
+    try testing.expectEqual(oliver.OutputProfile.html4_strict, ck.profile);
+    try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--to", "html4-strict" }));
+    try testing.expectError(error.RawHtmlNotHtml4Strict, renderWith(testing.allocator, md, "<b>raw</b>\n"));
+    try testing.expectError(error.OrderedListStartNotHtml4Strict, renderWith(testing.allocator, md, "3. item\n"));
+    const escaped = try parseArgs(&.{ "render", "--from", "textile", "--to", "html4-strict", "--raw-html", "escaped" });
+    const output = try renderWith(testing.allocator, escaped, "pre. <b>text</b>\n");
+    defer testing.allocator.free(output);
+    try testing.expect(std.mem.indexOf(u8, output, "&lt;b&gt;text&lt;/b&gt;") != null);
 }
 
 test "cli: missing, duplicated, or conflicting subcommands are rejected" {

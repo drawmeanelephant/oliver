@@ -70,7 +70,8 @@ YAML). Derived operations over the same model:
 - **render** — a deterministic HTML policy: ingredients index,
   timers as `<time>` with ISO-8601 durations, section-aware layout
   (with `--to xhtml` for the XML-compatible fragment profile,
-  docs/XHTML.md)
+  docs/XHTML.md, or `--to html4-strict` for HTML 4.01 Strict fragments
+  with documented semantic tradeoffs, docs/HTML4-STRICT.md)
 - **menu** — the day/meal view over parsed `.menu` files (sections as
   days, `(YYYY-MM-DD)` dates, reference directives as source text)
 
@@ -86,11 +87,12 @@ YAML). Derived operations over the same model:
   memory-ownership contract and explicit error codes (docs/C-ABI.md),
   proven by the CI-compiled `examples/c_example.c`.
 - **CLI**: `oliver render --from <markdown|textile|cooklang>
-  [--to <html|xhtml>]`, `oliver serialize --from cooklang`,
+  [--to <html|xhtml|html4-strict>]`, `oliver serialize --from cooklang`,
   `oliver scale --from cooklang (--factor n[/d] | --servings n)`,
   `oliver menu --from cooklang` — a thin stdin/stdout adapter; all
   semantics live in the library. HTML remains the default; `--to xhtml`
-  selects the XML-compatible fragment serialization. Markdown render
+  selects the XML-compatible fragment serialization; `--to html4-strict`
+  selects the HTML 4.01 Strict subset profile. Markdown render
   also exposes the extension surface as flags (`--wikilinks`,
   `--callouts`, `--smartypants`, `--footnotes`, `--definition-lists`,
   `--heading-attributes`, `--strikethrough`, `--heading-ids`,
