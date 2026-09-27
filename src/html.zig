@@ -203,6 +203,7 @@ pub const RawHtmlNotHtml4Strict = error.RawHtmlNotHtml4Strict;
 pub const OrderedListStartNotHtml4Strict = error.OrderedListStartNotHtml4Strict;
 pub const InvalidHtml4StrictId = error.InvalidHtml4StrictId;
 pub const DuplicateHtml4StrictId = error.DuplicateHtml4StrictId;
+pub const EmptyTableNotHtml4Strict = error.EmptyTableNotHtml4Strict;
 
 /// Renders `doc` to `writer`.
 ///
@@ -239,7 +240,7 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
             .enter => |f| {
                 if (f.prefix_newline) try writer.writeByte('\n');
                 try writeOpen(gpa, writer, &stack, f.node, f.suppress_p, f.footnote_backref, options, doc.src.bytes, &fn_ctx);
-                try pushChildren(gpa, &stack, f.node, f.tight_item);
+                try pushChildren(gpa, &stack, f.node, f.tight_item, options);
             },
             .marker => |text| try writer.writeAll(text),
             .backref => |n| try writeBackrefs(writer, &fn_ctx, n, options),
@@ -302,14 +303,14 @@ fn pushChildren(
     stack: *std.ArrayList(Frame),
     node: *const document.Node,
     node_tight_item: bool,
+    options: RenderOptions,
 ) !void {
     // A GFM table's children are rows; the first is the header row, the rest
     // body rows. The `<thead>`/`<tbody>` split is emitted between them as
     // marker frames (GFM §4.10 output; no `<tbody>` with no body rows).
-    // Textile tables (`.sections == false`) render as flat `<tr>` rows — the
-    // references show no thead/tbody even with header cells
-    // (docs/TEXTILE-PARITY.md §7). The table's own exit frame was already
-    // pushed by `writeOpen`.
+    // Textile tables (`.sections == false`) render as flat `<tr>` rows in
+    // HTML/XHTML (docs/TEXTILE-PARITY.md §7). Strict wraps them in a tbody
+    // at open/close time. The table's own exit frame is already pushed.
     if (node.tag == .table) {
         const n = node.children.items.len;
         if (!node.data.table.sections) {
@@ -338,7 +339,12 @@ fn pushChildren(
                 .footnote_backref = 0,
             } });
         }
-        try stack.append(gpa, .{ .marker = if (has_body) "</thead>\n<tbody>\n" else "</thead>\n" });
+        try stack.append(gpa, .{ .marker = if (has_body)
+            "</thead>\n<tbody>\n"
+        else if (options.profile == .html4_strict)
+            "</tbody>\n"
+        else
+            "</thead>\n" });
         try stack.append(gpa, .{ .enter = .{
             .node = node.children.items[0],
             .tight_item = false,
@@ -346,7 +352,7 @@ fn pushChildren(
             .prefix_newline = false,
             .footnote_backref = 0,
         } });
-        try stack.append(gpa, .{ .marker = "<thead>\n" });
+        try stack.append(gpa, .{ .marker = if (options.profile == .html4_strict and !has_body) "<tbody>\n" else "<thead>\n" });
         return;
     }
     // A callout (extension): the title's inline nodes render first
@@ -490,9 +496,11 @@ fn writeOpen(
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .table => {
+            if (options.profile == .html4_strict and node.children.items.len == 0) return EmptyTableNotHtml4Strict;
             try writer.writeAll("<table");
             try writeAttrs(writer, node.data.table.attrs, options);
             try writer.writeAll(">\n");
+            if (options.profile == .html4_strict and !node.data.table.sections) try writer.writeAll("<tbody>\n");
             // Children (rows with thead/tbody markers) are pushed by
             // `pushChildren`; only the exit frame is set here.
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
@@ -883,8 +891,9 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .table => {
             // The thead/tbody split is emitted by marker frames between the
             // rows; only the tail (tbody close, table close) is written here
-            // (Textile tables are flat and skip the tbody close).
+            // Textile rows acquire a tbody only under HTML 4.01 Strict.
             if (node.data.table.sections and node.children.items.len >= 2) try writer.writeAll("</tbody>\n");
+            if (!node.data.table.sections and options.profile == .html4_strict) try writer.writeAll("</tbody>\n");
             try writer.writeAll("</table>\n");
         },
         .table_row => try writer.writeAll("\n</tr>\n"),

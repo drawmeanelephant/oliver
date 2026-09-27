@@ -35,6 +35,9 @@ XHTML (1) values are unchanged. The default remains HTML.
 | Markdown footnote `section`, `data-*`, `aria-label` | `div class="footnotes"`; data markers omitted; backrefs keep their `href` and use `title="Back to reference N"` | No data markers; title is not a full replacement for the accessible name |
 | Task-list `disabled=""`, `checked=""` | `disabled="disabled"`, `checked="checked"` | Required enumerated attribute tokens in the Strict DTD |
 | GFM table-cell `align`, Textile `style`/`class`/`id` | Unchanged | These attributes *are* permitted by Strict |
+| Textile flat table rows | Wrapped in `<tbody>`; HTML and XHTML remain flat | Strict requires an explicit table body in Oliver's output |
+| GFM table with only a header row | The `<th>` row moves into `<tbody>` instead of a lone `<thead>` | Strict requires `TBODY+`; header cells remain `th` |
+| Empty table in a caller-built document | `error.EmptyTableNotHtml4Strict` | No rows can satisfy the required table body |
 | Ordered list starting at another number | `error.OrderedListStartNotHtml4Strict` | Strict has no `ol start`; renumbering would silently change meaning |
 | Invalid explicit or generated `id` | `error.InvalidHtml4StrictId` | Strict IDs must start with an ASCII letter; anchors are never silently renamed |
 | Repeated `id` (including auto-heading slugs and footnote anchors) | `error.DuplicateHtml4StrictId` | Strict IDs must be unique within a document |
@@ -48,6 +51,7 @@ Strict-specific failures. The C ABI returns
 `OLIVER_ERR_ORDERED_LIST_START_NOT_HTML4_STRICT = 7`, respectively.
 Invalid IDs return `OLIVER_ERR_INVALID_HTML4_STRICT_ID = 8`.
 Repeated IDs return `OLIVER_ERR_DUPLICATE_HTML4_STRICT_ID = 9`.
+Empty tables return `OLIVER_ERR_EMPTY_TABLE_NOT_HTML4_STRICT = 10`.
 Rendering to a streaming writer can have written earlier bytes when an
 unsupported node is reached; discard the fragment on any render error.
 
@@ -56,8 +60,9 @@ unsupported node is reached; discard the fragment on any render error.
 `tests/html4_strict_test.zig` wraps representative fragments in a minimal
 `html`/`head`/`title`/`body` document *only for testing*. The hermetic
 `tests/html4_strict_valid.zig` gate checks the emitted element vocabulary,
-per-element attributes, enumerated checkbox tokens, and essential content
-models, including table/list and inline/block nesting. The test corpus
+per-element attributes, enumerated checkbox tokens, selected nesting rules,
+and the required nonempty `tbody` under each table. It does not check every
+DTD content-model cardinality or ordering constraint. The test corpus
 exercises Markdown, Textile, Cooklang, and opt-in Markdown extensions. It
 also asserts byte agreement with ordinary HTML where no Strict mapping
 is required. The existing HTML fixture wall and XHTML paired tests still

@@ -100,6 +100,7 @@ output.
 | `OLIVER_ERR_ORDERED_LIST_START_NOT_HTML4_STRICT` | HTML 4.01 Strict profile, ordered list starts other than 1 |
 | `OLIVER_ERR_INVALID_HTML4_STRICT_ID` | HTML 4.01 Strict profile, invalid explicit or generated ID |
 | `OLIVER_ERR_DUPLICATE_HTML4_STRICT_ID` | HTML 4.01 Strict profile, repeated ID |
+| `OLIVER_ERR_EMPTY_TABLE_NOT_HTML4_STRICT` | HTML 4.01 Strict profile, empty caller-built table |
 
 ## 5. Implementation notes
 

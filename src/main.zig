@@ -728,6 +728,9 @@ pub fn main(init: std.process.Init) !u8 {
             if (err == error.DuplicateHtml4StrictId) {
                 std.debug.print("oliver: --to html4-strict requires unique id values (docs/HTML4-STRICT.md).\n", .{});
             }
+            if (err == error.EmptyTableNotHtml4Strict) {
+                std.debug.print("oliver: --to html4-strict requires at least one table row (docs/HTML4-STRICT.md).\n", .{});
+            }
             if (err == error.RawHtmlRejected) {
                 std.debug.print(
                     "oliver: --raw-html rejected refuses raw HTML (docs/RAW-HTML.md section 3):\n" ++

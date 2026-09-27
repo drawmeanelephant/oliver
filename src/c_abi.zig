@@ -46,6 +46,7 @@ pub const Error = enum(c_int) {
     ordered_list_start_not_html4_strict = 7,
     invalid_html4_strict_id = 8,
     duplicate_html4_strict_id = 9,
+    empty_table_not_html4_strict = 10,
 };
 
 /// An owned render result. On success (`error_code == ok`), `data`
@@ -300,6 +301,7 @@ fn mapError(e: anyerror) Error {
         error.OrderedListStartNotHtml4Strict => .ordered_list_start_not_html4_strict,
         error.InvalidHtml4StrictId => .invalid_html4_strict_id,
         error.DuplicateHtml4StrictId => .duplicate_html4_strict_id,
+        error.EmptyTableNotHtml4Strict => .empty_table_not_html4_strict,
         else => @panic("oliver_render: unhandled error"),
     };
 }

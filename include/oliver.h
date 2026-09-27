@@ -51,6 +51,7 @@ enum {
     OLIVER_ERR_ORDERED_LIST_START_NOT_HTML4_STRICT = 7, /* HTML 4.01 Strict cannot preserve a non-1 list start */
     OLIVER_ERR_INVALID_HTML4_STRICT_ID = 8, /* HTML 4.01 Strict requires valid id tokens */
     OLIVER_ERR_DUPLICATE_HTML4_STRICT_ID = 9, /* HTML 4.01 Strict requires unique ids */
+    OLIVER_ERR_EMPTY_TABLE_NOT_HTML4_STRICT = 10, /* HTML 4.01 Strict requires a table body with rows */
 };
 
 /* Input dialect. */

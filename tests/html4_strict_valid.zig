@@ -1,8 +1,8 @@
 //! Test-only checker for the HTML 4.01 Strict subset Oliver emits.
 //! Not an SGML parser or an independent implementation of the full DTD.
 //! The DTD is SGML (not XML), so xmllint cannot validate it. This gate
-//! checks the emitted vocabulary, attribute sets and essential content
-//! models on a complete test document, without external tools.
+//! checks the emitted vocabulary, attribute sets, selected nesting rules,
+//! and the table body's required cardinality without external tools.
 const std = @import("std");
 
 pub const Error = error{Invalid};
@@ -24,11 +24,12 @@ fn allowedChild(parent: []const u8, child: []const u8) bool {
     if (member("html", parent)) return member("head body", child);
     if (member("head", parent)) return member("title", child);
     if (member("body div li dd blockquote", parent)) return member(blocks, child) or member(inline_tags, child);
-    if (member("p h1 h2 h3 h4 h5 h6 dt a em strong b i del ins big small sup sub cite span code acronym th td title", parent))
+    if (member("a", parent)) return member(inline_tags, child) and !member("a", child);
+    if (member("p h1 h2 h3 h4 h5 h6 dt em strong b i del ins big small sup sub cite span code acronym th td title", parent))
         return member(inline_tags, child);
     if (member("ul ol", parent)) return member("li", child);
     if (member("dl", parent)) return member("dt dd", child);
-    if (member("table", parent)) return member(table_parts, child);
+    if (member("table", parent)) return member("caption col colgroup thead tfoot tbody", child);
     if (member("thead tbody tfoot", parent)) return member("tr", child);
     if (member("tr", parent)) return member(cells, child);
     if (member("pre", parent)) return member(inline_tags, child) and !member("img input big small sup sub", child);
@@ -102,7 +103,12 @@ fn reference(bytes: []const u8, pos: *usize) Error!void {
 
 /// Check a complete minimal document (the caller wraps rendered fragments).
 pub fn check(bytes: []const u8) Error!void {
-    var stack: [256][]const u8 = undefined;
+    const Frame = struct {
+        name: []const u8,
+        tbody_count: usize = 0,
+        row_count: usize = 0,
+    };
+    var stack: [256]Frame = undefined;
     var depth: usize = 0;
     var pos: usize = 0;
     var root_seen = false;
@@ -125,7 +131,10 @@ pub fn check(bytes: []const u8) Error!void {
             if (pos >= bytes.len or bytes[pos] != '>' or depth == 0) return error.Invalid;
             pos += 1;
             depth -= 1;
-            if (!std.mem.eql(u8, stack[depth], tag)) return error.Invalid;
+            const frame = stack[depth];
+            if (!std.mem.eql(u8, frame.name, tag)) return error.Invalid;
+            if (member("table", tag) and frame.tbody_count == 0) return error.Invalid;
+            if (member("tbody", tag) and frame.row_count == 0) return error.Invalid;
             continue;
         }
         const tag = try scanName(bytes, &pos);
@@ -135,7 +144,12 @@ pub fn check(bytes: []const u8) Error!void {
         if (depth == 0) {
             if (root_seen or !std.mem.eql(u8, tag, "html")) return error.Invalid;
             root_seen = true;
-        } else if (!allowedChild(stack[depth - 1], tag)) return error.Invalid;
+        } else {
+            const parent = &stack[depth - 1];
+            if (!allowedChild(parent.name, tag)) return error.Invalid;
+            if (member("table", parent.name) and member("tbody", tag)) parent.tbody_count += 1;
+            if (member("tbody", parent.name) and member("tr", tag)) parent.row_count += 1;
+        }
 
         while (true) {
             const before_ws = pos;
@@ -166,7 +180,7 @@ pub fn check(bytes: []const u8) Error!void {
         }
         if (!member(empty, tag)) {
             if (depth == stack.len) return error.Invalid;
-            stack[depth] = tag;
+            stack[depth] = .{ .name = tag };
             depth += 1;
         }
     }
@@ -177,11 +191,14 @@ test "checker rejects elements, attributes, content and tokens outside Strict" {
     const prefix = "<html><head><title>Oliver</title></head><body>";
     const suffix = "</body></html>";
     try check(prefix ++ "<p>hello &amp; <strong>world</strong><br></p>" ++ suffix);
+    try check(prefix ++ "<table><tbody><tr><th>H</th></tr></tbody></table>" ++ suffix);
     for ([_][]const u8{
-        "<article>x</article>",            "<p data-x=\"1\">x</p>",
-        "<ol start=\"3\"><li>x</li></ol>", "<p><div>x</div></p>",
-        "<ul><p>x</p></ul>",               "<input type=\"checkbox\" disabled=\"\">",
-        "<p id=\"3bad\">x</p>",            "<p>bad &bogus;</p>",
+        "<article>x</article>",               "<p data-x=\"1\">x</p>",
+        "<ol start=\"3\"><li>x</li></ol>",    "<p><div>x</div></p>",
+        "<ul><p>x</p></ul>",                  "<input type=\"checkbox\" disabled=\"\">",
+        "<p id=\"3bad\">x</p>",               "<p>bad &bogus;</p>",
+        "<table><tr><td>x</td></tr></table>", "<table><thead><tr><th>H</th></tr></thead></table>",
+        "<table><tbody></tbody></table>",     "<p><a href=\"/a\"><a href=\"/b\">nested</a></a></p>",
     }) |fragment| {
         // The test supplies the same minimal wrapper as the gate.
         var bytes: [512]u8 = undefined;

@@ -36,7 +36,7 @@ fn check(fragment: []const u8) !void {
 test "html4 strict: unchanged structures agree with HTML, across frontends" {
     const cases = .{
         .{ oliver.Dialect.markdown, "# Heading\n\nText with *emphasis* and [link](/a).\n\n| H | R |\n| :- | -: |\n| x | y |\n" },
-        .{ oliver.Dialect.textile, "h2(title#item)[en]. Heading\n\np{color:red;}. A %(foo)span% and *bold*.\n\n|_. H |_. R |\n| x | y |\n" },
+        .{ oliver.Dialect.textile, "h2(title#item)[en]. Heading\n\np{color:red;}. A %(foo)span% and *bold*.\n" },
     };
     inline for (cases) |case| {
         var html = try document(case[1], case[0], .{}, .{});
@@ -46,6 +46,42 @@ test "html4 strict: unchanged structures agree with HTML, across frontends" {
         try std.testing.expectEqualSlices(u8, html.items, strict.items);
         try check(strict.items);
     }
+}
+
+test "html4 strict: Textile rows and header-only GFM table use tbody" {
+    const textile = "|_. H |_. R |\n| x | y |\n";
+    var html = try document(textile, .textile, .{}, .{});
+    defer html.deinit(a);
+    try std.testing.expect(std.mem.indexOf(u8, html.items, "<table>\n<tr>") != null);
+    var xhtml = try document(textile, .textile, .{}, .{ .profile = .xhtml });
+    defer xhtml.deinit(a);
+    try std.testing.expectEqualSlices(u8, html.items, xhtml.items);
+    var strict = try document(textile, .textile, .{}, .{ .profile = .html4_strict });
+    defer strict.deinit(a);
+    const expected = try std.mem.replaceOwned(u8, a, html.items, "<table>\n", "<table>\n<tbody>\n");
+    defer a.free(expected);
+    const expected_closed = try std.mem.replaceOwned(u8, a, expected, "</table>\n", "</tbody>\n</table>\n");
+    defer a.free(expected_closed);
+    try std.testing.expectEqualSlices(u8, expected_closed, strict.items);
+    try check(strict.items);
+
+    const header_only = "| H | R |\n| --- | --- |\n";
+    var lone = try document(header_only, .markdown, .{}, .{ .profile = .html4_strict });
+    defer lone.deinit(a);
+    try std.testing.expect(std.mem.indexOf(u8, lone.items, "<table>\n<tbody>\n<tr>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, lone.items, "<thead>") == null);
+    try check(lone.items);
+}
+
+test "html4 strict: empty caller-built table fails before writing" {
+    var doc = try oliver.document.Document.init(a, .{ .bytes = "" });
+    defer doc.deinit();
+    const table = try doc.createNode(.table, .{ .start = 0, .end = 0 }, .{ .table = .{ .alignment = &.{} } });
+    try doc.appendChild(doc.root, table);
+    var writer = std.Io.Writer.Allocating.init(a);
+    defer writer.deinit();
+    try std.testing.expectError(error.EmptyTableNotHtml4Strict, oliver.html.render(a, &writer.writer, &doc, .{ .profile = .html4_strict }));
+    try std.testing.expectEqual(@as(usize, 0), writer.written().len);
 }
 
 test "html4 strict: extension vocabulary and footnote accessibility fallback" {
