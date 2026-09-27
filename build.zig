@@ -151,6 +151,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_xhtml_tests = b.addRunArtifact(xhtml_tests);
 
+    const html4_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/html4_strict_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "oliver", .module = oliver_mod },
+            },
+        }),
+    });
+    const run_html4_tests = b.addRunArtifact(html4_tests);
+
     // Deterministic mutation-fuzz tests (tests/fuzz.zig) over the public
     // parse API: a fixed-seed PRNG mutates a seed corpus across all three
     // dialects with the extension surface on, asserting the adversarial
@@ -196,6 +208,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_spec_tool_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_xhtml_tests.step);
+    test_step.dependOn(&run_html4_tests.step);
     test_step.dependOn(&run_fuzz_tests.step);
 }
 

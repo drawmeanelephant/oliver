@@ -158,8 +158,10 @@ output. Repeated-render comparisons are part of the suite.
 
 ## Not claimed
 
-No XHTML 1.0 Strict/Transitional DTD validation, no XHTML 1.1, no HTML 4,
-no browser-compatibility shims. Those could become later compatibility
-profiles if evidence demands them. The guarantee is narrow and precise:
+No XHTML 1.0 Strict/Transitional DTD validation, no XHTML 1.1, and no
+browser-compatibility shims. HTML 4.01 Strict is a **separate** opt-in
+profile with different syntax and semantic tradeoffs
+([HTML4-STRICT.md](HTML4-STRICT.md)); XHTML does not inherit its rules.
+The XHTML guarantee is narrow and precise:
 Oliver's generated fragments are well-formed XML under the rules above, and
 Oliver will not claim otherwise.

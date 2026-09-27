@@ -40,7 +40,7 @@
 //!
 //! ## Output profiles
 //!
-//! The same traversal implements two deterministic serialization profiles
+//! The same traversal implements three deterministic serialization profiles
 //! (one IR, one semantics, different bytes):
 //!
 //! - `.html` (default): today's HTML serialization, including the raw-HTML
@@ -51,6 +51,9 @@
 //!   satisfies XML (the four predefined escapes plus U+FFFD for NUL, with
 //!   raw Unicode preserved). No document wrapper, namespace declaration, or
 //!   DOCTYPE is added: this serializes the same fragment.
+//! - `.html4_strict`: HTML 4.01 Strict fragment serialization. No HTML5
+//!   elements or attributes; raw content and non-1 ordered-list starts fail
+//!   closed. See docs/HTML4-STRICT.md.
 //!
 //! The XHTML profile is fail-closed on verbatim content: `.raw_html` leaves,
 //! `.html_block` leaves, and Textile `pre.` code blocks (`escape == false`)
@@ -66,11 +69,11 @@ const std = @import("std");
 const document = @import("document.zig");
 const entities = @import("entities.zig");
 
-/// The serializer output profile. Both profiles consume the same normalized
-/// document and differ only in serialization bytes (docs/XHTML.md).
+/// The serializer output profile, shared with Cooklang.
 pub const OutputProfile = enum {
     html,
     xhtml,
+    html4_strict,
 };
 
 /// The result of a wikilink resolution (docs/WIKILINKS.md §5): the href
@@ -102,9 +105,9 @@ pub const RawHtmlPolicy = enum {
 pub const RenderOptions = struct {
     /// Emit void elements with a trailing slash (`<br />`) instead of the
     /// HTML5 form (`<br>`). Defaults to the CommonMark reference style.
-    /// Ignored under `.xhtml`, where voids always use the XML form.
+    /// Ignored under `.xhtml` (XML form) and `.html4_strict` (SGML form).
     void_trailing_slash: bool = true,
-    /// The output profile: `.html` (default) or `.xhtml`.
+    /// The output profile: `.html` (default), `.xhtml`, or `.html4_strict`.
     profile: OutputProfile = .html,
     /// Emit GFM-style auto-generated `id` attributes on headings (the
     /// Markdown `heading_ids` extension, docs/MARKDOWN-EXTENSIONS.md): a
@@ -194,6 +197,13 @@ pub const RawHtmlNotXmlWellFormed = error.RawHtmlNotXmlWellFormed;
 /// passing raw bytes through.
 pub const RawHtmlRejected = error.RawHtmlRejected;
 
+/// HTML 4.01 Strict cannot certify verbatim source or preserve an ordered
+/// list's non-1 starting number. Neither is silently rewritten.
+pub const RawHtmlNotHtml4Strict = error.RawHtmlNotHtml4Strict;
+pub const OrderedListStartNotHtml4Strict = error.OrderedListStartNotHtml4Strict;
+pub const InvalidHtml4StrictId = error.InvalidHtml4StrictId;
+pub const DuplicateHtml4StrictId = error.DuplicateHtml4StrictId;
+
 /// Renders `doc` to `writer`.
 ///
 /// `writer` may be any value with a `writeAll([]const u8) !void` method;
@@ -203,6 +213,7 @@ pub const RawHtmlRejected = error.RawHtmlRejected;
 /// `gpa` is used only for the temporary traversal stack, footnote numbering
 /// tables, and heading-slug scratch; nothing is retained.
 pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Document, options: RenderOptions) !void {
+    if (options.profile == .html4_strict) try validateStrictIds(gpa, doc, options);
     var stack = std.ArrayList(Frame).empty;
     defer stack.deinit(gpa);
 
@@ -473,14 +484,14 @@ fn writeOpen(
                     try writeEscapedHref(writer, cite);
                     try writer.writeByte('\"');
                 }
-                try writeAttrs(writer, bq.attrs);
+                try writeAttrs(writer, bq.attrs, options);
                 try writer.writeAll(">\n");
             }
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .table => {
             try writer.writeAll("<table");
-            try writeAttrs(writer, node.data.table.attrs);
+            try writeAttrs(writer, node.data.table.attrs, options);
             try writer.writeAll(">\n");
             // Children (rows with thead/tbody markers) are pushed by
             // `pushChildren`; only the exit frame is set here.
@@ -488,7 +499,7 @@ fn writeOpen(
         },
         .table_row => {
             try writer.writeAll("<tr");
-            try writeAttrs(writer, node.data.table_row.attrs);
+            try writeAttrs(writer, node.data.table_row.attrs, options);
             try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
@@ -498,7 +509,7 @@ fn writeOpen(
             try writer.writeAll(if (cell.header) "th" else "td");
             // Textile cell attributes (style/class/id/lang in the fixed
             // render order), then colspan/rowspan, then the GFM `align`.
-            try writeAttrs(writer, cell.attrs);
+            try writeAttrs(writer, cell.attrs, options);
             if (cell.colspan != 1) {
                 var buf: [16]u8 = undefined;
                 const attr = try std.fmt.bufPrint(&buf, " colspan=\"{d}\"", .{cell.colspan});
@@ -523,6 +534,8 @@ fn writeOpen(
             switch (list.kind) {
                 .bullet => try writer.writeAll("<ul>\n"),
                 .ordered => {
+                    if (options.profile == .html4_strict and list.start != 1)
+                        return OrderedListStartNotHtml4Strict;
                     if (list.start == 1) {
                         try writer.writeAll("<ol>\n");
                     } else {
@@ -536,7 +549,7 @@ fn writeOpen(
                     // "Definition lists"); its items render `<dt>`/`<dd>`.
                     // A `dl<mods>.` signature's attrs land on the `<dl>`.
                     try writer.writeAll("<dl");
-                    try writeAttrs(writer, list.attrs);
+                    try writeAttrs(writer, list.attrs, options);
                     try writer.writeAll(">\n");
                 },
             }
@@ -556,7 +569,7 @@ fn writeOpen(
             // without `<p>` (`suppress_p` is computed at push time).
             if (!suppress_p) {
                 try writer.writeAll("<p");
-                try writeAttrs(writer, node.data.paragraph.attrs);
+                try writeAttrs(writer, node.data.paragraph.attrs, options);
                 try writer.writeByte('>');
             }
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = suppress_p, .footnote_backref = footnote_backref } });
@@ -568,6 +581,7 @@ fn writeOpen(
             try writer.writeAll(tag);
             const h = node.data.heading;
             if (h.id) |id| {
+                try checkStrictId(id, options);
                 try writer.writeAll(" id=\"");
                 try writeEscaped(writer, id);
                 try writer.writeByte('"');
@@ -580,6 +594,7 @@ fn writeOpen(
                 const slug = try slugify(gpa, text_buf.items);
                 defer gpa.free(slug);
                 if (slug.len > 0) {
+                    try checkStrictId(slug, options);
                     try writer.writeAll(" id=\"");
                     try writeEscaped(writer, slug);
                     try writer.writeByte('"');
@@ -590,7 +605,7 @@ fn writeOpen(
                 try writeEscaped(writer, cls);
                 try writer.writeByte('"');
             }
-            try writeAttrs(writer, h.attrs);
+            try writeAttrs(writer, h.attrs, options);
             try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
@@ -626,9 +641,9 @@ fn writeOpen(
             // HTML-escapes it (well-formed under both profiles);
             // `.rejected` fails the render even in HTML mode.
             try writer.writeAll("<pre");
-            try writeAttrs(writer, code.attrs);
+            try writeAttrs(writer, code.attrs, options);
             if (!code.escape) {
-                if (options.raw_html == .allowed and options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
+                try checkRawProfile(options);
                 try writer.writeByte('>');
                 try writeRawContent(writer, options, code.content);
                 try writer.writeAll("</pre>\n");
@@ -656,7 +671,7 @@ fn writeOpen(
             // `.rejected` fails the render. Every block is followed by
             // exactly one `\n`, so an unterminated final line gets one
             // here (the reference implementation's `cr()`).
-            if (options.raw_html == .allowed and options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
+            try checkRawProfile(options);
             const content = node.data.html_block;
             try writeRawContent(writer, options, content);
             if (content.len == 0 or content[content.len - 1] != '\n') try writer.writeByte('\n');
@@ -669,7 +684,7 @@ fn writeOpen(
             // phrases) render with no attrs.
             try writer.writeAll("<");
             try writer.writeAll(phraseTagName(node.tag));
-            try writeAttrs(writer, phraseAttrs(node));
+            try writeAttrs(writer, phraseAttrs(node), options);
             try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
@@ -707,7 +722,7 @@ fn writeOpen(
                     try writer.writeAll(id);
                 }
                 try writer.writeByte('"');
-                try writeValuelessAttr(writer, options, "data-footnote-ref");
+                if (options.profile != .html4_strict) try writeValuelessAttr(writer, options, "data-footnote-ref");
                 try writer.writeByte('>');
                 try writer.writeAll(num);
                 try writer.writeAll("</a></sup>");
@@ -722,7 +737,7 @@ fn writeOpen(
             // write the composed attrs in the fixed render order
             // (docs/TEXTILE-PARITY.md §18). Markdown never produces this tag.
             try writer.writeAll("<span");
-            try writeAttrs(writer, node.data.span.attrs);
+            try writeAttrs(writer, node.data.span.attrs, options);
             try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
@@ -781,8 +796,16 @@ fn writeOpen(
             // `disabled` and, when checked, `checked` attributes; the
             // void element follows the render profile (XML form under
             // `.xhtml`), unlike GFM's unconditional ` />`.
-            try writer.writeAll("<input type=\"checkbox\" disabled=\"\"");
-            if (node.data.task_checkbox.checked) try writer.writeAll(" checked=\"\"");
+            // HTML 4.01 declares these as enumerated tokens, not empty
+            // boolean values; XHTML and the legacy HTML profile keep "".
+            try writer.writeAll(if (options.profile == .html4_strict)
+                "<input type=\"checkbox\" disabled=\"disabled\""
+            else
+                "<input type=\"checkbox\" disabled=\"\"");
+            if (node.data.task_checkbox.checked) try writer.writeAll(if (options.profile == .html4_strict)
+                " checked=\"checked\""
+            else
+                " checked=\"\"");
             try writer.writeAll(if (voidSlash(options)) " />" else ">");
         },
         .image => {
@@ -812,7 +835,7 @@ fn writeOpen(
                 try writeEscaped(writer, height);
                 try writer.writeByte('\"');
             }
-            try writeAttrs(writer, node.data.image.attrs);
+            try writeAttrs(writer, node.data.image.attrs, options);
             try writer.writeAll(if (voidSlash(options)) " />" else ">");
         },
         .acronym => {
@@ -834,7 +857,7 @@ fn writeOpen(
             // verbatim / escaped / rejected; under `.allowed` the XHTML
             // profile still fails closed, because verbatim source cannot
             // be guaranteed XML-well-formed (`.escaped` output is).
-            if (options.raw_html == .allowed and options.profile == .xhtml) return RawHtmlNotXmlWellFormed;
+            try checkRawProfile(options);
             try writeRawContent(writer, options, src[node.span.start..node.span.end]);
         },
         .soft_break => try writer.writeAll("\n"),
@@ -933,7 +956,19 @@ fn writeBackrefs(writer: anytype, fn_ctx: *const Footnotes, n: u32, options: Ren
     var ord: u32 = 1;
     while (ord <= count) : (ord += 1) {
         var buf: [256]u8 = undefined;
-        const text = if (ord == 1)
+        const text = if (options.profile == .html4_strict and ord == 1)
+            try std.fmt.bufPrint(
+                &buf,
+                " <a href=\"#fnref-{d}\" class=\"footnote-backref\" title=\"Back to reference {d}\">↩</a>",
+                .{ n, n },
+            )
+        else if (options.profile == .html4_strict)
+            try std.fmt.bufPrint(
+                &buf,
+                " <a href=\"#fnref-{d}-{d}\" class=\"footnote-backref\" title=\"Back to reference {d}-{d}\">↩</a>",
+                .{ n, ord, n, ord },
+            )
+        else if (ord == 1)
             try std.fmt.bufPrint(
                 &buf,
                 " <a href=\"#fnref-{d}\" class=\"footnote-backref\" data-footnote-backref{s} data-footnote-backref-idx=\"{d}\" aria-label=\"Back to reference {d}\">↩</a>",
@@ -970,7 +1005,7 @@ fn pushFootnotesSection(
     fn_ctx: *const Footnotes,
     options: RenderOptions,
 ) !void {
-    try stack.append(gpa, .{ .marker = "</section>\n" });
+    try stack.append(gpa, .{ .marker = if (options.profile == .html4_strict) "</div>\n" else "</section>\n" });
     try stack.append(gpa, .{ .marker = "</ol>\n" });
     // Frames pop LIFO, so the last-used footnote is pushed first.
     var u = fn_ctx.used.items.len;
@@ -1002,7 +1037,9 @@ fn pushFootnotesSection(
         try stack.append(gpa, .{ .li_open = n });
     }
     try stack.append(gpa, .{ .marker = "<ol>\n" });
-    const section_marker = if (options.profile == .xhtml)
+    const section_marker = if (options.profile == .html4_strict)
+        "<div class=\"footnotes\">\n"
+    else if (options.profile == .xhtml)
         "<section class=\"footnotes\" data-footnotes=\"\">\n"
     else
         "<section class=\"footnotes\" data-footnotes>\n";
@@ -1094,7 +1131,16 @@ fn clampHeading(level: u8) u8 {
 /// slash. The XHTML profile always uses it; HTML mode follows
 /// `RenderOptions.void_trailing_slash` (default CommonMark reference style).
 fn voidSlash(options: RenderOptions) bool {
-    return options.profile == .xhtml or options.void_trailing_slash;
+    return options.profile == .xhtml or (options.profile == .html and options.void_trailing_slash);
+}
+
+fn checkRawProfile(options: RenderOptions) !void {
+    if (options.raw_html != .allowed) return;
+    switch (options.profile) {
+        .html => {},
+        .xhtml => return RawHtmlNotXmlWellFormed,
+        .html4_strict => return RawHtmlNotHtml4Strict,
+    }
 }
 
 /// Emits a raw-content node's bytes under the configured policy
@@ -1152,14 +1198,109 @@ fn phraseAttrs(node: *const document.Node) []const document.Attribute {
 /// Emits an ordered attribute list as ` name="value"` pairs (the fixed
 /// render order for Textile attributes: style, class, id, lang). Values
 /// are HTML-escaped like text content.
-fn writeAttrs(writer: anytype, attrs: []const document.Attribute) !void {
+fn writeAttrs(writer: anytype, attrs: []const document.Attribute, options: RenderOptions) !void {
     for (attrs) |a| {
+        if (std.mem.eql(u8, a.name, "id")) try checkStrictId(a.value, options);
         try writer.writeByte(' ');
         try writer.writeAll(a.name);
         try writer.writeAll("=\"");
         try writeEscaped(writer, a.value);
         try writer.writeByte('"');
     }
+}
+
+/// HTML 4.01's ID token starts with a letter and contains only ASCII
+/// letters, digits, hyphen, underscore, colon or period. Do not silently
+/// rename user anchors (which would break links to them).
+fn checkStrictId(id: []const u8, options: RenderOptions) !void {
+    if (options.profile != .html4_strict) return;
+    if (id.len == 0 or !std.ascii.isAlphabetic(id[0])) return InvalidHtml4StrictId;
+    for (id[1..]) |c| {
+        if (!std.ascii.isAlphanumeric(c) and std.mem.indexOfScalar(u8, "-_:.", c) == null)
+            return InvalidHtml4StrictId;
+    }
+}
+
+/// ID is an SGML ID token, unique across the entire output document. Check
+/// before writing so repeated auto-slugs and user-provided anchors do not
+/// silently generate invalid Strict markup.
+fn validateStrictIds(gpa: std.mem.Allocator, doc: *const document.Document, options: RenderOptions) !void {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var seen = std.StringHashMap(void).init(a);
+    var it = try document.Document.Iterator.init(gpa, doc.root);
+    defer it.deinit();
+    while (try it.next()) |node| {
+        switch (node.tag) {
+            .heading => {
+                const heading = node.data.heading;
+                if (heading.id) |id| {
+                    try registerStrictId(&seen, id);
+                } else if (options.heading_ids) {
+                    var text = std.ArrayList(u8).empty;
+                    for (node.children.items) |child| try collectHeadingText(a, child, &text);
+                    const slug = try slugify(a, text.items);
+                    if (slug.len > 0) try registerStrictId(&seen, slug);
+                }
+                try registerAttrIds(&seen, heading.attrs);
+            },
+            .block_quote => try registerAttrIds(&seen, node.data.block_quote.attrs),
+            .table => try registerAttrIds(&seen, node.data.table.attrs),
+            .table_row => try registerAttrIds(&seen, node.data.table_row.attrs),
+            .table_cell => try registerAttrIds(&seen, node.data.table_cell.attrs),
+            .paragraph => try registerAttrIds(&seen, node.data.paragraph.attrs),
+            .code_block => try registerAttrIds(&seen, node.data.code_block.attrs),
+            .span => try registerAttrIds(&seen, node.data.span.attrs),
+            .image => try registerAttrIds(&seen, node.data.image.attrs),
+            .list => if (node.data.list.kind == .definition) {
+                try registerAttrIds(&seen, node.data.list.attrs);
+            },
+            .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite => try registerAttrIds(&seen, phraseAttrs(node)),
+            else => {},
+        }
+    }
+    if (options.footnotes and doc.footnotes.items.len > 0) {
+        var footnotes = try Footnotes.init(gpa, doc);
+        defer footnotes.deinit(gpa);
+        var counts = std.StringHashMap(u32).init(a);
+        var refs = try document.Document.Iterator.init(gpa, doc.root);
+        defer refs.deinit();
+        while (try refs.next()) |node| {
+            if (node.tag != .footnote_ref) continue;
+            const label = node.data.footnote_ref.label;
+            const n = footnotes.number(label) orelse continue;
+            const ord = (counts.get(label) orelse 0) + 1;
+            try counts.put(label, ord);
+            const id = if (ord == 1)
+                try std.fmt.allocPrint(a, "fnref-{d}", .{n})
+            else
+                try std.fmt.allocPrint(a, "fnref-{d}-{d}", .{ n, ord });
+            try registerStrictId(&seen, id);
+        }
+        for (footnotes.used.items) |label| {
+            if (findFootnoteDef(doc, label) == null) continue;
+            const id = try std.fmt.allocPrint(a, "fn-{d}", .{footnotes.number(label).?});
+            try registerStrictId(&seen, id);
+        }
+        for (doc.footnotes.items) |def| {
+            var def_it = try document.Document.Iterator.init(gpa, def.node);
+            defer def_it.deinit();
+            while (try def_it.next()) |node| {
+                if (node.tag == .paragraph) try registerAttrIds(&seen, node.data.paragraph.attrs);
+            }
+        }
+    }
+}
+
+fn registerAttrIds(seen: *std.StringHashMap(void), attrs: []const document.Attribute) !void {
+    for (attrs) |attr| if (std.mem.eql(u8, attr.name, "id")) try registerStrictId(seen, attr.value);
+}
+
+fn registerStrictId(seen: *std.StringHashMap(void), id: []const u8) !void {
+    try checkStrictId(id, .{ .profile = .html4_strict });
+    if (seen.contains(id)) return DuplicateHtml4StrictId;
+    try seen.put(id, {});
 }
 
 /// Percent-encodes the href per Oliver's documented URL policy (see the
