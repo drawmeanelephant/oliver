@@ -30,6 +30,12 @@
           "summary": "Pipeline, the two document families, module map, boundaries."
         },
         {
+          "file": "KNAP.md",
+          "title": "Knap boundary",
+          "audience": "dev",
+          "summary": "Knap is not a frontend: it is a template language that emits Markdown, which Oliver already parses."
+        },
+        {
           "file": "C-ABI.md",
           "title": "C ABI",
           "audience": "dev",

@@ -10,6 +10,8 @@ Status legend:
 - **implemented** — in the vertical slice, tested by fixtures/unit tests
 - **planned** — designed, next milestones, behavior chosen from specs
 - **deferred** — documented, deliberately not scheduled yet
+- **out of scope** — recorded so the question is closed; not a frontend,
+  not an extension, not wrap
 
 The matrix is the record of *chosen* behavior. When documentation sources
 disagree, the disagreement and Oliver's choice are recorded here.
@@ -180,6 +182,12 @@ commit, MIT) is the executable conformance wall
 | `.menu` profile view | implemented (CK5) | `src/cooklang_menu.zig` — the explicit convenience layer over the existing Cooklang frontend (`.menu` files are valid Cooklang, so there is no second parser): `menuView` exposes the day/meal structure semantically (`Menu { days: []Day }`, `Day { name, date, references }`, `Reference { path, quantity, units }`). Every top-level section is a day in order; an ISO date is recognized only as a trailing `(YYYY-MM-DD)` title group (valid month/day); reference directives (`{2}`, `{}`, `{4%servings}`) are preserved as source text, never deduplicated or resolved; non-section top-level blocks are not part of the view. `writeMenu` renders a deterministic text dump (shared by `oliver menu --from cooklang` and the `menu-basic` fixture pair, which is the conventions' own example). A view, not meal-planning logic — shopping/scheduling/filesystem access stay consumer-owned. 6 unit tests. Docs/COOKLANG.md §12. |
 | scaling (pure semantic operation) | implemented (CK3) | `src/cooklang_scale.zig`: public string primitives `classifyQuantity` / `parseFactor` / `scaleAmount` (empty / scalable / fixed over authored amount strings; exact-rational rewrite with a `changed` flag — true only on a fresh rewrite, `scaled` aliases `original` when empty/fixed/overflow) plus `scaleRecipe`, which calls `scaleAmount` on ingredient quantities only. Linear scaling by an exact rational factor, `.servings` mode reading the frontmatter `servings`/`serves`/`yield` key (leading number; default 1), **fixed** quantities (`@salt{=1%tsp}`) locked, timers and cookware never scaled, recipe references never touched (their quantities are directives for the referenced recipe), non-numeric quantities unchanged. Mixed `1 1/2` is a canonical scalable input (emits integer / fraction / terminating decimal, never mixed). Exact rational arithmetic (no f64, decimal family read from the source form at any magnitude): whole results emit integers, non-whole emit reduced fractions, decimal-family sources emit exact terminating decimals (≤ 12 digits). Frontmatter passes through raw/unmodified. `oliver scale --from cooklang (--factor num[/den] | --servings n)` CLI; `scale-basic`/`scale-servings`/`scale-mixed` fixture pairs. Docs/COOKLANG.md §11. |
 | application features (filesystem reference resolution, shopping lists, pantry, aisles, images, search, meal scheduling, publication) | deferred | documented as ecosystem conventions (conventions.md), not language; consumers (e.g. Boris) own them. |
+
+# Languages not admitted
+
+| language | status | Oliver behavior / notes |
+| --- | --- | --- |
+| Knap | out of scope | A template language that emits Markdown (variables, filters, logic). Not a dialect and not an opt-in extension: Oliver already parses the Markdown Knap produces (tables, footnotes, front matter, wikilinks, callouts). Unrendered Knap source is CommonMark text; template braces and tags stay literal (fixture `knap-literal`). `oliver wrap` is HTML chrome after render (`$title$`), not Knap. Full boundary: docs/KNAP.md. |
 
 ## Recorded ambiguities and chosen behaviors
 

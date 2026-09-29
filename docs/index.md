@@ -26,7 +26,7 @@ The documentation is written for two audiences:
 | CommonMark 0.31.2 corpus | **652/652**, 0 mismatches |
 | Cooklang canonical corpus | **60/60** |
 | Textile fixture wall | fully green |
-| Test suite | **394/394** |
+| Test suite | **466/466** |
 
 Both conformance gates run in CI on every push/PR
 (`zig build spec-conformance -- spec.txt --gate` and
@@ -44,6 +44,8 @@ consume directly. The map below mirrors it.
   renders today, with conformance status (start here as a user)
 - [Architecture](ARCHITECTURE.html) — pipeline, the two document
   families, module map, the boundaries that matter
+- [Knap boundary](KNAP.html) — why Knap is not a frontend: it emits
+  Markdown, which Oliver already parses
 - [Document model](DOCUMENT-MODEL.html) — the shared normalized model and
   its invariants
 - [Feature matrix](FEATURE-MATRIX.html) — every implemented feature
