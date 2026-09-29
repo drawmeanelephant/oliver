@@ -113,6 +113,28 @@ int main(void) {
         OLIVER_PROFILE_XHTML, OLIVER_RAW_HTML_ALLOWED, 0, 0);
     check_error("xhtml raw html fail-closed", buf, OLIVER_ERR_RAW_HTML_NOT_XML_WELL_FORMED);
 
+    buf = oliver_render(
+        my_alloc, my_free, NULL,
+        (const uint8_t *)md, strlen(md),
+        OLIVER_MARKDOWN, OLIVER_FRONTMATTER_NONE, 0,
+        OLIVER_PROFILE_HTML4_STRICT, OLIVER_RAW_HTML_ALLOWED, 0, 0);
+    check_bytes("html4-strict heading", buf, "<h1>Hello <em>world</em></h1>\n");
+
+    buf = oliver_render(
+        my_alloc, my_free, NULL,
+        (const uint8_t *)raw, strlen(raw),
+        OLIVER_MARKDOWN, OLIVER_FRONTMATTER_NONE, 0,
+        OLIVER_PROFILE_HTML4_STRICT, OLIVER_RAW_HTML_ALLOWED, 0, 0);
+    check_error("html4-strict raw fail-closed", buf, OLIVER_ERR_RAW_HTML_NOT_HTML4_STRICT);
+
+    const char *started = "3. item\n";
+    buf = oliver_render(
+        my_alloc, my_free, NULL,
+        (const uint8_t *)started, strlen(started),
+        OLIVER_MARKDOWN, OLIVER_FRONTMATTER_NONE, 0,
+        OLIVER_PROFILE_HTML4_STRICT, OLIVER_RAW_HTML_ALLOWED, 0, 0);
+    check_error("html4-strict list start", buf, OLIVER_ERR_ORDERED_LIST_START_NOT_HTML4_STRICT);
+
     /* Invalid arguments return OLIVER_ERR_INVALID_ARGUMENT, not a crash. */
     buf = oliver_render(
         NULL, my_free, NULL,

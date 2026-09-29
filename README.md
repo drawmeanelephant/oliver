@@ -89,7 +89,9 @@ oliver scale --from cooklang --servings 4 < recipe.cook
 oliver serialize --from cooklang < recipe.cook   # canonical .cook (--json for typed model)
 ```
 
-`--to xhtml` produces XML-compatible fragments; run `oliver render --help`
+`--to xhtml` produces XML-compatible fragments; `--to html4-strict` emits
+HTML 4.01 Strict fragments with explicit limitations
+([docs/HTML4-STRICT.md](docs/HTML4-STRICT.md)). Run `oliver render --help`
 for the full flag set.
 
 ## Prebuilt binaries

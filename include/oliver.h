@@ -47,6 +47,11 @@ enum {
     OLIVER_ERR_RAW_HTML_REJECTED = 3,        /* raw_html = OLIVER_RAW_HTML_REJECTED and raw content was found */
     OLIVER_ERR_RAW_HTML_NOT_XML_WELL_FORMED = 4, /* XHTML profile, raw content present (fail closed) */
     OLIVER_ERR_INVALID_ARGUMENT = 5,         /* null allocator, null bytes with len > 0, out-of-range enum */
+    OLIVER_ERR_RAW_HTML_NOT_HTML4_STRICT = 6, /* HTML 4.01 Strict profile, verbatim content present */
+    OLIVER_ERR_ORDERED_LIST_START_NOT_HTML4_STRICT = 7, /* HTML 4.01 Strict cannot preserve a non-1 list start */
+    OLIVER_ERR_INVALID_HTML4_STRICT_ID = 8, /* HTML 4.01 Strict requires valid id tokens */
+    OLIVER_ERR_DUPLICATE_HTML4_STRICT_ID = 9, /* HTML 4.01 Strict requires unique ids */
+    OLIVER_ERR_EMPTY_TABLE_NOT_HTML4_STRICT = 10, /* HTML 4.01 Strict requires a table body with rows */
 };
 
 /* Input dialect. */
@@ -66,13 +71,14 @@ enum {
 enum {
     OLIVER_PROFILE_HTML = 0,
     OLIVER_PROFILE_XHTML = 1,
+    OLIVER_PROFILE_HTML4_STRICT = 2,
 };
 
 /* Raw-content policy (Markdown raw HTML inline tags and HTML blocks,
  * Textile ==/notextile. escapes and pre. verbatim blocks). */
 enum {
-    OLIVER_RAW_HTML_ALLOWED = 0,  /* verbatim (default; XHTML still fails closed) */
-    OLIVER_RAW_HTML_ESCAPED = 1,  /* HTML-escaped; well-formed under both profiles */
+    OLIVER_RAW_HTML_ALLOWED = 0,  /* verbatim (default; XHTML and HTML4 Strict fail closed) */
+    OLIVER_RAW_HTML_ESCAPED = 1,  /* HTML-escaped; valid under all profiles */
     OLIVER_RAW_HTML_REJECTED = 2, /* fail with OLIVER_ERR_RAW_HTML_REJECTED */
 };
 

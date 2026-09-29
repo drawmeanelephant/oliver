@@ -251,7 +251,9 @@ diagnostics.
 - CLI: `oliver render --from cooklang` renders the recipe through the
   Cooklang HTML policy; `--to xhtml` selects the same policy under the
   XML-compatible profile (the forced line break becomes `<br />`;
-  docs/XHTML.md). `oliver serialize --from cooklang` writes the
+  docs/XHTML.md). `--to html4-strict` maps HTML5 elements to HTML 4.01
+  `div`/`span` and drops machine-readable `data-*`/`datetime` attributes
+  (docs/HTML4-STRICT.md). `oliver serialize --from cooklang` writes the
   canonical `.cook` text (§10).
 
 ## 7. HTML rendering policy (Oliver-owned, not Cooklang-conformant)

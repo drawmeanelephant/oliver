@@ -72,7 +72,7 @@ of the ABI, per issue #96.
 
 `dialect`, `frontmatter`, `profile`, and `raw_html` are small integer
 enums declared in the header (`OLIVER_MARKDOWN`/`OLIVER_TEXTILE`,
-`OLIVER_FRONTMATTER_NONE`/`YAML`/`TOML`, `OLIVER_PROFILE_HTML`/`XHTML`,
+`OLIVER_FRONTMATTER_NONE`/`YAML`/`TOML`, `OLIVER_PROFILE_HTML`/`XHTML`/`HTML4_STRICT`,
 `OLIVER_RAW_HTML_ALLOWED`/`ESCAPED`/`REJECTED`). Any out-of-range value
 is `OLIVER_ERR_INVALID_ARGUMENT`, as is a null allocator pair or null
 `bytes` with a non-zero `len`.
@@ -96,6 +96,11 @@ output.
 | `OLIVER_ERR_RAW_HTML_REJECTED` | `raw_html = REJECTED` and raw content was found (docs/RAW-HTML.md §3) |
 | `OLIVER_ERR_RAW_HTML_NOT_XML_WELL_FORMED` | XHTML profile, raw content present — the fail-closed error (docs/XHTML.md) |
 | `OLIVER_ERR_INVALID_ARGUMENT` | null allocator, null bytes with `len > 0`, out-of-range enum |
+| `OLIVER_ERR_RAW_HTML_NOT_HTML4_STRICT` | HTML 4.01 Strict profile, verbatim content present |
+| `OLIVER_ERR_ORDERED_LIST_START_NOT_HTML4_STRICT` | HTML 4.01 Strict profile, ordered list starts other than 1 |
+| `OLIVER_ERR_INVALID_HTML4_STRICT_ID` | HTML 4.01 Strict profile, invalid explicit or generated ID |
+| `OLIVER_ERR_DUPLICATE_HTML4_STRICT_ID` | HTML 4.01 Strict profile, repeated ID |
+| `OLIVER_ERR_EMPTY_TABLE_NOT_HTML4_STRICT` | HTML 4.01 Strict profile, empty caller-built table |
 
 ## 5. Implementation notes
 
