@@ -65,7 +65,7 @@ jobs:
       # force-runs it on Node 24). Benign until mlugg publishes a node24
       # release; do not chase the warning by switching actions.
       - name: Install Zig
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        uses: drawmeanelephant/zig-zouave@2d8510d62b517fa786279562cf8b1bdcf0c47b9f
         with:
           version: 0.16.0
 
