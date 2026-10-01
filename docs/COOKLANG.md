@@ -197,8 +197,13 @@ src/cooklang.zig and/or fixtures, never an accident.
   The marker must be immediately followed by a word character.
 - **Block comments** `[- ... -]` may span lines (EBNF). An unclosed `[-`
   with no `-]` to end of input is **literal text** (the construct fails
-  to form — the same literal-fallback policy; no diagnostic, because the
-  corpus treats failed constructs as text).
+  to form — the same literal-fallback policy, with the structural warning
+  documented in §5). Complete comments are opaque **before** recognizing
+  blank-line step boundaries or section/note markers: blank lines and
+  marker-looking content inside a comment cannot create blocks. Token
+  payloads, line comments, notes, and section titles retain their existing
+  opaque/plain-text policies. Comment-close indexing and boundary scanning
+  are bounded passes; source spans still cover the original bytes.
 - **Frontmatter** requires both fences: the file's first line must be
   `---` (trailing whitespace/CR allowed) and a later line must be
   exactly `---`. Without a closing fence, the opener is ordinary step
@@ -229,7 +234,7 @@ behavior (corpus-confirmed). Two tiers, both literal-fallback:
   - `unclosed-braces` — a `{` with no `}` on the line.
   - `unclosed-preparation` — a `(` immediately after a token's `}` with
     no `)` on the line (the `(` stays text; the token still parses).
-  - `unclosed-block-comment` — a `[-` with no `-]` anywhere in the step.
+  - `unclosed-block-comment` — a `[-` with no `-]` later in the body.
   - `unclosed-frontmatter` — a leading `---` fence never closed (the
     opener stays ordinary step text).
 
@@ -361,8 +366,14 @@ Canonical rules (as implemented):
   parsed).
 - A step renders its parts in order: text verbatim (text values are
   already join-normalized by the parser, so a multi-line step without
-  forced breaks collapses to one line), tokens in canonical form, and
-  a `line_break` part as `\` + `\n`.
+  forced breaks normally collapses to one line), tokens in canonical
+  form, and a `line_break` part as `\` + `\n`. Before emission, the
+  normalized step is reparsed and its semantic parts checked. If joining
+  lines or removing comments would activate syntax that was literal
+  (for example `@x{\n}` becoming `@x{ }`), that step retains its source
+  line/comment boundaries instead. Its typed tokens still use canonical
+  forms, including scaled quantities. This is a lexical safety fallback,
+  not byte-identical source roundtripping or a new multiline-token grammar.
 - Tokens emit braces exactly when the model says they carried them
   (`quantity != null`; the empty-braces form `@x{}` is `quantity = ""`,
   distinct from no braces at all), `%units` only when units are
@@ -371,11 +382,13 @@ Canonical rules (as implemented):
   `is_recipe_reference` is a derived flag, and the name renders as-is.
 - Notes render as `> ` plus the text; sections render as `= Name` (the
   `== Name ==` variant normalizes to `= Name`).
-- No escaping is needed or performed: text values cannot contain a
-  valid token shape (it would have parsed as one) or a trailing `\`
-  (it would be a break), so verbatim emission re-parses to the same
-  parts; `-`/`[-`-carrying literal text re-parses identically by the
-  same rules the parser applies.
+- No new escaping syntax is introduced. Literal fallback and malformed
+  token diagnostics remain line-local and intentional. The serializer
+  uses the supplied allocator for temporary step buffers and safety-check
+  parses. Unsafe normalization requires the original source and valid
+  spans, preserved by parsed and scaled recipes; inconsistent manually
+  constructed recipes return `error.UnrepresentableStep` rather than
+  indexing invalid spans.
 
 Contract, verified by tests:
 
@@ -389,6 +402,11 @@ Contract, verified by tests:
 - **Fixture pairs**: `serialize-basic` and `serialize-literal` pin
   canonical output byte-for-byte, including the degraded/literal
   shapes that must round-trip unchanged.
+- **Boundary regressions**: line-split ingredient, cookware, and timer
+  names/quantities/units/closing braces, preparations, comment barriers,
+  sections/frontmatter, LF/CRLF/CR, and scaled tokens assert semantic
+  equality and byte idempotence. The deterministic mutation wall also
+  serializes reparsed output to check the fixed point.
 - **Parser fix carried**: empty front matter (`---\n---`) — the
   zero-payload case — parses correctly (no panic) and round-trips.
 
