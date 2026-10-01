@@ -94,6 +94,13 @@ HTML 4.01 Strict fragments with explicit limitations
 ([docs/HTML4-STRICT.md](docs/HTML4-STRICT.md)). Run `oliver render --help`
 for the full flag set.
 
+All stdin-consuming commands (`render`, `serialize`, `scale`, `menu`, `meta`)
+accept `--max-input-bytes <n>`: an inclusive decimal-byte ceiling, default
+**64 MiB (67108864 bytes)**. Input at the ceiling passes; excess input exits
+1 with `InputTooLarge` on stderr and no stdout. `0` permits only empty input.
+The ceiling counts raw bytes before parsing, not total parser or output memory.
+The shared check in `src/input.zig` uses no hosted services.
+
 ## Prebuilt binaries
 
 A rolling `builds` release carries ReleaseSafe, statically linked CLI binaries

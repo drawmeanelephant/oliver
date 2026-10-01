@@ -203,6 +203,35 @@ pub fn build(b: *std.Build) void {
     c_example_step.dependOn(&c_example_run.step);
 
     const test_step = b.step("test", "Run all tests");
+    // Exercise the real stdin adapter, including a full 8 KiB chunk and
+    // overflow in a later read. All failures must leave stdout empty.
+    const input_cases = [_]struct {
+        source: []const u8,
+        limit: []const u8,
+        output: []const u8 = "",
+        failure: bool = false,
+    }{
+        .{ .source = "# ok\n", .limit = "6", .output = "<h1>ok</h1>\n" },
+        .{ .source = "# ok\n", .limit = "5", .output = "<h1>ok</h1>\n" },
+        .{ .source = "# ok\n", .limit = "4", .failure = true },
+        .{ .source = "", .limit = "0" },
+        .{ .source = "x", .limit = "0", .failure = true },
+        .{ .source = " " ** 8191, .limit = "8192" },
+        .{ .source = " " ** 8192, .limit = "8192" },
+        .{ .source = " " ** 8193, .limit = "8192", .failure = true },
+    };
+    for (input_cases) |case| {
+        const input_test = b.addRunArtifact(cli);
+        input_test.addArgs(&.{ "render", "--from", "markdown", "--max-input-bytes", case.limit });
+        input_test.setStdIn(.{ .bytes = case.source });
+        input_test.expectExitCode(if (case.failure) 1 else 0);
+        input_test.expectStdOutEqual(case.output);
+        input_test.expectStdErrEqual(if (case.failure)
+            b.fmt("oliver: InputTooLarge (stdin exceeds --max-input-bytes={s})\n", .{case.limit})
+        else
+            "");
+        test_step.dependOn(&input_test.step);
+    }
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_fixture_tests.step);
     test_step.dependOn(&run_spec_tool_tests.step);

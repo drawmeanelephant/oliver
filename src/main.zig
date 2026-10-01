@@ -22,6 +22,7 @@ const wrap = @import("wrap.zig");
 const rewrite = @import("rewrite.zig");
 const plan = @import("plan.zig");
 const manifest = @import("manifest.zig");
+const input_limit = @import("input.zig");
 
 comptime {
     // Force analysis so `zig build test` runs `src/meta.zig`,
@@ -60,6 +61,8 @@ pub const Command = enum {
 /// serialization (`html` by default, `xhtml` with `--to xhtml`).
 pub const RunConfig = struct {
     command: Command,
+    /// Inclusive raw stdin byte budget for every stdin-consuming command.
+    max_input_bytes: usize = input_limit.default_max_input_bytes,
     dialect: ?oliver.Dialect = null,
     cooklang: bool = false,
     factor_num: ?u32 = null,
@@ -130,6 +133,8 @@ pub const RunConfig = struct {
 /// unit-tested directly.
 pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConfig {
     var command: ?Command = null;
+    var max_input_bytes: usize = input_limit.default_max_input_bytes;
+    var saw_max_input_bytes = false;
     var dialect: ?oliver.Dialect = null;
     var cooklang = false;
     var factor_num: ?u32 = null;
@@ -218,6 +223,16 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         } else if (std.mem.eql(u8, arg, "manifest")) {
             if (command != null) return error.Usage;
             command = .manifest;
+        } else if (std.mem.eql(u8, arg, "--max-input-bytes")) {
+            if (saw_max_input_bytes or index + 1 >= args.len) return error.Usage;
+            saw_max_input_bytes = true;
+            index += 1;
+            const value = args[index];
+            if (value.len == 0) return error.Usage;
+            for (value) |byte| {
+                if (!std.ascii.isDigit(byte)) return error.Usage;
+            }
+            max_input_bytes = std.fmt.parseInt(usize, value, 10) catch return error.Usage;
         } else if (std.mem.eql(u8, arg, "--from")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -451,6 +466,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     // needs an input frontend — except `wrap`/`plan`/`manifest`, which
     // are filesystem operations, not frontends.
     const cmd = command orelse return error.Usage;
+    if (saw_max_input_bytes and (cmd == .wrap or cmd == .plan or cmd == .manifest)) return error.Usage;
     if (cmd != .wrap and cmd != .plan and cmd != .manifest) {
         if (!cooklang and dialect == null) return error.Usage;
     }
@@ -529,6 +545,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     }
     return .{
         .command = cmd,
+        .max_input_bytes = max_input_bytes,
         .dialect = dialect,
         .cooklang = cooklang,
         .factor_num = factor_num,
@@ -624,7 +641,8 @@ pub fn main(init: std.process.Init) !u8 {
     // level (YAML-only for S1, 7-string JSON). It bypasses the dialect
     // dispatch so `meta` works uniformly for markdown/textile/cooklang.
 
-    // Read all of stdin into memory.
+    // Bound raw stdin bytes before appending each chunk. The shared helper
+    // has no hosted I/O dependency, so guest adapters can use the same check.
     var input = std.ArrayList(u8).empty;
     defer input.deinit(gpa);
     const stdin_file = std.Io.File.stdin();
@@ -635,7 +653,13 @@ pub fn main(init: std.process.Init) !u8 {
             else => return err,
         };
         if (n == 0) break;
-        try input.appendSlice(gpa, buf[0..n]);
+        input_limit.append(gpa, &input, buf[0..n], cfg.max_input_bytes) catch |err| switch (err) {
+            error.InputTooLarge => {
+                std.debug.print("oliver: InputTooLarge (stdin exceeds --max-input-bytes={d})\n", .{cfg.max_input_bytes});
+                return 1;
+            },
+            else => return err,
+        };
     }
 
     // `meta` bypasses the dialect dispatch — it always projects the same
@@ -1162,6 +1186,10 @@ fn printUsage() void {
         \\scale --factor accepts the same scalable quantity forms as amounts
         \\(2, 1/2, 1.5, 1 1/2; quote values containing spaces).
         \\
+        \\Stdin budget (render/serialize/scale/menu/meta):
+        \\  --max-input-bytes <n>  (decimal bytes; default 67108864 = 64 MiB)
+        \\  Exact-limit input passes; larger input fails with InputTooLarge.
+        \\
         \\Markdown extensions (render --from markdown, all off by default):
         \\  --wikilinks  --callouts  --smartypants  --footnotes
         \\  --definition-lists  --heading-attributes  --strikethrough
@@ -1295,6 +1323,35 @@ fn version(init: std.process.Init) u8 {
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "cli: stdin budget defaults to 64 MiB and accepts decimal overrides" {
+    const cfg = try parseArgs(&.{ "render", "--from", "markdown" });
+    try testing.expectEqual(@as(usize, 67108864), cfg.max_input_bytes);
+    const custom = try parseArgs(&.{ "--max-input-bytes", "8192", "render", "--from", "textile" });
+    try testing.expectEqual(@as(usize, 8192), custom.max_input_bytes);
+    const zero = try parseArgs(&.{ "serialize", "--from", "cooklang", "--max-input-bytes", "0" });
+    try testing.expectEqual(@as(usize, 0), zero.max_input_bytes);
+    const menu_cfg = try parseArgs(&.{ "menu", "--from", "cooklang", "--max-input-bytes", "1" });
+    try testing.expectEqual(@as(usize, 1), menu_cfg.max_input_bytes);
+    const scale_cfg = try parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", "--max-input-bytes", "2" });
+    try testing.expectEqual(@as(usize, 2), scale_cfg.max_input_bytes);
+    const meta_cfg = try parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", "--max-input-bytes", "3" });
+    try testing.expectEqual(@as(usize, 3), meta_cfg.max_input_bytes);
+}
+
+test "cli: stdin budget rejects missing, malformed, overflowing, and duplicated values" {
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--max-input-bytes" }));
+    for ([_][]const u8{ "", "-1", "+1", "1_000", "1.5", "64MiB", "0x10", " 1", "18446744073709551616" }) |value| {
+        try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--max-input-bytes", value }));
+    }
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--max-input-bytes", "1", "--max-input-bytes", "2" }));
+}
+
+test "cli: stdin budget is rejected for filesystem-only commands" {
+    try testing.expectError(error.Usage, parseArgs(&.{ "wrap", "--template", "t", "--meta-json", "m", "--assets-root", "a", "--body", "b", "--max-input-bytes", "1" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "plan", "--content-dir", "c", "--output-dir", "o", "--template-dir", "t", "--meta-dir", "m", "--default-template", "d", "--oliver-bin", "b", "--root-dir", "r", "--dry-run", "true", "--verbose", "false", "--max-input-bytes", "1" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "manifest", "--manifest", "m", "--verify", "--max-input-bytes", "1" }));
+}
 
 test "cli: default profile is html and --to xhtml selects the xhtml profile" {
     const cfg = try parseArgs(&.{ "render", "--from", "markdown" });
