@@ -595,46 +595,140 @@ pub fn main(init: std.process.Init) !u8 {
     defer args.deinit(gpa);
     while (it.next()) |arg| try args.append(gpa, arg);
 
-    // `--help`/`-h` is a requested outcome: print usage and exit 0.
-    // Anything else that `parseArgs` rejects is a real usage error and
-    // exits 1 with the same text on stderr.
-    const cfg = parseArgs(args.items) catch |err| switch (err) {
-        error.Help => {
-            printUsage();
-            return 0;
-        },
-        // `--version` is a requested outcome like `--help`: print the
-        // version and the embedded source commit, then exit 0.
-        error.Version => return version(init),
-        error.Usage => return usage(),
-    };
-    const profile = cfg.profile;
-
-    // Render directly to stdout through a buffered writer. The
-    // `--diagnostics json` side channel writes to stderr so stdout stays
-    // pure HTML (the consumer never parses a mixed stream).
+    var in_buf: [8192]u8 = undefined;
+    var in_reader = std.Io.File.stdin().reader(init.io, &in_buf);
     var out_buf: [4096]u8 = undefined;
     var out_writer = std.Io.File.stdout().writer(init.io, &out_buf);
     var err_buf: [4096]u8 = undefined;
     var err_writer = std.Io.File.stderr().writer(init.io, &err_buf);
+    return runCli(gpa, init.io, args.items, &in_reader.interface, .{
+        .stdout = &out_writer.interface,
+        .stderr = &err_writer.interface,
+    });
+}
+
+const Output = struct {
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+
+    const Stream = enum { stdout, stderr };
+    const Error = error{
+        StdoutWriteFailed,
+        StderrWriteFailed,
+        StdoutFlushFailed,
+        StderrFlushFailed,
+    };
+
+    fn writer(self: Output, stream: Stream) *std.Io.Writer {
+        return switch (stream) {
+            .stdout => self.stdout,
+            .stderr => self.stderr,
+        };
+    }
+
+    fn writeError(stream: Stream) Error {
+        return switch (stream) {
+            .stdout => error.StdoutWriteFailed,
+            .stderr => error.StderrWriteFailed,
+        };
+    }
+
+    fn writeAll(self: Output, stream: Stream, bytes: []const u8) Error!void {
+        self.writer(stream).writeAll(bytes) catch return writeError(stream);
+    }
+
+    fn print(self: Output, stream: Stream, comptime fmt: []const u8, args: anytype) Error!void {
+        self.writer(stream).print(fmt, args) catch return writeError(stream);
+    }
+
+    fn flush(self: Output) Error!void {
+        self.stdout.flush() catch return error.StdoutFlushFailed;
+        self.stderr.flush() catch return error.StderrFlushFailed;
+    }
+
+    fn failure(self: Output, err: Error) u8 {
+        const stream: Stream = switch (err) {
+            error.StdoutWriteFailed, error.StdoutFlushFailed => .stdout,
+            error.StderrWriteFailed, error.StderrFlushFailed => .stderr,
+        };
+        const operation = switch (err) {
+            error.StdoutWriteFailed, error.StderrWriteFailed => "write",
+            error.StdoutFlushFailed, error.StderrFlushFailed => "flush",
+        };
+        // Do not retry the failed stream. If stderr failed, stdout is the
+        // only place left for a diagnostic. If both fail, still exit 1.
+        const diagnostic = self.writer(if (stream == .stdout) .stderr else .stdout);
+        diagnostic.print("oliver: {s} {s} failed: WriteFailed\n", .{ @tagName(stream), operation }) catch return 1;
+        diagnostic.flush() catch return 1;
+        return 1;
+    }
+};
+
+/// The shipped argument/dispatch/flush path, with injectable stdio for tests.
+fn runCli(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    args: []const []const u8,
+    input: *std.Io.Reader,
+    output: Output,
+) !u8 {
+    const code = dispatch(gpa, io, args, input, output) catch |err| switch (err) {
+        error.StdoutWriteFailed,
+        error.StderrWriteFailed,
+        error.StdoutFlushFailed,
+        error.StderrFlushFailed,
+        => return output.failure(@errorCast(err)),
+        else => return err,
+    };
+    output.flush() catch |err| return output.failure(err);
+    return code;
+}
+
+fn dispatch(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    args: []const []const u8,
+    in_reader: *std.Io.Reader,
+    output: Output,
+) !u8 {
+    // `--help`/`-h` is a requested outcome: print usage and exit 0.
+    // Anything else that `parseArgs` rejects is a real usage error and
+    // exits 1 with the same text on stderr.
+    const cfg = parseArgs(args) catch |err| switch (err) {
+        error.Help => {
+            try printUsage(output);
+            return 0;
+        },
+        // `--version` is a requested outcome like `--help`: print the
+        // version and the embedded source commit, then exit 0.
+        error.Version => {
+            try version(output);
+            return 0;
+        },
+        error.Usage => {
+            try printUsage(output);
+            return 1;
+        },
+    };
+    const profile = cfg.profile;
 
     // `oliver wrap` reads three files (template, meta-json, body) from
     // disk and writes the resolved template to stdout. It does not use
     // stdin.
     if (cfg.command == .wrap) {
-        return wrapDispatch(gpa, init.io, cfg, &out_writer, &err_writer);
+        return wrapDispatch(gpa, io, cfg, output);
     }
 
     // `oliver plan` walks the content tree and emits the 13-col batch TSV
     // to stdout. It does not use stdin.
     if (cfg.command == .plan) {
-        return planDispatch(gpa, init.io, cfg, &out_writer, &err_writer);
+        return planDispatch(gpa, io, cfg, output);
     }
 
     // `oliver manifest` appends to or verifies the manifest file. It does
     // not use stdin.
     if (cfg.command == .manifest) {
-        return manifestDispatch(gpa, init.io, cfg, &out_writer, &err_writer);
+        return manifestDispatch(gpa, io, cfg, output);
     }
 
     // `oliver meta` is filesystem-free and dialect-agnostic at the wire
@@ -643,42 +737,37 @@ pub fn main(init: std.process.Init) !u8 {
 
     // Bound raw stdin bytes before appending each chunk. The shared helper
     // has no hosted I/O dependency, so guest adapters can use the same check.
-    var input = std.ArrayList(u8).empty;
-    defer input.deinit(gpa);
-    const stdin_file = std.Io.File.stdin();
+    var input_buffer = std.ArrayList(u8).empty;
+    defer input_buffer.deinit(gpa);
     var buf: [8192]u8 = undefined;
     while (true) {
-        const n = stdin_file.readStreaming(init.io, &.{&buf}) catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
+        const n = try in_reader.readSliceShort(&buf);
         if (n == 0) break;
-        input_limit.append(gpa, &input, buf[0..n], cfg.max_input_bytes) catch |err| switch (err) {
+        input_limit.append(gpa, &input_buffer, buf[0..n], cfg.max_input_bytes) catch |err| switch (err) {
             error.InputTooLarge => {
-                std.debug.print("oliver: InputTooLarge (stdin exceeds --max-input-bytes={d})\n", .{cfg.max_input_bytes});
+                try output.print(.stderr, "oliver: InputTooLarge (stdin exceeds --max-input-bytes={d})\n", .{cfg.max_input_bytes});
                 return 1;
             },
             else => return err,
         };
     }
+    const input = input_buffer.items;
 
     // `meta` bypasses the dialect dispatch — it always projects the same
     // YAML frontmatter shape regardless of --from (markdown/textile/cooklang).
     if (cfg.command == .meta) {
-        const json = meta.extractJson(gpa, input.items) catch |err| {
-            std.debug.print("oliver: meta failed: {s}\n", .{@errorName(err)});
+        const json = meta.extractJson(gpa, input) catch |err| {
+            try output.print(.stderr, "oliver: meta failed: {s}\n", .{@errorName(err)});
             return 1;
         };
         defer gpa.free(json);
-        out_writer.interface.writeAll(json) catch {};
-        out_writer.flush() catch {};
-        err_writer.flush() catch {};
+        try output.writeAll(.stdout, json);
         return 0;
     }
 
     if (cfg.cooklang) {
-        var result = oliver.cooklang.parse(gpa, input.items, cooklangParseOptions(cfg)) catch |err| {
-            std.debug.print("oliver: {s}\n", .{@errorName(err)});
+        var result = oliver.cooklang.parse(gpa, input, cooklangParseOptions(cfg)) catch |err| {
+            try output.print(.stderr, "oliver: {s}\n", .{@errorName(err)});
             return 1;
         };
         defer result.deinit();
@@ -686,34 +775,36 @@ pub fn main(init: std.process.Init) !u8 {
             .serialize => {
                 if (cfg.json) {
                     const json = recipeJson(gpa, &result.recipe) catch |err| {
-                        std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
+                        try output.print(.stderr, "oliver: serialize failed: {s}\n", .{@errorName(err)});
                         return 1;
                     };
                     defer gpa.free(json);
-                    out_writer.interface.writeAll(json) catch {};
+                    try output.writeAll(.stdout, json);
                 } else {
-                    oliver.cooklang_serialize.serialize(gpa, &out_writer.interface, &result.recipe, .{}) catch |err| {
-                        std.debug.print("oliver: serialize failed: {s}\n", .{@errorName(err)});
+                    oliver.cooklang_serialize.serialize(gpa, output.stdout, &result.recipe, .{}) catch |err| {
+                        if (err == error.WriteFailed) return error.StdoutWriteFailed;
+                        try output.print(.stderr, "oliver: serialize failed: {s}\n", .{@errorName(err)});
                         return 1;
                     };
                 }
             },
             .scale => {
-                const scaled = scaleWith(gpa, input.items, cfg) catch |err| {
-                    std.debug.print("oliver: scale failed: {s}\n", .{@errorName(err)});
+                const scaled = scaleWith(gpa, input, cfg) catch |err| {
+                    try output.print(.stderr, "oliver: scale failed: {s}\n", .{@errorName(err)});
                     return 1;
                 };
                 defer gpa.free(scaled);
-                out_writer.interface.writeAll(scaled) catch {};
+                try output.writeAll(.stdout, scaled);
             },
             .menu => {
                 var m = oliver.cooklang_menu.menuView(gpa, &result.recipe) catch |err| {
-                    std.debug.print("oliver: menu view failed: {s}\n", .{@errorName(err)});
+                    try output.print(.stderr, "oliver: menu view failed: {s}\n", .{@errorName(err)});
                     return 1;
                 };
                 defer m.deinit();
-                oliver.cooklang_menu.writeMenu(&out_writer.interface, &m) catch |err| {
-                    std.debug.print("oliver: menu dump failed: {s}\n", .{@errorName(err)});
+                oliver.cooklang_menu.writeMenu(output.stdout, &m) catch |err| {
+                    if (err == error.WriteFailed) return error.StdoutWriteFailed;
+                    try output.print(.stderr, "oliver: menu dump failed: {s}\n", .{@errorName(err)});
                     return 1;
                 };
             },
@@ -721,42 +812,45 @@ pub fn main(init: std.process.Init) !u8 {
                 if (cfg.diagnostics) {
                     const json = try diagnosticsJson(gpa, result.diagnostics);
                     defer gpa.free(json);
-                    err_writer.interface.writeAll(json) catch {};
+                    try output.writeAll(.stderr, json);
                 }
-                oliver.cooklang_html.render(gpa, &out_writer.interface, &result.recipe, .{ .profile = profile }) catch |err| {
-                    std.debug.print("oliver: render failed: {s}\n", .{@errorName(err)});
+                oliver.cooklang_html.render(gpa, output.stdout, &result.recipe, .{ .profile = profile }) catch |err| {
+                    if (err == error.WriteFailed) return error.StdoutWriteFailed;
+                    try output.print(.stderr, "oliver: render failed: {s}\n", .{@errorName(err)});
                     return 1;
                 };
             },
             .meta, .wrap, .plan, .manifest => unreachable,
         }
     } else {
-        const outcome = renderWithDiag(gpa, cfg, input.items) catch |err| {
-            std.debug.print("oliver: {s}\n", .{@errorName(err)});
+        const outcome = renderWithDiag(gpa, cfg, input) catch |err| {
+            try output.print(.stderr, "oliver: {s}\n", .{@errorName(err)});
             if (err == error.RawHtmlNotXmlWellFormed) {
-                std.debug.print(
+                try output.print(
+                    .stderr,
                     "oliver: --to xhtml rejects raw HTML that cannot be guaranteed well-formed XML\n" ++
                         "(docs/XHTML.md section 5): remove or escape the raw HTML, or render with --to html.\n",
                     .{},
                 );
             }
             if (err == error.RawHtmlNotHtml4Strict) {
-                std.debug.print("oliver: --to html4-strict rejects verbatim HTML; use --raw-html escaped or --to html (docs/HTML4-STRICT.md).\n", .{});
+                try output.print(.stderr, "oliver: --to html4-strict rejects verbatim HTML; use --raw-html escaped or --to html (docs/HTML4-STRICT.md).\n", .{});
             }
             if (err == error.OrderedListStartNotHtml4Strict) {
-                std.debug.print("oliver: --to html4-strict cannot preserve an ordered list starting other than 1 (docs/HTML4-STRICT.md).\n", .{});
+                try output.print(.stderr, "oliver: --to html4-strict cannot preserve an ordered list starting other than 1 (docs/HTML4-STRICT.md).\n", .{});
             }
             if (err == error.InvalidHtml4StrictId) {
-                std.debug.print("oliver: --to html4-strict requires HTML 4.01-compatible id values (docs/HTML4-STRICT.md).\n", .{});
+                try output.print(.stderr, "oliver: --to html4-strict requires HTML 4.01-compatible id values (docs/HTML4-STRICT.md).\n", .{});
             }
             if (err == error.DuplicateHtml4StrictId) {
-                std.debug.print("oliver: --to html4-strict requires unique id values (docs/HTML4-STRICT.md).\n", .{});
+                try output.print(.stderr, "oliver: --to html4-strict requires unique id values (docs/HTML4-STRICT.md).\n", .{});
             }
             if (err == error.EmptyTableNotHtml4Strict) {
-                std.debug.print("oliver: --to html4-strict requires at least one table row (docs/HTML4-STRICT.md).\n", .{});
+                try output.print(.stderr, "oliver: --to html4-strict requires at least one table row (docs/HTML4-STRICT.md).\n", .{});
             }
             if (err == error.RawHtmlRejected) {
-                std.debug.print(
+                try output.print(
+                    .stderr,
                     "oliver: --raw-html rejected refuses raw HTML (docs/RAW-HTML.md section 3):\n" ++
                         "render with --raw-html allowed or --raw-html escaped instead.\n",
                     .{},
@@ -767,12 +861,10 @@ pub fn main(init: std.process.Init) !u8 {
         defer gpa.free(outcome.html);
         if (outcome.diagnostics_json) |json| {
             defer gpa.free(json);
-            err_writer.interface.writeAll(json) catch {};
+            try output.writeAll(.stderr, json);
         }
-        out_writer.interface.writeAll(outcome.html) catch {};
+        try output.writeAll(.stdout, outcome.html);
     }
-    out_writer.flush() catch {};
-    err_writer.flush() catch {};
     return 0;
 }
 
@@ -1157,8 +1249,8 @@ fn scaleWith(a: std.mem.Allocator, input: []const u8, cfg: RunConfig) ![]u8 {
     return out.toOwnedSlice(a);
 }
 
-fn printUsage() void {
-    std.debug.print(
+fn printUsage(output: Output) Output.Error!void {
+    try output.print(.stderr,
         \\usage: oliver render --from <markdown|textile|cooklang> [--to <html|xhtml>]
         \\       oliver serialize --from cooklang [--json]
         \\       oliver scale --from cooklang (--factor <scalable> | --servings <n>)
@@ -1203,11 +1295,6 @@ fn printUsage() void {
     , .{});
 }
 
-fn usage() u8 {
-    printUsage();
-    return 1;
-}
-
 // ---------------------------------------------------------------------------
 // The `wrap` command dispatch: reads three files from disk, resolves the
 // template dialect, and writes the result to stdout.
@@ -1240,31 +1327,29 @@ fn wrapDispatch(
     gpa: std.mem.Allocator,
     io: std.Io,
     cfg: RunConfig,
-    out_writer: anytype,
-    err_writer: anytype,
+    output: Output,
 ) !u8 {
-    _ = err_writer;
     const meta_json = readFileAlloc(gpa, io, cfg.wrap_meta_json.?) catch |err| {
-        std.debug.print("oliver wrap: cannot read --meta-json {s}: {s}\n", .{ cfg.wrap_meta_json.?, @errorName(err) });
+        try output.print(.stderr, "oliver wrap: cannot read --meta-json {s}: {s}\n", .{ cfg.wrap_meta_json.?, @errorName(err) });
         return 1;
     };
     defer gpa.free(meta_json);
     const template = readFileAlloc(gpa, io, cfg.wrap_template.?) catch |err| {
-        std.debug.print("oliver wrap: cannot read --template {s}: {s}\n", .{ cfg.wrap_template.?, @errorName(err) });
+        try output.print(.stderr, "oliver wrap: cannot read --template {s}: {s}\n", .{ cfg.wrap_template.?, @errorName(err) });
         return 1;
     };
     defer gpa.free(template);
     const body = readFileAlloc(gpa, io, cfg.wrap_body.?) catch |err| {
-        std.debug.print("oliver wrap: cannot read --body {s}: {s}\n", .{ cfg.wrap_body.?, @errorName(err) });
+        try output.print(.stderr, "oliver wrap: cannot read --body {s}: {s}\n", .{ cfg.wrap_body.?, @errorName(err) });
         return 1;
     };
     defer gpa.free(body);
 
-    wrap.wrap(gpa, meta_json, template, body, cfg.wrap_assets_root.?, &out_writer.interface) catch |err| {
-        std.debug.print("oliver wrap: {s}\n", .{@errorName(err)});
+    wrap.wrap(gpa, meta_json, template, body, cfg.wrap_assets_root.?, output.stdout) catch |err| {
+        if (err == error.WriteFailed) return error.StdoutWriteFailed;
+        try output.print(.stderr, "oliver wrap: {s}\n", .{@errorName(err)});
         return 1;
     };
-    out_writer.flush() catch {};
     return 0;
 }
 
@@ -1274,16 +1359,15 @@ fn planDispatch(
     gpa: std.mem.Allocator,
     io: std.Io,
     cfg: RunConfig,
-    out_writer: anytype,
-    err_writer: anytype,
+    output: Output,
 ) !u8 {
-    _ = err_writer;
-    plan.run(gpa, io, cfg.plan_content_dir.?, cfg.plan_output_dir.?, cfg.plan_template_dir.?, cfg.plan_meta_dir.?, cfg.plan_default_template.?, cfg.plan_oliver_bin.?, cfg.plan_root_dir.?, cfg.plan_dry_run.?, cfg.plan_verbose.?, &out_writer.interface) catch |err| {
+    plan.run(gpa, io, cfg.plan_content_dir.?, cfg.plan_output_dir.?, cfg.plan_template_dir.?, cfg.plan_meta_dir.?, cfg.plan_default_template.?, cfg.plan_oliver_bin.?, cfg.plan_root_dir.?, cfg.plan_dry_run.?, cfg.plan_verbose.?, output.stdout, output.stderr) catch |err| {
+        if (err == error.WriteFailed) return error.StdoutWriteFailed;
+        if (err == error.StderrWriteFailed) return err;
         if (err == error.Collision) return 1;
-        std.debug.print("oliver plan: {s}\n", .{@errorName(err)});
+        try output.print(.stderr, "oliver plan: {s}\n", .{@errorName(err)});
         return 1;
     };
-    out_writer.flush() catch {};
     return 0;
 }
 
@@ -1292,13 +1376,10 @@ fn manifestDispatch(
     gpa: std.mem.Allocator,
     io: std.Io,
     cfg: RunConfig,
-    out_writer: anytype,
-    err_writer: anytype,
+    output: Output,
 ) !u8 {
-    _ = out_writer;
-    _ = err_writer;
     manifest.run(gpa, io, cfg.manifest_path.?, cfg.manifest_add, cfg.manifest_verify) catch |err| {
-        std.debug.print("oliver manifest: {s}\n", .{@errorName(err)});
+        try output.print(.stderr, "oliver manifest: {s}\n", .{@errorName(err)});
         return 1;
     };
     return 0;
@@ -1308,18 +1389,16 @@ fn manifestDispatch(
 /// CI builds that embedded one, the exact source commit, then exit 0.
 /// Written to stdout (not stderr) so a consumer can parse it: an
 /// installer asserts the reported commit equals its pin.
-fn version(init: std.process.Init) u8 {
-    const text = if (build_options.commit.len == 0)
-        std.fmt.allocPrint(init.gpa, "oliver {s}\n", .{build_options.version}) catch return 1
-    else
-        std.fmt.allocPrint(init.gpa, "oliver {s} (commit {s})\n", .{ build_options.version, build_options.commit }) catch return 1;
-    defer init.gpa.free(text);
-    std.Io.File.stdout().writeStreamingAll(init.io, text) catch return 1;
-    return 0;
+fn version(output: Output) Output.Error!void {
+    if (build_options.commit.len == 0) {
+        try output.print(.stdout, "oliver {s}\n", .{build_options.version});
+    } else {
+        try output.print(.stdout, "oliver {s} (commit {s})\n", .{ build_options.version, build_options.commit });
+    }
 }
 
 // ---------------------------------------------------------------------------
-// CLI argument parsing tests (pure: no allocator, no I/O).
+// CLI output, dispatch, and argument parsing tests.
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -1351,6 +1430,125 @@ test "cli: stdin budget is rejected for filesystem-only commands" {
     try testing.expectError(error.Usage, parseArgs(&.{ "wrap", "--template", "t", "--meta-json", "m", "--assets-root", "a", "--body", "b", "--max-input-bytes", "1" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "plan", "--content-dir", "c", "--output-dir", "o", "--template-dir", "t", "--meta-dir", "m", "--default-template", "d", "--oliver-bin", "b", "--root-dir", "r", "--dry-run", "true", "--verbose", "false", "--max-input-bytes", "1" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "manifest", "--manifest", "m", "--verify", "--max-input-bytes", "1" }));
+}
+
+fn expectOutputFailure(args: []const []const u8, bytes: []const u8, stream: Output.Stream) !void {
+    // An unbuffered failing writer fails during write. A buffered one accepts
+    // the small output and fails only when the shared CLI path flushes it.
+    for ([_]usize{ 0, 4096 }) |capacity| {
+        var buffer: [4096]u8 = undefined;
+        var failing: std.Io.Writer = .failing;
+        failing.buffer = buffer[0..capacity];
+        var healthy = std.Io.Writer.Allocating.init(testing.allocator);
+        defer healthy.deinit();
+        var input: std.Io.Reader = .fixed(bytes);
+        const output: Output = switch (stream) {
+            .stdout => .{ .stdout = &failing, .stderr = &healthy.writer },
+            .stderr => .{ .stdout = &healthy.writer, .stderr = &failing },
+        };
+        try testing.expectEqual(@as(u8, 1), try runCli(testing.allocator, testing.io, args, &input, output));
+        const diagnostic = try std.fmt.allocPrint(testing.allocator, "oliver: {s} {s} failed: WriteFailed\n", .{
+            @tagName(stream), if (capacity == 0) "write" else "flush",
+        });
+        defer testing.allocator.free(diagnostic);
+        try testing.expect(std.mem.endsWith(u8, healthy.written(), diagnostic));
+    }
+}
+
+test "cli: every stdout command fails on write and flush errors" {
+    const cases = [_]struct { args: []const []const u8, input: []const u8 }{
+        .{ .args = &.{"--version"}, .input = "" },
+        .{ .args = &.{ "meta", "--from", "markdown", "--format", "json" }, .input = "# Hello\n" },
+        .{ .args = &.{ "meta", "--from", "textile", "--format", "json" }, .input = "h1. Hello\n" },
+        .{ .args = &.{ "meta", "--from", "cooklang", "--format", "json" }, .input = "Add @salt.\n" },
+        .{ .args = &.{ "render", "--from", "markdown" }, .input = "# Hello\n" },
+        .{ .args = &.{ "render", "--from", "textile" }, .input = "h1. Hello\n" },
+        .{ .args = &.{ "render", "--from", "cooklang" }, .input = "Add @salt.\n" },
+        .{ .args = &.{ "serialize", "--from", "cooklang" }, .input = "Add @salt.\n" },
+        .{ .args = &.{ "serialize", "--from", "cooklang", "--json" }, .input = "Add @salt.\n" },
+        .{ .args = &.{ "scale", "--from", "cooklang", "--factor", "2" }, .input = "Add @salt{1%g}.\n" },
+        .{ .args = &.{ "menu", "--from", "cooklang" }, .input = "= Monday\n@./recipe{2}\n" },
+    };
+    for (cases) |case| try expectOutputFailure(case.args, case.input, .stdout);
+}
+
+test "cli: diagnostics, help, usage, and error messages check stderr writes and flushes" {
+    const cases = [_]struct { args: []const []const u8, input: []const u8 }{
+        .{ .args = &.{"--help"}, .input = "" },
+        .{ .args = &.{}, .input = "" },
+        .{ .args = &.{ "render", "--from", "markdown", "--diagnostics", "json" }, .input = "# Hello\n" },
+        .{ .args = &.{ "render", "--from", "textile", "--diagnostics", "json" }, .input = "h1. Hello\n" },
+        .{ .args = &.{ "render", "--from", "cooklang", "--diagnostics", "json" }, .input = "Add @salt.\n" },
+        .{ .args = &.{ "render", "--from", "markdown", "--to", "xhtml" }, .input = "<b>raw</b>\n" },
+        .{ .args = &.{ "render", "--from", "markdown", "--max-input-bytes", "4" }, .input = "# Hello\n" },
+    };
+    for (cases) |case| try expectOutputFailure(case.args, case.input, .stderr);
+}
+
+test "cli: wrap and plan check stdout writes and flushes" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "meta.json", .data = "{}" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.html", .data = "<main>$body$</main>" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "body.md", .data = "Hello\n" });
+    const base = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer testing.allocator.free(base);
+    const meta_path = try std.fs.path.join(testing.allocator, &.{ base, "meta.json" });
+    defer testing.allocator.free(meta_path);
+    const template_path = try std.fs.path.join(testing.allocator, &.{ base, "main.html" });
+    defer testing.allocator.free(template_path);
+    const body_path = try std.fs.path.join(testing.allocator, &.{ base, "body.md" });
+    defer testing.allocator.free(body_path);
+    try expectOutputFailure(&.{
+        "wrap",          "--template", template_path, "--meta-json", meta_path,
+        "--assets-root", "assets/",    "--body",      body_path,
+    }, "", .stdout);
+    try expectOutputFailure(&.{
+        "plan",       "--content-dir", base,                 "--output-dir", "output",       "--template-dir", base,
+        "--meta-dir", base,            "--default-template", template_path,  "--oliver-bin", "oliver",         "--root-dir",
+        base,         "--dry-run",     "false",              "--verbose",    "false",
+    }, "", .stdout);
+    const missing = try std.fs.path.join(testing.allocator, &.{ base, "missing" });
+    defer testing.allocator.free(missing);
+    try expectOutputFailure(&.{
+        "plan",       "--content-dir", missing,              "--output-dir", "output",       "--template-dir", base,
+        "--meta-dir", base,            "--default-template", template_path,  "--oliver-bin", "oliver",         "--root-dir",
+        base,         "--dry-run",     "false",              "--verbose",    "false",
+    }, "", .stderr);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "body.textile", .data = "Hello\n" });
+    try expectOutputFailure(&.{
+        "plan",       "--content-dir", base,                 "--output-dir", "output",       "--template-dir", base,
+        "--meta-dir", base,            "--default-template", template_path,  "--oliver-bin", "oliver",         "--root-dir",
+        base,         "--dry-run",     "false",              "--verbose",    "false",
+    }, "", .stderr);
+}
+
+test "cli: failure to write the error diagnostic still exits nonzero" {
+    for ([_]usize{ 0, 4096 }) |capacity| {
+        var out_buf: [4096]u8 = undefined;
+        var err_buf: [4096]u8 = undefined;
+        var stdout: std.Io.Writer = .failing;
+        stdout.buffer = out_buf[0..capacity];
+        var stderr: std.Io.Writer = .failing;
+        stderr.buffer = err_buf[0..capacity];
+        var input: std.Io.Reader = .fixed("# Hello\n");
+        try testing.expectEqual(@as(u8, 1), try runCli(testing.allocator, testing.io, &.{
+            "render", "--from", "markdown", "--diagnostics", "json",
+        }, &input, .{ .stdout = &stdout, .stderr = &stderr }));
+    }
+}
+
+test "cli: successful output preserves stdout and diagnostics bytes" {
+    var stdout = std.Io.Writer.Allocating.init(testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(testing.allocator);
+    defer stderr.deinit();
+    var input: std.Io.Reader = .fixed("# Hello\n");
+    try testing.expectEqual(@as(u8, 0), try runCli(testing.allocator, testing.io, &.{
+        "render", "--from", "markdown", "--diagnostics", "json",
+    }, &input, .{ .stdout = &stdout.writer, .stderr = &stderr.writer }));
+    try testing.expectEqualStrings("<h1>Hello</h1>\n", stdout.written());
+    try testing.expectEqualStrings("[]", stderr.written());
 }
 
 test "cli: default profile is html and --to xhtml selects the xhtml profile" {

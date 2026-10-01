@@ -46,7 +46,8 @@ fn upDirs(allocator: std.mem.Allocator, n: usize) ![]u8 {
 }
 
 /// Writes the 13-col TSV to `writer`. On basename collision prints to
-/// stderr via `std.debug.print` and returns `error.Collision`.
+/// `diagnostics` and returns `error.Collision`. Diagnostic write failures
+/// return `error.StderrWriteFailed` so the CLI can name the failed stream.
 pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -60,10 +61,11 @@ pub fn run(
     dry_run: []const u8,
     verbose: []const u8,
     writer: anytype,
+    diagnostics: *std.Io.Writer,
 ) !void {
     // Open content_dir for walking.
     const content_dir_handle = std.Io.Dir.openDir(std.Io.Dir.cwd(), io, content_dir, .{ .iterate = true }) catch |err| {
-        std.debug.print("oliver plan: cannot open --content-dir {s}: {s}\n", .{ content_dir, @errorName(err) });
+        diagnostics.print("oliver plan: cannot open --content-dir {s}: {s}\n", .{ content_dir, @errorName(err) }) catch return error.StderrWriteFailed;
         return err;
     };
     defer content_dir_handle.close(io);
@@ -130,14 +132,17 @@ pub fn run(
         defer gpa.free(dst);
 
         if (seen.get(dst)) |prev_rel| {
-            std.debug.print("oliver plan: basename collision: '{s}' and '{s}' both map to '{s}'\n", .{ prev_rel, rel, dst });
+            diagnostics.print("oliver plan: basename collision: '{s}' and '{s}' both map to '{s}'\n", .{ prev_rel, rel, dst }) catch return error.StderrWriteFailed;
             return error.Collision;
         }
-        const rel_copy = try gpa.dupe(u8, rel);
-        errdefer gpa.free(rel_copy);
-        const dst_copy = try gpa.dupe(u8, dst);
-        errdefer gpa.free(dst_copy);
-        try seen.put(dst_copy, rel_copy);
+        {
+            const rel_copy = try gpa.dupe(u8, rel);
+            errdefer gpa.free(rel_copy);
+            const dst_copy = try gpa.dupe(u8, dst);
+            errdefer gpa.free(dst_copy);
+            // Once inserted, the map owns both copies, even on write failure.
+            try seen.put(dst_copy, rel_copy);
+        }
 
         const assets_root = if (std.mem.eql(u8, reldir, ".")) blk: {
             break :blk try gpa.dupe(u8, "./assets/");
@@ -303,7 +308,10 @@ test "plan: walk, dst, assets_root, soul, collision" {
 
     var aw = std.Io.Writer.Allocating.init(testing.allocator);
     defer aw.deinit();
-    try run(testing.allocator, threaded, content_dir, output_dir, template_dir, meta_dir, "base.html", "/usr/bin/oliver", base, "false", "false", &aw.writer);
+    var diagnostics = std.Io.Writer.Allocating.init(testing.allocator);
+    defer diagnostics.deinit();
+    try run(testing.allocator, threaded, content_dir, output_dir, template_dir, meta_dir, "base.html", "/usr/bin/oliver", base, "false", "false", &aw.writer, &diagnostics.writer);
+    try testing.expectEqualStrings("", diagnostics.written());
 
     const tsv = aw.written();
     var lines = std.mem.splitScalar(u8, tsv, '\n');
@@ -372,5 +380,8 @@ test "plan: collision abort" {
     }
     var aw = std.Io.Writer.Allocating.init(testing.allocator);
     defer aw.deinit();
-    try testing.expectError(error.Collision, run(testing.allocator, threaded, content_dir, output_dir, template_dir, meta_dir, "base.html", "/bin/oliver", base, "false", "false", &aw.writer));
+    var diagnostics = std.Io.Writer.Allocating.init(testing.allocator);
+    defer diagnostics.deinit();
+    try testing.expectError(error.Collision, run(testing.allocator, threaded, content_dir, output_dir, template_dir, meta_dir, "base.html", "/bin/oliver", base, "false", "false", &aw.writer, &diagnostics.writer));
+    try testing.expect(std.mem.indexOf(u8, diagnostics.written(), "basename collision") != null);
 }

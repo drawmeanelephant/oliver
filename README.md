@@ -101,6 +101,10 @@ accept `--max-input-bytes <n>`: an inclusive decimal-byte ceiling, default
 The ceiling counts raw bytes before parsing, not total parser or output memory.
 The shared check in `src/input.zig` uses no hosted services.
 
+All output writes and flushes are checked. A failed stdout or stderr stream
+exits nonzero with a diagnostic naming the stream and operation. Diagnostics
+normally go to stderr; if stderr fails, the error message goes to stdout.
+
 ## Prebuilt binaries
 
 A rolling `builds` release carries ReleaseSafe, statically linked CLI binaries
