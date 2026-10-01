@@ -325,9 +325,20 @@ runs in the ordinary gate: a fixed-seed PRNG mutates a comptime seed corpus
 (representative inputs per dialect) into 1,000 derived inputs, each parsed
 across **all three dialects** with the extension surface on and the front
 matter modes, rendered/serialized twice for determinism, and (for Cooklang)
-scaled — the public `parse(allocator, bytes, dialect, options)` API is the
+reparsed and serialized again for byte idempotence, then scaled — the
+public `parse(allocator, bytes, dialect, options)` API is the
 fuzz entry point. A failure prints the iteration, the dialect, and the
 failing bytes (raw and hex) for minimization.
+
+Cooklang boundary regressions for issues #133–#134 also pin complete block
+comments spanning blank lines and apparent section/note markers, unchanged
+opaque token/note/line-comment policies, genuinely unclosed warnings, exact
+spans, and a 2,000-comment workload. Serializer tests assert semantic
+equality (including absent versus empty quantities) and byte idempotence
+for component splits at every byte under LF, CRLF, and CR, preparations,
+comment barriers, sections/frontmatter, and scaled tokens. Unsafe
+normalization preserves lexical source boundaries; inconsistent source
+spans fail closed.
 
 ## CommonMark 0.31.2 scorecard
 

@@ -266,18 +266,24 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8, options: ParseOpti
 
     // Blocks: blank lines separate paragraphs. A paragraph whose first
     // line starts with `>` is a note; a line starting with `=` is a
-    // section header; anything else is a step.
+    // section header; anything else is a step. Closed block comments are
+    // opaque before boundary recognition, including blank/header lines.
+    const comments = try findBlockComments(&parser);
+    var comment_cursor: usize = 0;
     var lines = source.Lines.init(fm.body);
     var para = std.ArrayList(source.Span).empty;
     while (lines.next()) |line| {
-        if (isBlank(line.text)) {
+        while (comment_cursor < comments.len and comments[comment_cursor].end <= line.start) comment_cursor += 1;
+        const inside_comment = comment_cursor < comments.len and
+            comments[comment_cursor].start < line.start and comments[comment_cursor].end > line.start;
+        if (!inside_comment and isBlank(line.text)) {
             if (para.items.len > 0) {
                 try appendParagraph(&parser, para.items);
                 para.clearRetainingCapacity();
             }
             continue;
         }
-        if (line.text.len > 0 and line.text[0] == '=') {
+        if (!inside_comment and line.text.len > 0 and line.text[0] == '=') {
             if (para.items.len > 0) {
                 try appendParagraph(&parser, para.items);
                 para.clearRetainingCapacity();
@@ -375,6 +381,80 @@ fn isBlank(text: []const u8) bool {
 
 fn isAsciiWs(b: u8) bool {
     return b == ' ' or b == '\t';
+}
+
+/// Finds complete comments in step context before splitting paragraphs.
+/// Closers are indexed once; tokens, line comments, notes, and titles
+/// remain opaque under their existing policies. Both passes are linear.
+fn findBlockComments(parser: *Parser) ParseError![]source.Span {
+    const bytes = parser.src.bytes;
+    var closes = std.ArrayList(usize).empty;
+    var search: usize = 0;
+    while (std.mem.indexOfPos(u8, bytes, search, "-]")) |close| {
+        try closes.append(parser.a, close);
+        search = close + 2;
+    }
+    var comments = std.ArrayList(source.Span).empty;
+    var close_cursor: usize = 0;
+    var resume_offset: usize = 0;
+    var paragraph_start = true;
+    var note = false;
+    var ps = ParaState{
+        .a = parser.a,
+        .src = parser.src,
+        .buf = std.ArrayList(u8).empty,
+        .parts = std.ArrayList(Part).empty,
+        .metas = std.ArrayList(TextMeta).empty,
+        .diags = parser.diags,
+        .report_warnings = false,
+    };
+    var lines = source.Lines.init(bytes);
+    while (lines.next()) |line| {
+        if (resume_offset > line.content_end) continue;
+        var i = @max(resume_offset, line.start);
+        if (i == line.start) {
+            if (isBlank(line.text)) {
+                paragraph_start = true;
+                note = false;
+                continue;
+            }
+            if (line.text[0] == '=') {
+                paragraph_start = true;
+                note = false;
+                continue;
+            }
+            if (paragraph_start) note = line.text[0] == '>';
+            paragraph_start = false;
+        }
+        if (note) continue;
+        while (i < line.content_end) {
+            if (std.mem.startsWith(u8, bytes[i..line.content_end], "--")) {
+                if (!std.mem.startsWith(u8, bytes[i..line.content_end], "---")) break;
+                while (i < line.content_end and bytes[i] == '-') : (i += 1) {}
+                continue;
+            }
+            if (std.mem.startsWith(u8, bytes[i..line.content_end], "[-")) {
+                while (close_cursor < closes.items.len and closes.items[close_cursor] < i + 2) close_cursor += 1;
+                if (close_cursor < closes.items.len) {
+                    resume_offset = closes.items[close_cursor] + 2;
+                    try comments.append(parser.a, .{ .start = @intCast(i), .end = @intCast(resume_offset) });
+                    close_cursor += 1;
+                    i = resume_offset;
+                    continue;
+                }
+                i += 2;
+                continue;
+            }
+            if (bytes[i] == '@' or bytes[i] == '#' or bytes[i] == '~') {
+                if (try tryToken(&ps, i, line.content_end)) |token| {
+                    i = token.span.end;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+    return comments.toOwnedSlice(parser.a);
 }
 
 /// Emits a warning diagnostic at `span`. Only genuinely malformed
@@ -485,10 +565,13 @@ const ParaState = struct {
     join_pos: usize = 0,
     /// Diagnostics sink (shared with the owning Parser).
     diags: *std.ArrayList(diagnostic.Diagnostic),
+    /// Boundary lookahead must not duplicate the step scanner's warnings.
+    report_warnings: bool = true,
 
     /// Emits a warning diagnostic at `span` (line/column resolved from
     /// the source).
     fn warn(self: *ParaState, code: []const u8, span: source.Span, message: []const u8) ParseError!void {
+        if (!self.report_warnings) return;
         const lc = self.src.lineCol(span.start);
         try self.diags.append(self.a, .{
             .severity = .warning,
@@ -631,8 +714,7 @@ fn buildStep(parser: *Parser, para: []const source.Span) ParseError!?Step {
     {
         var search: usize = para[0].start;
         const region_end = para[para.len - 1].end;
-        while (std.mem.indexOfPos(u8, bytes, search, "-]")) |f| {
-            if (f >= region_end) break;
+        while (std.mem.indexOfPos(u8, bytes[0..region_end], search, "-]")) |f| {
             try closes.append(parser.a, @intCast(f));
             search = f + 2;
         }
@@ -1424,6 +1506,63 @@ test "cooklang: block comments span lines; unclosed degrades to literal" {
     defer res2.deinit();
     const step2 = res2.recipe.blocks[0].step;
     try std.testing.expectEqualStrings("abc [- never closed", step2.parts[0].text.text);
+}
+
+test "cooklang: block comments are opaque across blank lines and block markers (#133)" {
+    for ([_][]const u8{ "[-\n\n-]", "[-\r\n\r\n= hidden\r\n> hidden @x{}\r\n\r\n-]" }) |input| {
+        var res = try parseT(std.testing.allocator, input);
+        defer res.deinit();
+        try std.testing.expectEqual(@as(usize, 0), res.recipe.blocks.len);
+        try std.testing.expectEqual(@as(usize, 0), res.diagnostics.len);
+    }
+    const input = "x [- a\n\n= hidden\n> hidden @salt{}\n\nb -] y\n\n= Visible\n\n@pepper";
+    var res = try parseT(std.testing.allocator, input);
+    defer res.deinit();
+    try std.testing.expectEqual(@as(usize, 2), res.recipe.blocks.len);
+    const step = res.recipe.blocks[0].step;
+    try std.testing.expectEqual(@as(usize, 1), step.parts.len);
+    try std.testing.expectEqualStrings("x   y", step.parts[0].text.text);
+    try std.testing.expectEqual(@as(u32, 0), step.span.start);
+    try std.testing.expectEqual(@as(u32, @intCast(std.mem.indexOf(u8, input, "\n\n= Visible").?)), step.span.end);
+    try std.testing.expectEqual(step.span, step.parts[0].text.span);
+    try std.testing.expectEqualStrings("Visible", res.recipe.blocks[1].section.name);
+    try std.testing.expectEqualStrings("pepper", res.recipe.blocks[1].section.blocks[0].step.parts[0].ingredient.name);
+    try std.testing.expectEqual(@as(usize, 0), res.diagnostics.len);
+}
+
+test "cooklang: comment boundary lookahead respects opaque tokens notes and line comments" {
+    for ([_][]const u8{
+        "@x{[-}\n\n= Visible\n\n-]",
+        "@x{}(a [-)\n\n= Visible\n\n-]",
+        "-- [-\n\n= Visible\n\n-]",
+        "> [-\n\n= Visible\n\n-]",
+    }) |input| {
+        var res = try parseT(std.testing.allocator, input);
+        defer res.deinit();
+        const section = res.recipe.blocks[res.recipe.blocks.len - 1].section;
+        try std.testing.expectEqualStrings("Visible", section.name);
+        try std.testing.expectEqualStrings("-]", section.blocks[0].step.parts[0].text.text);
+        try std.testing.expectEqual(@as(usize, 0), res.diagnostics.len);
+    }
+    var unclosed = try parseT(std.testing.allocator, "[-\n\n= Visible\n\n@x{");
+    defer unclosed.deinit();
+    try std.testing.expectEqualStrings("[-", unclosed.recipe.blocks[0].step.parts[0].text.text);
+    try std.testing.expectEqualStrings("Visible", unclosed.recipe.blocks[1].section.name);
+    try std.testing.expectEqual(@as(usize, 2), unclosed.diagnostics.len);
+    try std.testing.expectEqualStrings("unclosed-block-comment", unclosed.diagnostics[0].code);
+    try std.testing.expectEqualStrings("unclosed-braces", unclosed.diagnostics[1].code);
+}
+
+test "cooklang: many closed comments spanning blank lines stay bounded" {
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(std.testing.allocator);
+    for (0..2000) |_| try input.appendSlice(std.testing.allocator, "[-\n\n= hidden\n> hidden\n-]\n\n");
+    try input.appendSlice(std.testing.allocator, "@salt");
+    var res = try parseT(std.testing.allocator, input.items);
+    defer res.deinit();
+    try std.testing.expectEqual(@as(usize, 1), res.recipe.blocks.len);
+    try std.testing.expectEqualStrings("salt", res.recipe.blocks[0].step.parts[0].ingredient.name);
+    try std.testing.expectEqual(@as(usize, 0), res.diagnostics.len);
 }
 
 test "cooklang: forced line breaks" {

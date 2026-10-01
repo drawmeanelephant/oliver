@@ -213,6 +213,11 @@ fn exercise(input: []const u8, i: usize) !void {
         const s2 = try serializeRecipe(&result.recipe);
         defer std.testing.allocator.free(s2);
         if (!std.mem.eql(u8, s1, s2)) return fail(input, i, "cooklang serialize nondeterminism");
+        var reparsed = try oliver.cooklang.parse(std.testing.allocator, s1, .{ .frontmatter = .yaml });
+        defer reparsed.deinit();
+        const fixed = try serializeRecipe(&reparsed.recipe);
+        defer std.testing.allocator.free(fixed);
+        if (!std.mem.eql(u8, s1, fixed)) return fail(input, i, "cooklang serialize fixed-point failure");
         var scaled = try oliver.cooklang_scale.scaleRecipe(std.testing.allocator, &result.recipe, .{
             .factor = .{ .num = 3, .den = 2 },
         });

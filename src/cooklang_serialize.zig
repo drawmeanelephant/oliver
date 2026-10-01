@@ -18,7 +18,7 @@
 //!   byte-for-byte — it is data, not parsed).
 //! - A step renders its parts in order: text verbatim (text values are
 //!   already join-normalized by the parser, so a multi-line step without
-//!   forced breaks collapses to one line), tokens in canonical form, and
+//!   forced breaks normally collapses to one line), tokens in canonical form, and
 //!   a `line_break` part as `\` + `\n`.
 //! - Tokens: `@name`, `#name`, `~name`; braces are emitted exactly when
 //!   the model says the token carried them (`quantity != null` — the
@@ -30,11 +30,11 @@
 //! - A note renders as `>` plus the note text; a section as `= ` plus
 //!   its title, then its blocks.
 //!
-//! No escaping is needed or performed: text values cannot contain a
-//! valid token shape (it would have parsed as one) or a `\` at end of
-//! line (it would be a break), so verbatim emission re-parses to the
-//! same parts; `-`/`[-`-carrying literal text re-parses identically by
-//! the same rules the parser applies.
+//! Step normalization is checked by reparsing before emission. If joining
+//! lines or removing comments would activate literal syntax, the original
+//! step's lexical boundaries are retained, with tokens still written in
+//! canonical form. This preserves line-local fallback without inventing
+//! an escape syntax or changing Cooklang token recognition.
 //!
 //! The serializer has no filesystem/network/global-state dependencies,
 //! like the rest of the core. See docs/COOKLANG.md §10 for the policy
@@ -43,16 +43,15 @@
 const std = @import("std");
 const cooklang = @import("cooklang.zig");
 
-/// The recursive write functions' error set (writer failures only).
-const WriteError = error{WriteFailed};
+const WriteError = cooklang.ParseError || error{ WriteFailed, UnrepresentableStep };
 
 pub const SerializeOptions = struct {};
 
 /// Writes the canonical Cooklang text for `recipe` to `writer`.
-/// `gpa` is accepted for interface parity with the other renderers;
-/// the serializer itself allocates nothing.
+/// `gpa` owns temporary step buffers and safety-check parses. Unsafe
+/// normalization requires valid source spans, as supplied by the parser
+/// (and preserved by scaling); otherwise returns `UnrepresentableStep`.
 pub fn serialize(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.Recipe, options: SerializeOptions) !void {
-    _ = gpa;
     _ = options;
 
     if (recipe.frontmatter) |fm| {
@@ -60,23 +59,22 @@ pub fn serialize(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklan
         try writer.writeAll(fm.raw);
         try writer.writeAll("---\n");
     }
-    try writeBlocks(writer, recipe.blocks, recipe.frontmatter != null);
+    try writeBlocks(gpa, writer, recipe, recipe.blocks, recipe.frontmatter != null);
 }
 
-fn writeBlocks(writer: anytype, blocks: []const cooklang.Block, lead_blank: bool) WriteError!void {
+fn writeBlocks(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.Recipe, blocks: []const cooklang.Block, lead_blank: bool) WriteError!void {
     var first = !lead_blank;
     for (blocks) |block| {
         if (!first) try writer.writeAll("\n");
         first = false;
-        try writeBlock(writer, block);
+        try writeBlock(gpa, writer, recipe, block);
     }
 }
 
-fn writeBlock(writer: anytype, block: cooklang.Block) WriteError!void {
+fn writeBlock(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.Recipe, block: cooklang.Block) WriteError!void {
     switch (block) {
         .step => |step| {
-            for (step.parts) |part| try writePart(writer, part);
-            try writer.writeAll("\n");
+            try writeStep(gpa, writer, recipe, step);
         },
         .note => |note| {
             try writer.writeAll(">");
@@ -90,9 +88,85 @@ fn writeBlock(writer: anytype, block: cooklang.Block) WriteError!void {
             try writer.writeAll("= ");
             try writer.writeAll(section.name);
             try writer.writeAll("\n");
-            try writeBlocks(writer, section.blocks, true);
+            try writeBlocks(gpa, writer, recipe, section.blocks, true);
         },
     }
+}
+
+fn writeStep(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.Recipe, step: cooklang.Step) WriteError!void {
+    var canonical = std.Io.Writer.Allocating.init(gpa);
+    defer canonical.deinit();
+    for (step.parts) |part| try writePart(&canonical.writer, part);
+    try canonical.writer.writeAll("\n");
+    if (try stepMatches(gpa, canonical.written(), step)) {
+        try writer.writeAll(canonical.written());
+        return;
+    }
+
+    // Only unsafe steps retain source spelling. Replace typed tokens in
+    // place, so scaled quantities and canonical token forms still apply.
+    // No CST or additional model fields are needed.
+    const bytes = recipe.source.bytes;
+    if (step.span.start > step.span.end or step.span.end > bytes.len) return error.UnrepresentableStep;
+    var lexical = std.Io.Writer.Allocating.init(gpa);
+    defer lexical.deinit();
+    var cursor: usize = step.span.start;
+    for (step.parts) |part| {
+        const span = switch (part) {
+            .ingredient => |t| t.span,
+            .cookware => |t| t.span,
+            .timer => |t| t.span,
+            .text, .line_break => continue,
+        };
+        if (span.start < cursor or span.start > span.end or span.end > step.span.end) return error.UnrepresentableStep;
+        try lexical.writer.writeAll(bytes[cursor..span.start]);
+        try writePart(&lexical.writer, part);
+        cursor = span.end;
+    }
+    try lexical.writer.writeAll(bytes[cursor..step.span.end]);
+    try lexical.writer.writeAll("\n");
+    if (!try stepMatches(gpa, lexical.written(), step)) return error.UnrepresentableStep;
+    try writer.writeAll(lexical.written());
+}
+
+fn stepMatches(gpa: std.mem.Allocator, text: []const u8, step: cooklang.Step) cooklang.ParseError!bool {
+    // A step is body content, not a new file: fence-looking lines must
+    // not be mistaken for frontmatter by this isolated safety check.
+    const body = try std.mem.concat(gpa, u8, &.{ "= \n", text });
+    defer gpa.free(body);
+    var check = try cooklang.parse(gpa, body, .{});
+    defer check.deinit();
+    if (check.recipe.blocks.len != 1 or check.recipe.blocks[0] != .section) return false;
+    const blocks = check.recipe.blocks[0].section.blocks;
+    return blocks.len == 1 and blocks[0] == .step and stepsEqual(step, blocks[0].step);
+}
+
+fn optionalTextEqual(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a) |text| return if (b) |other| std.mem.eql(u8, text, other) else false;
+    return b == null;
+}
+
+fn stepsEqual(a: cooklang.Step, b: cooklang.Step) bool {
+    if (a.parts.len != b.parts.len) return false;
+    for (a.parts, b.parts) |pa, pb| {
+        if (std.meta.activeTag(pa) != std.meta.activeTag(pb)) return false;
+        const equal = switch (pa) {
+            .text => |t| std.mem.eql(u8, t.text, pb.text.text),
+            .line_break => true,
+            .ingredient => |t| std.mem.eql(u8, t.name, pb.ingredient.name) and
+                optionalTextEqual(t.quantity, pb.ingredient.quantity) and
+                optionalTextEqual(t.units, pb.ingredient.units) and
+                optionalTextEqual(t.preparation, pb.ingredient.preparation) and
+                t.is_recipe_reference == pb.ingredient.is_recipe_reference,
+            .cookware => |t| std.mem.eql(u8, t.name, pb.cookware.name) and
+                optionalTextEqual(t.quantity, pb.cookware.quantity),
+            .timer => |t| std.mem.eql(u8, t.name, pb.timer.name) and
+                optionalTextEqual(t.quantity, pb.timer.quantity) and
+                optionalTextEqual(t.units, pb.timer.units),
+        };
+        if (!equal) return false;
+    }
+    return true;
 }
 
 fn writePart(writer: anytype, part: cooklang.Part) !void {
@@ -175,6 +249,7 @@ fn expectBlockEqual(a: cooklang.Block, b: cooklang.Block) !void {
             .step => |sb| {
                 try std.testing.expectEqual(sa.parts.len, sb.parts.len);
                 for (sa.parts, sb.parts) |pa, pb| try expectPartEqual(pa, pb);
+                try std.testing.expect(stepsEqual(sa, sb));
             },
             else => return error.BlockMismatch,
         },
@@ -298,4 +373,107 @@ test "cooklang serialize: canonical spellings" {
     const e = try serializeT(std.testing.allocator, "");
     defer std.testing.allocator.free(e);
     try std.testing.expectEqualStrings("", e);
+}
+
+fn expectRoundTrip(input: []const u8) !void {
+    const once = try serializeT(std.testing.allocator, input);
+    defer std.testing.allocator.free(once);
+    const twice = try serializeT(std.testing.allocator, once);
+    defer std.testing.allocator.free(twice);
+    try std.testing.expectEqualStrings(once, twice);
+    var original = try cooklang.parse(std.testing.allocator, input, .{});
+    defer original.deinit();
+    var reparsed = try cooklang.parse(std.testing.allocator, once, .{});
+    defer reparsed.deinit();
+    try expectSemanticEqual(&original.recipe, &reparsed.recipe);
+}
+
+test "cooklang serialize: line-split literal tokens retain their boundaries (#134)" {
+    const cases = [_][]const u8{
+        "@x{\n}",
+        "#pan{\n}",
+        "~{\n}",
+        "@flour{1\n2%g}",
+        "#pan{1\n2}",
+        "~rest{1\n2%minutes}",
+        "@flour{12%\ng}",
+        "~{12%min\nutes}",
+        "@flour{12%g\n}",
+        "@ground\npepper{}",
+        "#frying\npan{}",
+        "~boil\neggs{12%minutes}",
+        "@x{}(sliced\nfinely)",
+        "Mix @salt\npepper{1%g}.",
+        "@[- removed -]x{}",
+        "@x{[- removed -]\n}",
+        "x [-\n\n= hidden\n> @hidden{}\n-] y",
+        "= Section\n\n@x{\n}",
+        "= Section\n\n---\n@x{\n}\n---",
+        "First step.\n\n---\n@x{\n}\n---",
+        "---\ntitle: Test\n---\n\n@x{\n}",
+    };
+    for (cases) |input| try expectRoundTrip(input);
+    const canonical = try serializeT(std.testing.allocator, "@x{\n}");
+    defer std.testing.allocator.free(canonical);
+    try std.testing.expectEqualStrings("@x{\n}\n", canonical);
+
+    // The token remains literal, with the same intentional warning.
+    var original = try cooklang.parse(std.testing.allocator, "@x{\n}", .{});
+    defer original.deinit();
+    var reparsed = try cooklang.parse(std.testing.allocator, canonical, .{});
+    defer reparsed.deinit();
+    try std.testing.expectEqualStrings("@x{ }", original.recipe.blocks[0].step.parts[0].text.text);
+    try std.testing.expectEqual(@as(usize, 1), original.diagnostics.len);
+    try std.testing.expectEqual(@as(usize, 1), reparsed.diagnostics.len);
+    try std.testing.expectEqualStrings("unclosed-braces", original.diagnostics[0].code);
+    try std.testing.expectEqual(original.diagnostics[0].span, reparsed.diagnostics[0].span);
+}
+
+test "cooklang serialize: every component split and line ending is a fixed point" {
+    // Ingredient/cookware/named and unnamed timer forms, with a split
+    // at every byte in the name, quantity, units, and closing delimiter.
+    for ([_][]const u8{
+        "@ground pepper{12%grams}",
+        "#frying pan{12}",
+        "~boil eggs{12%minutes}",
+        "~{12%minutes}",
+        "@x{1}(sliced finely)",
+    }) |token| {
+        for ([_][]const u8{ "\n", "\r\n", "\r" }) |ending| {
+            for (1..token.len) |split| {
+                const input = try std.mem.concat(std.testing.allocator, u8, &.{ token[0..split], ending, token[split..] });
+                defer std.testing.allocator.free(input);
+                try expectRoundTrip(input);
+            }
+        }
+    }
+}
+
+test "cooklang serialize: unsafe steps still serialize scaled tokens canonically" {
+    const scale = @import("cooklang_scale.zig");
+    var original = try cooklang.parse(std.testing.allocator, "@rice{2%cup} with @x{\n}", .{});
+    defer original.deinit();
+    var scaled = try scale.scaleRecipe(std.testing.allocator, &original.recipe, .{ .factor = .{ .num = 2, .den = 1 } });
+    defer scaled.deinit();
+    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer writer.deinit();
+    try serialize(std.testing.allocator, &writer.writer, &scaled, .{});
+    try std.testing.expectEqualStrings("@rice{4%cup} with @x{\n}\n", writer.written());
+    var reparsed = try cooklang.parse(std.testing.allocator, writer.written(), .{});
+    defer reparsed.deinit();
+    try expectSemanticEqual(&scaled, &reparsed.recipe);
+    try expectRoundTrip(writer.written());
+}
+
+test "cooklang serialize: unsafe normalization rejects missing or inconsistent source spans" {
+    var original = try cooklang.parse(std.testing.allocator, "@x{\n}", .{});
+    defer original.deinit();
+    var writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer writer.deinit();
+    original.recipe.source.bytes = "";
+    try std.testing.expectError(error.UnrepresentableStep, serialize(std.testing.allocator, &writer.writer, &original.recipe, .{}));
+    try std.testing.expectEqual(@as(usize, 0), writer.written().len);
+    original.recipe.source.bytes = "abcde";
+    try std.testing.expectError(error.UnrepresentableStep, serialize(std.testing.allocator, &writer.writer, &original.recipe, .{}));
+    try std.testing.expectEqual(@as(usize, 0), writer.written().len);
 }
