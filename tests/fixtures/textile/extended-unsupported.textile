@@ -1,0 +1,15 @@
+bq.. Extended first line.
+
+Second line of same block.
+
+p.. After the paragraph.
+
+bc.. a < b
+h2.. After code.
+Still outside.
+
+pre.. <b>raw</b>
+fn1.. After preformatted.
+
+notextile.. <em>raw</em>
+custom.. After raw.

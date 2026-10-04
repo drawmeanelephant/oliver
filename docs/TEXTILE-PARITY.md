@@ -480,10 +480,17 @@ content (the extended form exists precisely for "code blocks where your
 code may have many blank lines scattered through it"); `bc..` escapes
 inside `<pre><code>`, `pre..` is verbatim `<pre>`.
 
-**Termination.** A recognized block signature ends an extended block and
-opens its own block: a `table<mods>.` signature, an extended or
-single-period `bq.`/`bc.`/`pre.` signature, an `hN.` heading, or a `p.`
-marker. **List markers, table rows, and plain lines are not block
+**Termination.** Any block-signature prefix ends an extended block, even
+when Oliver does not implement that syntax (issue #138). The line is then
+parsed normally: supported signatures open their own blocks; unsupported
+ones such as `p..`, `hN..`, and `fnN..` become ordinary paragraph text
+**outside** the closed block. The boundary shape is a lowercase ASCII name
+with optional trailing digits and valid block modifiers, followed by one
+or two periods and space/tab or end of line. Empty signature-shaped lines
+also close the block. Recognized citation and line-attribute signatures
+remain terminators too. Indented/mid-line markers, missing separator
+whitespace, three periods, and malformed modifiers do not qualify.
+**List markers, table rows, and plain lines are not block
 signatures and remain content** inside an extended block — the literal
 reading of "until the next signature is found". Def lines still vanish
 inside a `bq..` (the T9 rule applies everywhere) and remain verbatim
@@ -491,10 +498,12 @@ content inside `bc..`/`pre..`. A block ends at EOF with its content.
 
 **Literal fallbacks (pinned by `extended-literal`).** Empty extended
 signatures (`bq..`, `bc.. ` — behavior unspecified, same rule as the
-single-period forms), `p..`/`h1..` (not extended signatures — Oliver
-implements only the three forms the references discuss), and the
-near-miss `bq..x` all stay ordinary text. A single-period `bq.` still
-ends at the first blank line.
+single-period forms), `p..`/`h1..` (not implemented extended signatures),
+and the near-miss `bq..x` all stay ordinary text. The first two also
+terminate an open extended block; `bq..x` does not. The
+`extended-unsupported` fixture pins the issue's reproduction and the same
+boundary behavior for code, preformatted, and raw extended blocks.
+A single-period `bq.` still ends at the first blank line.
 
 ## 11. Footnotes (T13): pinned behaviors
 
@@ -1113,8 +1122,8 @@ it (a blank line or end of input) renders nothing. Pinned by
 non-blank line, ending at the first blank line — the same rule
 `bc.` uses, so signature-shaped lines stay raw content. The
 extended form keeps blank lines as content and runs until the next
-recognized block signature (like `bc..`); the trailing blank lines
-before the signature stay in the payload. Same-line content after
+block-signature prefix, supported or not (like `bc..`, §10); the trailing
+blank lines before the signature stay in the payload. Same-line content after
 the marker joins the block's first line. Pinned by
 `notextile-basic`.
 
@@ -1167,7 +1176,7 @@ against `oliver render --from textile` during this wrap-up.
 | block attributes (§8 set) | 5 | implemented (T10) | §8 |
 | line attributes `|mods|.` | 2 | implemented (T17) | §15 |
 | block code `bc.` / preformatted `pre.` | 4 | implemented (T11) | §9 |
-| extended blocks `bq..`/`bc..`/`pre..` | 4 | implemented (T12) | §10 |
+| extended blocks `bq..`/`bc..`/`pre..` | 5 | implemented (T12) | §10 |
 | footnotes `fnN.`/`[N]` | 4 | implemented (T13) | §11 |
 | character replacements | 3 | implemented (T15) | §13 |
 | `{...}` character macros | 2 | implemented (T20) | §18 |
@@ -1179,7 +1188,7 @@ against `oliver render --from textile` during this wrap-up.
 | `notextile.` raw block | 2 | implemented (T25) | §23 |
 | inline composition (mixed families) | 1 | implemented (T4) | §3 |
 
-**105 fixture pairs, 394/394 tests, 652/652 CommonMark.** The
+**106 fixture pairs, 504/504 tests, 652/652 CommonMark.** The
 convergence pairs in `tests/fixtures_test.zig` additionally prove the
 shared renderer is byte-identical across dialects (Textile `*x*` ↔
 Markdown `**x**`, `_x_` ↔ `*x*`, `"x":u` ↔ `[x](u)`, `!img.png!` ↔

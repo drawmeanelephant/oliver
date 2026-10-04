@@ -50,8 +50,11 @@ attributes; links (titles, the bracket trick, aliases) and images
 tables with cell modifiers, colspan, and rowspan; line attributes;
 `==` escaping; character replacements (curly quotes, dashes, ellipsis,
 symbols, macros); footnotes; `bc.`/`pre.` code blocks; extended
-`bq..`/`bc..` blocks; `dl.` definition lists; `clear.`; and
-`notextile.` raw passthrough.
+`bq..`/`bc..`/`pre..` blocks; `dl.` definition lists; `clear.`; and
+`notextile.`/`notextile..` raw passthrough. Unsupported block-signature
+prefixes (such as `p..`, `hN..`, and `fnN..`) terminate extended blocks
+but remain ordinary text outside them; they are not implemented extended
+forms.
 
 ## Cooklang
 
