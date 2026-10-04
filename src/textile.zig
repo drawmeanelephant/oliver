@@ -117,7 +117,8 @@
 //!   before the double period) stay active across blank lines until the
 //!   next block signature (Textile 2 "Extended Blocks"): `bq..` becomes
 //!   one blockquote of blank-line-separated paragraphs, and `bc..`/`pre..`
-//!   keep blank lines as code content.
+//!   keep blank lines as code content. Unsupported signature-shaped lines
+//!   also terminate extended blocks, then fall back to ordinary text.
 //! - Footnotes: `[N]` inline becomes `<sup class="footnote"><a
 //!   href="#fnN">N</a></sup>`, and an `fnN.` paragraph renders
 //!   `<p class="footnote" id="fnN"><sup>N</sup> …</p>` (Textile 2
@@ -231,9 +232,9 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // An open extended `bc..`/`pre..` owns every line until the next
         // block signature, blank lines included (handled above).
         if (code != null) {
-            if (code.?.extended and try trySignature(doc, line)) {
+            if (code.?.extended and try tryExtendedTerminator(doc, line)) {
                 try closeCode(doc, &code);
-                // Fall through: the signature line opens its own block.
+                // Fall through: parse the line, including literal fallback.
             } else {
                 try code.?.lines.append(doc.allocator(), line.contentSpan());
                 continue;
@@ -241,14 +242,14 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         }
         // An open `notextile.` raw block owns every non-blank line: the
         // single-period form verbatim (signature-shaped lines stay raw
-        // content, like `bc.`), the extended form until a recognized block
-        // signature — which closes it and is processed below. `code` and
+        // content, like `bc.`), the extended form until a block-signature
+        // prefix — which closes it and is processed below. `code` and
         // `raw` never coexist (each open closes the other), so this branch
         // sees every line while a raw block is open.
         if (raw != null) {
-            if (raw.?.extended and try trySignature(doc, line)) {
+            if (raw.?.extended and try tryExtendedTerminator(doc, line)) {
                 try closeRawBlock(doc, &raw);
-                // Fall through: the signature line opens its own block.
+                // Fall through: parse the line, including literal fallback.
             } else {
                 appendRawLine(&raw, line);
                 continue;
@@ -303,13 +304,14 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             continue;
         }
         // An open extended `bq..` owns every non-signature line; a
-        // recognized block signature ends it and is processed below
+        // block-signature prefix ends it and is processed below, even when
+        // its syntax is unsupported and falls back to ordinary text
         // (Textile 2: extended signatures stay active "until the next
         // signature is found").
         if (block != null and block.?.extended) {
-            if (try trySignature(doc, line)) {
+            if (try tryExtendedTerminator(doc, line)) {
                 try closeBlock(doc, &block, &defs);
-                // Fall through: the signature line opens its own block.
+                // Fall through: parse the line, including literal fallback.
             } else {
                 try appendBlockContent(doc, &block, .block_quote, &.{}, line.contentSpan(), line.terminatorSpan(), null, null);
                 continue;
@@ -1093,15 +1095,38 @@ fn mergeClearStyle(doc: *document.Document, attrs: []const document.Attribute, c
     return out.toOwnedSlice(doc.allocator());
 }
 
-/// True when the line opens any recognized block-level construct that
-/// terminates an open extended block (Textile 2: extended signatures stay
-/// active "until the next signature is found"): a `table<mods>.`
-/// signature, an extended or single-period `bq.`/`bc.`/`pre.` signature,
+/// Extended-block boundaries are lexical, not limited to implemented
+/// syntax: an unsupported signature must not be swallowed as content.
+/// Recognized forms also cover citations and pipe-delimited line attrs.
+fn tryExtendedTerminator(doc: *document.Document, line: source.Line) ParseError!bool {
+    return hasBlockSignaturePrefix(line.text) or try trySignature(doc, line);
+}
+
+/// A line-start lowercase name, optional trailing digits and valid block
+/// modifiers, then one or two periods followed by space/tab or end of line.
+/// This only recognizes a boundary; unsupported/empty markers stay literal.
+fn hasBlockSignaturePrefix(t: []const u8) bool {
+    var i: usize = 0;
+    while (i < t.len and t[i] >= 'a' and t[i] <= 'z') : (i += 1) {}
+    if (i == 0) return false;
+    while (i < t.len and std.ascii.isDigit(t[i])) : (i += 1) {}
+    if (i == t.len) return false;
+    if (t[i] != '.') {
+        const scan = scanMods(t, i, .block) orelse return false;
+        i = scan.end;
+    }
+    i += 1;
+    if (i < t.len and t[i] == '.') i += 1;
+    return i == t.len or t[i] == ' ' or t[i] == '\t';
+}
+
+/// True when the line opens any recognized block-level construct:
+/// a `table<mods>.` signature, an extended or single-period
+/// `bq.`/`bc.`/`pre.` signature,
 /// an `hN.` heading, a `p.` paragraph marker, a `fnN.` footnote
 /// signature, the `|mods|.` line-attribute paragraph form, the
 /// `clear.` marker, or a `notextile.`/`notextile..` raw block. List
-/// markers and table rows are not block signatures and remain content
-/// inside an extended block.
+/// markers and table rows are not block signatures.
 fn trySignature(doc: *document.Document, line: source.Line) ParseError!bool {
     if (try tryTableSignature(doc, line) != null) return true;
     if (try tryExtendedMarker(doc, line) != null) return true;
@@ -1500,6 +1525,7 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
                 // closing paren); otherwise it opens a `(class#id)` spec
                 // terminated by `)`.
                 if (j + 1 >= bytes.len or bytes[j + 1] == '(' or bytes[j + 1] == ')' or bytes[j + 1] == '.' or ((kind == .row or kind == .line) and bytes[j + 1] == '|')) {
+                    if (m.pad_left == std.math.maxInt(u8)) return null;
                     m.pad_left += 1;
                     j += 1;
                 } else {
@@ -1516,6 +1542,7 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
                 }
             },
             ')' => {
+                if (m.pad_right == std.math.maxInt(u8)) return null;
                 m.pad_right += 1;
                 j += 1;
             },
@@ -5408,6 +5435,132 @@ test "textile: bc.. and pre.. extended code keep blank lines" {
         const code = result.document.root.children.items[0];
         try std.testing.expectEqualStrings("a\n|x|y|\n* not a list\n\n", code.data.code_block.content);
     }
+}
+
+test "textile: unsupported signatures terminate extended blocks" {
+    const oliver = @import("oliver.zig");
+    const signatures = [_][]const u8{
+        "p.. after",
+        "h1.. after",
+        "h2.. after",
+        "h3.. after",
+        "h4.. after",
+        "h5.. after",
+        "h6.. after",
+        "fn12.. after",
+        "dl.. after",
+        "table.. after",
+        "clear.. after",
+        "custom. after",
+        "custom12.. after",
+        "p{color:red}(note#one)[fr]<>.. after",
+        "h7. after",
+        "fn. after",
+        "p..",
+        "bq.. \t",
+        "bc.",
+    };
+    for ([_][]const u8{ "bq..", "bc..", "pre..", "notextile.." }) |marker| {
+        for ([_][]const u8{ "\n", "\r\n", "\r" }) |eol| {
+            for (signatures) |sig| {
+                const input = try std.fmt.allocPrint(std.testing.allocator, "{s} café{s}{s}{s}{s}tail", .{ marker, eol, eol, sig, eol });
+                defer std.testing.allocator.free(input);
+                var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+                defer result.deinit();
+                const root = result.document.root;
+                try std.testing.expectEqual(@as(usize, 2), root.children.items.len);
+                const first = root.children.items[0];
+                const content_start: u32 = @intCast(marker.len + 1);
+                const content_end = content_start + @as(u32, "café".len);
+                if (std.mem.eql(u8, marker, "bq..")) {
+                    try std.testing.expectEqual(document.Tag.block_quote, first.tag);
+                    try std.testing.expectEqual(@as(usize, 1), first.children.items.len);
+                    try std.testing.expectEqual(source.Span{ .start = content_start, .end = content_end }, first.span);
+                    try std.testing.expectEqualStrings("café", first.children.items[0].children.items[0].data.text);
+                } else if (std.mem.eql(u8, marker, "notextile..")) {
+                    try std.testing.expectEqual(document.Tag.html_block, first.tag);
+                    try std.testing.expectEqual(source.Span{ .start = content_start, .end = content_end + 2 * @as(u32, @intCast(eol.len)) }, first.span);
+                    try std.testing.expectEqualStrings(input[content_start .. content_end + 2 * eol.len], first.data.html_block);
+                } else {
+                    try std.testing.expectEqual(document.Tag.code_block, first.tag);
+                    try std.testing.expectEqual(source.Span{ .start = content_start, .end = content_end + @as(u32, @intCast(eol.len)) }, first.span);
+                    try std.testing.expectEqualStrings("café\n\n", first.data.code_block.content);
+                }
+                const after = root.children.items[1];
+                const after_start: u32 = @intCast(content_end + 2 * eol.len);
+                try std.testing.expectEqual(document.Tag.paragraph, after.tag);
+                try std.testing.expectEqual(@as(usize, 0), after.data.paragraph.attrs.len);
+                try std.testing.expectEqual(source.Span{ .start = after_start, .end = @intCast(input.len) }, after.span);
+                try std.testing.expectEqualStrings(sig, after.children.items[0].data.text);
+                try std.testing.expectEqual(source.Span{ .start = after_start, .end = after_start + @as(u32, @intCast(sig.len)) }, after.children.items[0].span);
+                try std.testing.expectEqualStrings("tail", after.children.items[2].data.text);
+            }
+        }
+    }
+}
+
+test "textile: malformed signature prefixes stay inside extended blocks" {
+    const oliver = @import("oliver.zig");
+    const lines =
+        "p..no-space\n" ++
+        "h1... three dots\n" ++
+        "p(class.. unclosed\n" ++
+        "p{style.. unclosed\n" ++
+        "p[lang.. unclosed\n" ++
+        "p^.. bad modifier\n" ++
+        "custom" ++ "(" ** 256 ++ ".. excessive padding\n" ++
+        "custom" ++ ")" ** 256 ++ ".. excessive padding\n" ++
+        " p.. indented\n" ++
+        "text with p.. inside\n" ++
+        "* list-shaped content\n" ++
+        "|table|row|\n";
+    for ([_][]const u8{ "bq..", "bc..", "pre..", "notextile.." }) |marker| {
+        const input = try std.fmt.allocPrint(std.testing.allocator, "{s} first\n{s}", .{ marker, lines });
+        defer std.testing.allocator.free(input);
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(@as(usize, 1), result.document.root.children.items.len);
+        const first = result.document.root.children.items[0];
+        if (std.mem.eql(u8, marker, "bq..")) {
+            try std.testing.expectEqual(document.Tag.block_quote, first.tag);
+            try std.testing.expectEqual(@as(usize, 1), first.children.items.len);
+        } else if (std.mem.eql(u8, marker, "notextile..")) {
+            try std.testing.expectEqualStrings(input[marker.len + 1 ..], first.data.html_block);
+        } else {
+            try std.testing.expectEqualStrings(input[marker.len + 1 ..], first.data.code_block.content);
+        }
+    }
+}
+
+test "textile: unsupported signatures do not change non-extended blocks" {
+    const oliver = @import("oliver.zig");
+    for ([_][]const u8{ "bq.", "bc.", "pre.", "notextile.", "dl. term:" }) |marker| {
+        const input = try std.fmt.allocPrint(std.testing.allocator, "{s} first\np.. still content\n", .{marker});
+        defer std.testing.allocator.free(input);
+        var result = try oliver.parse(std.testing.allocator, input, .textile, .{});
+        defer result.deinit();
+        try std.testing.expectEqual(@as(usize, 1), result.document.root.children.items.len);
+    }
+}
+
+test "textile: unsupported signature storm stays iterative and deterministic" {
+    const oliver = @import("oliver.zig");
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(std.testing.allocator);
+    for (0..2000) |_| try input.appendSlice(std.testing.allocator, "bq.. quote\np..\toutside\n");
+    var result = try oliver.parse(std.testing.allocator, input.items, .textile, .{});
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 4000), result.document.root.children.items.len);
+    for (result.document.root.children.items, 0..) |node, i| {
+        try std.testing.expectEqual(if (i % 2 == 0) document.Tag.block_quote else document.Tag.paragraph, node.tag);
+    }
+    var first = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer first.deinit();
+    try oliver.html.render(std.testing.allocator, &first.writer, &result.document, .{});
+    var second = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer second.deinit();
+    try oliver.html.render(std.testing.allocator, &second.writer, &result.document, .{});
+    try std.testing.expectEqualStrings(first.written(), second.written());
 }
 
 test "textile: extended-block ownership and literal fallbacks" {

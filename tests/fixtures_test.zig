@@ -2080,6 +2080,13 @@ const textile_fixtures = [_]TextileFixture{
         .input = @embedFile("fixtures/textile/extended-literal.textile"),
         .expected = @embedFile("fixtures/textile/extended-literal.html"),
     },
+    // Unsupported signatures end extended blocks but stay ordinary text
+    // outside them (issue #138).
+    .{
+        .name = "extended-unsupported",
+        .input = @embedFile("fixtures/textile/extended-unsupported.textile"),
+        .expected = @embedFile("fixtures/textile/extended-unsupported.html"),
+    },
     // The Hobix footnote battery: `[N]` references and `fnN.` blocks, with
     // the Textile 2 `class="footnote"` on both sides (docs/TEXTILE-PARITY.md
     // §11).

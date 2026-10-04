@@ -9,7 +9,7 @@ Tests are product contracts. `zig build test` runs seven suites.
 The XHTML, HTML 4.01 Strict, and fuzz suites are described in their own
 sections below:
 
-1. **Library module tests** — 324 tests inside `src/*.zig` covering
+1. **Library module tests** — 335 tests inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
    frontends, the Cooklang frontend (parser + canonical serializer +
    pure scaling + the HTML policy + the `.menu` view), Unicode case
@@ -35,13 +35,16 @@ sections below:
    termination, modifier attrs, and literal fallbacks), `bq..`/`bc..`/
    `pre..` extended blocks (blank-line paragraph separation inside one
    blockquote, blank lines as code content, signature termination,
-   modifiers, def-line interaction, and literal fallbacks), a
+   modifiers, def-line interaction, unsupported-signature termination
+   (issue #138: all four extended forms, LF/CRLF/CR spans, near misses,
+   unchanged non-extended behavior, and a 2,000-block storm), and literal
+   fallbacks), a
    10,000-pair phrase storm, and a 2,000-deep phrase-nesting workload.
    Renderer tests construct documents directly so renderer behavior is
    verified without a dialect parser.
 2. **Fixture and adversarial tests** — 18 tests in `tests/fixtures_test.zig`.
    The explicit index contains 320 Markdown (296 CommonMark/GFM +
-   19 extension + 5 frontmatter pairs) and 106 Textile (105 + 1
+   19 extension + 5 frontmatter pairs) and 107 Textile (106 + 1
    frontmatter pair) fixture pairs, plus 11 Cooklang pairs across the
    fixture, frontmatter, serialize, scale, and menu tables.
    The Markdown wall includes byte-exact CommonMark 0.31.2 coverage of
@@ -86,7 +89,8 @@ sections below:
    `bq..`/`bc..`/`pre..` extended blocks (the Textile 2 example
    byte-for-byte, blank-line paragraph separation inside one
    blockquote, blank lines as verbatim code content, signature
-   termination, and literal fallback shapes;
+   termination (including unsupported signatures outside the closed block),
+   and literal fallback shapes;
    docs/TEXTILE-PARITY.md §10),   and footnotes
    (the `[N]` reference → `<sup class="footnote"><a href="#fnN">N</a></sup>`
    and `fnN.` block → `<p class="footnote" id="fnN"><sup>N</sup> body</p>`
@@ -150,8 +154,8 @@ sections below:
    docs/TEXTILE-PARITY.md §18). Every Textile fixture family in the
    index is counted in the final coverage scorecard,
    docs/TEXTILE-PARITY.md §24 — one fixture pair per row, summing to the
-   105 parity pairs; the frontmatter pair brings the Textile wall to the
-   106 counted above. The Cooklang wall covers the semantic
+   106 parity pairs; the frontmatter pair brings the Textile wall to the
+   107 counted above. The Cooklang wall covers the semantic
    families end-to-end through Oliver's deterministic HTML policy
    (`cooklang-basic`, `cooklang-sections`, `cooklang-frontmatter`,
    `cooklang-literal`; docs/COOKLANG.md) and the canonical serializer
@@ -205,8 +209,8 @@ sections below:
    Eight CLI subprocess cases additionally check the stdin byte ceiling,
    including zero, exact-limit, and later-chunk overflow inputs.
 
-The current complete result is **493/493 tests passing** with Zig 0.16.0
-(324 library module tests — including 8 C-ABI tests over the exported
+The current complete result is **504/504 tests passing** with Zig 0.16.0
+(335 library module tests — including 8 C-ABI tests over the exported
 `oliver_render`/`oliver_free` surface — + 18 fixture/adversarial tests + 7
 conformance-harness tests + 117 CLI and helper tests + 19 XHTML
 profile tests + 7 HTML 4.01 Strict profile tests + 1 fuzz wall).
