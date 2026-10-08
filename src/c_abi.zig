@@ -55,8 +55,30 @@ pub const Error = enum(c_int) {
 pub const Buffer = extern struct {
     data: ?[*]u8 = null,
     len: usize = 0,
-    error_code: c_int = @backingInt(Error.ok),
+    error_code: c_int = abiCode(.ok),
 };
+
+/// The numeric ABI value of an error code; include/oliver.h mirrors the
+/// values. Written as an explicit switch rather than `@intFromEnum` /
+/// `@backingInt` so this file compiles under both supported Zig
+/// toolchains (0.16 has no `@backingInt`, and 0.17's formatter rewrites
+/// `@intFromEnum`) and so adding an `Error` member forces pinning its
+/// ABI value here deliberately.
+fn abiCode(e: Error) c_int {
+    return switch (e) {
+        .ok => 0,
+        .input_too_large => 1,
+        .out_of_memory => 2,
+        .raw_html_rejected => 3,
+        .raw_html_not_xml_well_formed => 4,
+        .invalid_argument => 5,
+        .raw_html_not_html4_strict => 6,
+        .ordered_list_start_not_html4_strict => 7,
+        .invalid_html4_strict_id => 8,
+        .duplicate_html4_strict_id => 9,
+        .empty_table_not_html4_strict => 10,
+    };
+}
 
 /// The C allocator shape: malloc-style, plus an opaque context.
 pub const CAllocFn = *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque;
@@ -284,11 +306,11 @@ fn renderImpl(
     defer list.deinit(a);
     const out = try a.alloc(u8, list.items.len);
     @memcpy(out, list.items);
-    return .{ .data = out.ptr, .len = out.len, .error_code = @backingInt(Error.ok) };
+    return .{ .data = out.ptr, .len = out.len, .error_code = abiCode(.ok) };
 }
 
 fn err(code: Error) Buffer {
-    return .{ .data = null, .len = 0, .error_code = @backingInt(code) };
+    return .{ .data = null, .len = 0, .error_code = abiCode(code) };
 }
 
 fn mapError(e: anyerror) Error {

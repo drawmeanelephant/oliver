@@ -209,7 +209,10 @@ sections below:
    Eight CLI subprocess cases additionally check the stdin byte ceiling,
    including zero, exact-limit, and later-chunk overflow inputs.
 
-The current complete result is **504/504 tests passing** with Zig 0.17.0
+The current complete result is **504/504 tests passing** with Zig 0.16.0
+and 0.17.0 alike (CI runs the full gate on both; the CommonMark 652/652
+classified gate and the Cooklang 60/60 wall are also run under both
+toolchains).
 (335 library module tests — including 8 C-ABI tests over the exported
 `oliver_render`/`oliver_free` surface — + 18 fixture/adversarial tests + 7
 conformance-harness tests + 117 CLI and helper tests + 19 XHTML

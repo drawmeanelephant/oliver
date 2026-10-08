@@ -18,9 +18,9 @@ C ABI is the stable embedding seam: a minimal parse + render surface
 declared in a plain C header, so C, Rust, Python, Node, and other FFI
 consumers can embed Oliver without adopting Zig. The session record's
 architectural concern (docs/SESSION-1-REPORT.md, concern 1) — that any
-C-ABI surface must target the Zig 0.17 `std.Io` shapes and use
-`std.Io.Writer.Allocating` for the render-to-buffer path — is what this
-module implements.
+C-ABI surface must target the `std.Io` shapes shared by Zig 0.16 and
+0.17 and use `std.Io.Writer.Allocating` for the render-to-buffer path —
+is what this module implements.
 
 ## 1. Surface
 
