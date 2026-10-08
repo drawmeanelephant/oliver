@@ -250,7 +250,7 @@ fn parseTests(allocator: std.mem.Allocator, corpus: []const u8) !TestListOwned {
 // ---------------------------------------------------------------------------
 
 /// A tiny growable output buffer with the writer methods the serializers
-/// need (Zig 0.16's ArrayList has no `writer()`).
+/// need (Zig 0.17's ArrayList has no `writer()`).
 const Buf = struct {
     a: std.mem.Allocator,
     buf: std.ArrayList(u8) = .empty,

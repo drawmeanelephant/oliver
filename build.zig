@@ -56,7 +56,7 @@ pub fn build(b: *std.Build) void {
     const run_cli_tests = b.addRunArtifact(cli_tests);
 
     const cli_run = b.addRunArtifact(cli);
-    if (b.args) |args| cli_run.addArgs(args);
+    cli_run.addPassthruArgs();
     const run_step = b.step("run", "Run the oliver CLI");
     run_step.dependOn(&cli_run.step);
 
@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const spec_run = b.addRunArtifact(spec_tool);
-    if (b.args) |args| spec_run.addArgs(args);
+    spec_run.addPassthruArgs();
     const spec_step = b.step("spec-conformance", "Run the CommonMark spec-conformance scorecard");
     spec_step.dependOn(&spec_run.step);
 
@@ -94,10 +94,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const cook_run = b.addRunArtifact(cook_tool);
-    // Default to the vendored corpus (pinned, digest-bound) so a bare
-    // `zig build cooklang-conformance` runs the wall; pass a path to
-    // check a freshly fetched copy instead.
-    if (b.args) |args| cook_run.addArgs(args) else cook_run.addArg("tests/cooklang/canonical.yaml");
+    // Passthru args land on the tool's argv; with no path argument the
+    // tool itself defaults to the vendored corpus (pinned, digest-bound),
+    // so a bare `zig build cooklang-conformance` runs the wall. Pass a
+    // path to check a freshly fetched copy instead.
+    cook_run.addPassthruArgs();
     const cook_step = b.step("cooklang-conformance", "Run the Cooklang canonical conformance scorecard");
     cook_step.dependOn(&cook_run.step);
 
@@ -216,9 +217,9 @@ pub fn build(b: *std.Build) void {
         .{ .source = "# ok\n", .limit = "4", .failure = true },
         .{ .source = "", .limit = "0" },
         .{ .source = "x", .limit = "0", .failure = true },
-        .{ .source = " " ** 8191, .limit = "8192" },
-        .{ .source = " " ** 8192, .limit = "8192" },
-        .{ .source = " " ** 8193, .limit = "8192", .failure = true },
+        .{ .source = &stdin_pad_8191, .limit = "8192" },
+        .{ .source = &stdin_pad_8192, .limit = "8192" },
+        .{ .source = &stdin_pad_8193, .limit = "8192", .failure = true },
     };
     for (input_cases) |case| {
         const input_test = b.addRunArtifact(cli);
@@ -241,8 +242,15 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_fuzz_tests.step);
 }
 
+/// Padded stdin inputs for the CLI read-limit test matrix. Zig 0.17
+/// removed `**` array-repeat; @splat fills them. Declared at container
+/// scope so the slices stored in the run steps point at static memory.
+const stdin_pad_8191: [8191]u8 = @splat(' ');
+const stdin_pad_8192: [8192]u8 = @splat(' ');
+const stdin_pad_8193: [8193]u8 = @splat(' ');
+
 /// The package version from build.zig.zon (single source of truth). Zig
-/// 0.16 exposes no Build API for it, so read the zon file at configure
+/// 0.17 exposes no Build API for it, so read the zon file at configure
 /// time and extract `.version = "..."`; fall back to "0.0.0" if the file
 /// is unreadable or the marker is missing.
 fn packageVersion(b: *std.Build) []const u8 {

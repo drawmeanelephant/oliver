@@ -208,7 +208,7 @@ pub const EmptyTableNotHtml4Strict = error.EmptyTableNotHtml4Strict;
 /// Renders `doc` to `writer`.
 ///
 /// `writer` may be any value with a `writeAll([]const u8) !void` method;
-/// pass a pointer to it. In Zig 0.16, `std.Io.Writer` values (e.g. from
+/// pass a pointer to it. In Zig 0.17, `std.Io.Writer` values (e.g. from
 /// `std.Io.Writer.Allocating` or `std.Io.File.writer`) satisfy this.
 ///
 /// `gpa` is used only for the temporary traversal stack, footnote numbering
