@@ -26,7 +26,7 @@
 //!   borrowed for the duration of the call only.
 //!
 //! The render-to-buffer path uses `std.Io.Writer.Allocating` — the Zig
-//! 0.16 writer seam the session record calls out for the C ABI
+//! 0.17 writer seam the session record calls out for the C ABI
 //! (docs/SESSION-1-REPORT.md, architectural concern 1) — wrapped to hand
 //! the caller an owned, exactly-sized buffer.
 
@@ -55,7 +55,7 @@ pub const Error = enum(c_int) {
 pub const Buffer = extern struct {
     data: ?[*]u8 = null,
     len: usize = 0,
-    error_code: c_int = @intFromEnum(Error.ok),
+    error_code: c_int = @backingInt(Error.ok),
 };
 
 /// The C allocator shape: malloc-style, plus an opaque context.
@@ -284,11 +284,11 @@ fn renderImpl(
     defer list.deinit(a);
     const out = try a.alloc(u8, list.items.len);
     @memcpy(out, list.items);
-    return .{ .data = out.ptr, .len = out.len, .error_code = @intFromEnum(Error.ok) };
+    return .{ .data = out.ptr, .len = out.len, .error_code = @backingInt(Error.ok) };
 }
 
 fn err(code: Error) Buffer {
-    return .{ .data = null, .len = 0, .error_code = @intFromEnum(code) };
+    return .{ .data = null, .len = 0, .error_code = @backingInt(code) };
 }
 
 fn mapError(e: anyerror) Error {

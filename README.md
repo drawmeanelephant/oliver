@@ -37,7 +37,7 @@ Details: [docs/CAPABILITIES.md](docs/CAPABILITIES.md) and
 
 ## Building and testing
 
-Requires Zig 0.16.0.
+Requires Zig 0.17.0.
 
 ```bash
 zig build test                                  # all test suites

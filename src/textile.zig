@@ -5508,8 +5508,8 @@ test "textile: malformed signature prefixes stay inside extended blocks" {
         "p{style.. unclosed\n" ++
         "p[lang.. unclosed\n" ++
         "p^.. bad modifier\n" ++
-        "custom" ++ "(" ** 256 ++ ".. excessive padding\n" ++
-        "custom" ++ ")" ** 256 ++ ".. excessive padding\n" ++
+        "custom" ++ @as([256]u8, @splat('(')) ++ ".. excessive padding\n" ++
+        "custom" ++ @as([256]u8, @splat(')')) ++ ".. excessive padding\n" ++
         " p.. indented\n" ++
         "text with p.. inside\n" ++
         "* list-shaped content\n" ++

@@ -137,7 +137,7 @@ are wrapped in a minimal namespace-aware test wrapper and validated:
 The wrapper belongs to the **test only** — Oliver fragment output never
 acquires fake document wrappers. The checker is deliberately not an XML
 parser authority: it validates output; it never participates in parsing
-semantics. (Zig 0.16 ships no `std.xml`; the checker is hermetic and
+semantics. (Zig 0.17 ships no `std.xml`; the checker is hermetic and
 dependency-free.)
 
 ## Determinism

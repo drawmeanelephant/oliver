@@ -95,7 +95,7 @@ allowed; source code of parsers is not.**
   documentation for blank-line termination of single-period `bq.`, the
   separate extended `bq..` form, and citation URLs. Only the single-period,
   non-citation form is implemented in this slice.
-- Zig 0.16 standard library source (local toolchain, `/opt/homebrew/.../std/`)
+- Zig 0.17 standard library source (local toolchain, `/opt/homebrew/.../std/`)
   — official library documentation: `std.Io.Writer`, `std.process.Init`,
   `std.ArrayList`, `std.heap.ArenaAllocator`, build API.
 

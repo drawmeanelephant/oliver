@@ -12,7 +12,7 @@
 //!     oliver meta --from <markdown|textile|cooklang> --format json < file > meta.json
 //!
 //! All parser and renderer semantics live in the library; this file only
-//! handles arguments and stdio. It uses the Zig 0.16 `std.process.Init`
+//! handles arguments and stdio. It uses the Zig 0.17 `std.process.Init`
 //! entry point for a ready allocator and `Io` instance.
 
 const std = @import("std");
