@@ -2938,6 +2938,20 @@ test "adversarial smoke: hostile input never crashes or leaks" {
     defer unbalanced_links.deinit(gpa);
     for (0..20_000) |_| try unbalanced_links.appendSlice(gpa, "[a](");
 
+    // `[`*n + `]`*n (issue #151): every `]` used to re-normalize an
+    // O(k)-byte candidate label — quadratic per closer. Both the
+    // no-definitions shape and the same storm over a registered
+    // definition (which exercises the bounded fold) must stay linear.
+    var bracket_storm = std.ArrayList(u8).empty;
+    defer bracket_storm.deinit(gpa);
+    try bracket_storm.appendNTimes(gpa, '[', 50_000);
+    try bracket_storm.appendNTimes(gpa, ']', 50_000);
+    var bracket_storm_defs = std.ArrayList(u8).empty;
+    defer bracket_storm_defs.deinit(gpa);
+    try bracket_storm_defs.appendSlice(gpa, "[a]: /x\n\n");
+    try bracket_storm_defs.appendNTimes(gpa, '[', 50_000);
+    try bracket_storm_defs.appendNTimes(gpa, ']', 50_000);
+
     // Reference-link label bombs: every `]` forces a label scan, case-fold
     // normalization, and map lookup. Shortcut forms must stay linear even
     // when the definitions map is large and labels differ by one codepoint.
@@ -3079,6 +3093,8 @@ test "adversarial smoke: hostile input never crashes or leaks" {
         big_backticks,
         backtick_mix.items,
         big_brackets,
+        bracket_storm.items,
+        bracket_storm_defs.items,
         link_mix.items,
         deep_brackets.items,
         unbalanced_links.items,
@@ -3159,6 +3175,17 @@ test "adversarial: list workloads are stack-safe and deterministic" {
     defer ordered_near_miss.deinit(gpa);
     for (0..8_000) |_| try ordered_near_miss.appendSlice(gpa, "1234567890. item\n");
 
+    // Tab-indented nesting (issue #150): the per-line container match used
+    // to walk every open list item's remaining indentation — O(depth^2)
+    // per line, cubic overall. Matching must stay bounded by each item's
+    // own content indentation.
+    var tab_nesting = std.ArrayList(u8).empty;
+    defer tab_nesting.deinit(gpa);
+    for (0..2_000) |i| {
+        try tab_nesting.appendNTimes(gpa, '\t', i);
+        try tab_nesting.appendSlice(gpa, "- x\n");
+    }
+
     const cases = [_]struct { name: []const u8, input: []const u8 }{
         .{ .name = "deep nesting", .input = deep_nesting.items },
         .{ .name = "same-marker storm", .input = marker_storm.items },
@@ -3166,6 +3193,7 @@ test "adversarial: list workloads are stack-safe and deterministic" {
         .{ .name = "indentation storm", .input = indentation_storm.items },
         .{ .name = "nine-digit ordered-marker storm", .input = ordered_marker_storm.items },
         .{ .name = "ten-digit ordered-marker near-miss", .input = ordered_near_miss.items },
+        .{ .name = "tab-nested deep list", .input = tab_nesting.items },
     };
     for (cases) |case| {
         var first = try renderHtml(case.input, .markdown);

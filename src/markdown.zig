@@ -256,6 +256,39 @@ fn advanceColumns(view: View, n: u32) ?View {
     return view.after(i, col);
 }
 
+/// Advances a view by up to `n` columns of leading whitespace, stopping at
+/// the first non-whitespace byte: the `advanceColumns(view, min(indent, n))`
+/// result without measuring `indent` first, so the walk stays bounded by
+/// `n` even when the leading whitespace is much deeper.
+fn advanceWhitespace(view: View, n: u32) View {
+    var col = view.col;
+    var i: usize = 0;
+    var remaining = n;
+    const t = view.line.text;
+    while (remaining > 0 and i < t.len) {
+        switch (t[i]) {
+            ' ' => {
+                col += 1;
+                i += 1;
+                remaining -= 1;
+            },
+            '\t' => {
+                const adv = tab_stop - (col % tab_stop);
+                if (adv <= remaining) {
+                    col += adv;
+                    i += 1;
+                    remaining -= adv;
+                } else {
+                    col += remaining;
+                    remaining = 0;
+                }
+            },
+            else => break,
+        }
+    }
+    return view.after(i, col);
+}
+
 /// Bounded leading-indent walk: the byte index and columns consumed up to
 /// `limit` columns of leading whitespace, or null when the indentation
 /// exceeds the limit. Any leading tab reaches four columns or more from any
@@ -395,6 +428,15 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // indentation; a list consumes nothing (its fate is decided by its
         // item and by whether a new same-type item starts).
         var view = View.init(line);
+        // The offset past which the rest of the line is whitespace (one
+        // past the last non-space/tab byte, or the line start when the
+        // line is all whitespace): a view's remainder is blank iff
+        // `view.line.start >= blank_tail_start`. Computed once per line —
+        // checking `isBlank` per open container rescans the remaining
+        // indentation once per level, which is cubic on deep nesting.
+        var tail = line.text.len;
+        while (tail > 0 and (line.text[tail - 1] == ' ' or line.text[tail - 1] == '\t')) tail -= 1;
+        const blank_tail_start = line.start + tail;
         var matched: usize = 0;
         while (matched < containers.items.len) {
             const c = &containers.items[matched];
@@ -410,19 +452,19 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 },
                 .list_item => {
                     if (c.inert) break;
-                    if (isBlank(view.line.text)) {
+                    if (view.line.start >= blank_tail_start) {
                         // Blank lines match list items without requiring the
                         // full content indentation. Still consume as much of
                         // that structural indentation as is present: an open
                         // leaf observes excess spaces as literal content, but
                         // never the list item's own prefix.
                         if (c.initial_blank_pending) c.inert = true;
-                        const indent = viewIndent(view);
-                        view = advanceColumns(view, @min(indent, c.content_indent)) orelse unreachable;
+                        view = advanceWhitespace(view, c.content_indent);
                     } else {
-                        const indent = viewIndent(view);
-                        if (indent < c.content_indent) break;
-                        view = advanceColumns(view, c.content_indent) orelse unreachable;
+                        // The item needs its content indentation; consuming
+                        // it fails exactly when the leading whitespace is
+                        // shorter, so the walk stays bounded by the indent.
+                        view = advanceColumns(view, c.content_indent) orelse break;
                         // Rule 3 limits only the blank prefix before the
                         // item's first block. Once nonblank content matches,
                         // later blank lines are ordinary item content.
@@ -1371,7 +1413,22 @@ const Definition = struct {
 /// (see `normalizeLabel`). Keys are arena-owned copies. The first
 /// definition for a label wins (§4.7: "If there are several matching
 /// definitions, the first one takes precedence").
-const Definitions = std.StringHashMap(Definition);
+const Definitions = struct {
+    map: std.StringHashMap(Definition),
+    /// Longest key in `map`, maintained by `registerDefinition`: a
+    /// candidate label whose normalized form is longer can never match,
+    /// so resolution abandons the fold at that point instead of scanning
+    /// the whole span (issue #151).
+    max_key_len: usize = 0,
+
+    fn init(allocator: std.mem.Allocator) Definitions {
+        return .{ .map = std.StringHashMap(Definition).init(allocator) };
+    }
+
+    fn deinit(self: *Definitions) void {
+        self.map.deinit();
+    }
+};
 
 fn isBlank(text: []const u8) bool {
     for (text) |b| {
@@ -2208,9 +2265,10 @@ fn tryParseDefinition(doc: *document.Document, lines: []const Paragraph.LineRef)
 /// precedence"). The normalized label is arena-owned.
 fn registerDefinition(doc: *document.Document, defs: *Definitions, def: ParsedDefinition) ParseError!void {
     const key = try normalizeLabel(doc, def.label);
-    const gop = try defs.getOrPut(key);
+    const gop = try defs.map.getOrPut(key);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{ .dest = def.dest, .title = def.title };
+        defs.max_key_len = @max(defs.max_key_len, key.len);
     }
 }
 
@@ -2371,6 +2429,50 @@ fn normalizeLabel(doc: *document.Document, content: source.Span) ParseError![]co
 
 fn isLabelWs(b: u8) bool {
     return b == ' ' or b == '\t' or b == '\n' or b == '\r';
+}
+
+/// `normalizeLabel` with a proof-of-no-match early out: streams the fold
+/// and whitespace collapse in one pass and returns null as soon as the
+/// normalized length provably exceeds `limit` bytes (counted through the
+/// last non-whitespace byte, so a whitespace-heavy label that collapses to
+/// a short key is never cut off — the stream is aborted only when the
+/// final length itself must exceed `limit`). Work is then
+/// O(min(label, limit)) instead of O(label) per candidate — a bracket
+/// storm otherwise re-normalizes an O(n)-byte text once per `]` (issue
+/// #151).
+fn normalizeLabelBounded(doc: *document.Document, content: source.Span, limit: usize) ParseError!?[]const u8 {
+    const bytes = doc.src.bytes;
+    // Unaborted output is at most `limit` bytes through the last
+    // non-whitespace byte, plus one byte for a trailing collapsed run.
+    const buf = try doc.allocator().alloc(u8, @min(limit +| 8, content.len() *| 12 +| 8));
+    var out: usize = 0;
+    var solid: usize = 0;
+    var prev_ws = true; // leading whitespace is stripped, not collapsed
+    var i: usize = content.start;
+    while (i < content.end) {
+        const cp = unicode.decode(bytes, i) orelse bytes[i];
+        const f = unicode.caseFold(cp);
+        for (0..f.len) |j| {
+            var tmp: [4]u8 = undefined;
+            for (tmp[0..encodeCp(&tmp, f.chars[j])]) |b| {
+                if (isLabelWs(b)) {
+                    if (!prev_ws) {
+                        buf[out] = ' ';
+                        out += 1;
+                    }
+                    prev_ws = true;
+                } else {
+                    buf[out] = b;
+                    out += 1;
+                    prev_ws = false;
+                    solid = out;
+                    if (solid > limit) return null;
+                }
+            }
+        }
+        i += if (unicode.decode(bytes, i)) |_| unicodeCpLen(bytes, i) else 1;
+    }
+    return buf[0..solid];
 }
 
 /// UTF-8 encoded length of a code point.
@@ -4168,8 +4270,13 @@ fn tryResolveReference(
     defs: *Definitions,
     label: source.Span,
 ) ParseError!?Definition {
-    const key = try normalizeLabel(doc, label);
-    if (defs.get(key)) |def| return def;
+    // Cheapest first: with no definitions nothing can resolve, and a
+    // candidate whose normalized form exceeds the longest key can never
+    // match — both checks skip the O(label) fold, which a bracket storm
+    // otherwise pays once per `]` (issue #151).
+    if (defs.map.count() == 0) return null;
+    const key = (try normalizeLabelBounded(doc, label, defs.max_key_len)) orelse return null;
+    if (defs.map.get(key)) |def| return def;
     return null;
 }
 
@@ -7990,4 +8097,111 @@ test "markdown: smartypants is off by default (extension)" {
     var out = aw.toArrayList();
     defer out.deinit(testing.allocator);
     try testing.expectEqualStrings("<p>&quot;Hello,&quot; -- she said.</p>\n", out.items);
+}
+
+/// Parses `input` as Markdown (default options) and renders HTML.
+fn renderMarkdownHtml(input: []const u8) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, .{});
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "markdown: bracket storm without definitions completes (issue #151)" {
+    // `[`*n + `]`*n used to cost O(n^2): every `]` re-normalized an
+    // O(k)-byte candidate label (n=64000 exceeded a 120 s timeout; this
+    // size took ~40 s in Debug). Completion is the bound — no wall-clock
+    // assertion.
+    const n = 20000;
+    const input = try testing.allocator.alloc(u8, 2 * n);
+    defer testing.allocator.free(input);
+    @memset(input[0..n], '[');
+    @memset(input[n..], ']');
+
+    var out = try renderMarkdownHtml(input);
+    defer out.deinit(testing.allocator);
+
+    // No definitions exist, so every bracket is literal text.
+    const expected = try std.fmt.allocPrint(testing.allocator, "<p>{s}</p>\n", .{input});
+    defer testing.allocator.free(expected);
+    try testing.expectEqualStrings(expected, out.items);
+}
+
+test "markdown: bracket storm with a definition completes (issue #151)" {
+    // The same storm with a definition on the table exercises the
+    // bounded label fold: a candidate aborts once its normalized length
+    // provably exceeds the longest registered key.
+    const n = 20000;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    try input.appendSlice(testing.allocator, "[a]: /x\n\n");
+    try input.appendNTimes(testing.allocator, '[', n);
+    try input.appendNTimes(testing.allocator, ']', n);
+
+    var out = try renderMarkdownHtml(input.items);
+    defer out.deinit(testing.allocator);
+
+    const expected = try std.fmt.allocPrint(
+        testing.allocator,
+        "<p>{s}</p>\n",
+        .{input.items["[a]: /x\n\n".len..]},
+    );
+    defer testing.allocator.free(expected);
+    try testing.expectEqualStrings(expected, out.items);
+}
+
+test "markdown: whitespace-heavy candidate labels still resolve (issue #151)" {
+    // The bounded fold measures the *post-collapse* length: a candidate
+    // that is mostly collapsible whitespace still matches a short key,
+    // while one whose normalized form is genuinely longer does not.
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    try input.appendSlice(testing.allocator, "[z y]: /u\n\n[z");
+    try input.appendNTimes(testing.allocator, ' ', 30000);
+    try input.appendSlice(testing.allocator, "y]\n\n[a b c]\n");
+
+    var out = try renderMarkdownHtml(input.items);
+    defer out.deinit(testing.allocator);
+
+    var expected = std.ArrayList(u8).empty;
+    defer expected.deinit(testing.allocator);
+    try expected.appendSlice(testing.allocator, "<p><a href=\"/u\">z");
+    try expected.appendNTimes(testing.allocator, ' ', 30000);
+    // `a b c` normalizes longer than the only key (`z y`) — no match.
+    try expected.appendSlice(testing.allocator, "y</a></p>\n<p>[a b c]</p>\n");
+    try testing.expectEqualStrings(expected.items, out.items);
+}
+
+test "markdown: deeply nested lists match containers without rescans (issue #150)" {
+    // A depth-d tab-indented list used to cost O(d^3): the per-line
+    // container match walked each open item's remaining indentation.
+    // depth=4000 was ~11 s in ReleaseSafe; the bound is completion and
+    // exact output shape, not wall-clock.
+    const depth = 2000;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    for (0..depth) |i| {
+        try input.appendNTimes(testing.allocator, '\t', i);
+        try input.appendSlice(testing.allocator, "- x\n");
+    }
+
+    var result = try @import("oliver.zig").parse(testing.allocator, input.items, .markdown, .{});
+    defer result.deinit();
+
+    // One nested bullet list per indentation level.
+    const root = result.document.root;
+    try testing.expectEqual(@as(usize, 1), root.children.items.len);
+    var node = root.children.items[0];
+    var lists: usize = 0;
+    while (node.tag == .list) {
+        lists += 1;
+        try testing.expectEqual(@as(usize, 1), node.children.items.len);
+        node = node.children.items[0]; // the item
+        if (node.children.items.len == 0) break;
+        node = node.children.items[node.children.items.len - 1];
+    }
+    try testing.expect(lists > 100);
 }

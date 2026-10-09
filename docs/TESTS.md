@@ -314,7 +314,9 @@ under `std.testing.allocator`:
 
 - 100 KB delimiter, backtick, bracket, backslash, and single-line runs;
 - deep opener chains and mixed delimiter/code workloads;
-- link/image component and unmatched-bracket storms;
+- link/image component and unmatched-bracket storms, including a 50,000-
+  bracket open/close storm with and without registered definitions
+  (issue #151);
 - shortcut, collapsed, full, near-miss, and definition-map reference storms;
 - very large labels;
 - URI/email autolink matches and near misses;
@@ -323,7 +325,8 @@ under `std.testing.allocator`:
 - mixed LF, CRLF, and CR plus NUL bytes;
 - 10,000 repeated Setext/thematic transitions rendered twice and compared;
 - a 20,000-level list/thematic near-miss that exercises linear suffix
-  recognition;
+  recognition, and a 2,000-level tab-nested list that exercises bounded
+  container matching (issue #150);
 - a 64-byte fence with 10,000 near closers and a 20,000-line unclosed literal
   block, each rendered twice.
 
