@@ -252,6 +252,10 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         } else if (std.mem.eql(u8, arg, "--to")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
+            // A second `--to` would contradict the first; reject
+            // duplicates like every other value flag.
+            if (saw_to) return error.Usage;
+            saw_to = true;
             const value = args[index];
             if (std.mem.eql(u8, value, "html")) {
                 profile = .html;
@@ -260,7 +264,6 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             } else if (std.mem.eql(u8, value, "html4-strict")) {
                 profile = .html4_strict;
             } else return error.Usage;
-            saw_to = true;
         } else if (std.mem.eql(u8, arg, "--raw-html")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -479,10 +482,18 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     const ext_flags = footnotes or definition_lists or heading_attributes or
         strikethrough or wikilinks or callouts or smartypants or heading_ids or
         task_lists;
+    // The filesystem commands own closed flag sets; a wrap/plan/manifest
+    // flag given to any other command is a usage error, the same as a
+    // render flag on a filesystem command.
+    const wrap_flags = saw_wrap_template or saw_wrap_meta_json or saw_wrap_assets_root or saw_wrap_body;
+    const plan_flags = saw_plan_content_dir or saw_plan_output_dir or saw_plan_template_dir or saw_plan_meta_dir or
+        saw_plan_default_template or saw_plan_oliver_bin or saw_plan_root_dir or saw_plan_dry_run or saw_plan_verbose;
+    const manifest_flags = saw_manifest or saw_manifest_add or saw_manifest_verify;
     switch (cmd) {
         .render => {
             if (factor_num != null or servings_target != null or json or meta_format) return error.Usage;
             if (saw_format) return error.Usage;
+            if (wrap_flags or plan_flags or manifest_flags) return error.Usage;
             // The Markdown extensions cannot apply to Textile or
             // Cooklang; rejecting them keeps the strict scoping rule.
             if (ext_flags and dialect != .markdown) return error.Usage;
@@ -491,22 +502,25 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             if (!cooklang or saw_to or saw_raw_html or factor_num != null or servings_target != null or
                 ext_flags or frontmatter != null or saw_diagnostics or meta_format) return error.Usage;
             if (saw_format) return error.Usage;
+            if (wrap_flags or plan_flags or manifest_flags) return error.Usage;
         },
         .menu => {
             if (!cooklang or saw_to or saw_raw_html or factor_num != null or servings_target != null or
                 ext_flags or frontmatter != null or saw_diagnostics or json or meta_format) return error.Usage;
             if (saw_format) return error.Usage;
+            if (wrap_flags or plan_flags or manifest_flags) return error.Usage;
         },
         .scale => {
             if (!cooklang or saw_to or saw_raw_html or ext_flags or frontmatter != null or saw_diagnostics or json or meta_format) return error.Usage;
             if (saw_format) return error.Usage;
+            if (wrap_flags or plan_flags or manifest_flags) return error.Usage;
             // Scaling needs exactly one mode: factor or servings.
             if ((factor_num == null) == (servings_target == null)) return error.Usage;
         },
         .meta => {
             if (saw_to or saw_raw_html or factor_num != null or servings_target != null or
-                ext_flags or frontmatter != null or saw_diagnostics or json or
-                saw_wrap_template or saw_wrap_meta_json or saw_wrap_assets_root or saw_wrap_body) return error.Usage;
+                ext_flags or frontmatter != null or saw_diagnostics or json) return error.Usage;
+            if (wrap_flags or plan_flags or manifest_flags) return error.Usage;
             // Meta requires --from (any frontend) and --format json.
             if (!meta_format) return error.Usage;
         },
@@ -516,9 +530,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             if (saw_from or saw_to or saw_raw_html or saw_frontmatter or
                 saw_diagnostics or saw_format or json or meta_format or
                 factor_num != null or servings_target != null or ext_flags) return error.Usage;
-            if (saw_plan_content_dir or saw_plan_output_dir or saw_plan_template_dir or saw_plan_meta_dir or
-                saw_plan_default_template or saw_plan_oliver_bin or saw_plan_root_dir or saw_plan_dry_run or saw_plan_verbose or
-                saw_manifest or saw_manifest_add or saw_manifest_verify) return error.Usage;
+            if (plan_flags or manifest_flags) return error.Usage;
             if (!saw_wrap_template or !saw_wrap_meta_json or !saw_wrap_assets_root or !saw_wrap_body) return error.Usage;
         },
         .plan => {
@@ -526,8 +538,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             if (saw_from or saw_to or saw_raw_html or saw_frontmatter or
                 saw_diagnostics or saw_format or json or meta_format or
                 factor_num != null or servings_target != null or ext_flags) return error.Usage;
-            if (saw_wrap_template or saw_wrap_meta_json or saw_wrap_assets_root or saw_wrap_body) return error.Usage;
-            if (saw_manifest or saw_manifest_add or saw_manifest_verify) return error.Usage;
+            if (wrap_flags or manifest_flags) return error.Usage;
             if (!saw_plan_content_dir or !saw_plan_output_dir or !saw_plan_template_dir or !saw_plan_meta_dir or
                 !saw_plan_default_template or !saw_plan_oliver_bin or !saw_plan_root_dir or !saw_plan_dry_run or !saw_plan_verbose) return error.Usage;
         },
@@ -536,9 +547,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             if (saw_from or saw_to or saw_raw_html or saw_frontmatter or
                 saw_diagnostics or saw_format or json or meta_format or
                 factor_num != null or servings_target != null or ext_flags) return error.Usage;
-            if (saw_wrap_template or saw_wrap_meta_json or saw_wrap_assets_root or saw_wrap_body) return error.Usage;
-            if (saw_plan_content_dir or saw_plan_output_dir or saw_plan_template_dir or saw_plan_meta_dir or
-                saw_plan_default_template or saw_plan_oliver_bin or saw_plan_root_dir or saw_plan_dry_run or saw_plan_verbose) return error.Usage;
+            if (wrap_flags or plan_flags) return error.Usage;
             if (!saw_manifest) return error.Usage;
             if ((saw_manifest_add and saw_manifest_verify) or (!saw_manifest_add and !saw_manifest_verify)) return error.Usage;
         },
@@ -1354,7 +1363,8 @@ fn wrapDispatch(
 }
 
 /// Dispatches `oliver plan`: walks --content-dir and writes the 13-col TSV
-/// to stdout. On basename collision exits 1 with a message on stderr.
+/// to stdout. On basename collision or a tab/newline-corrupting value
+/// exits 1 with a message on stderr.
 fn planDispatch(
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -1364,7 +1374,7 @@ fn planDispatch(
     plan.run(gpa, io, cfg.plan_content_dir.?, cfg.plan_output_dir.?, cfg.plan_template_dir.?, cfg.plan_meta_dir.?, cfg.plan_default_template.?, cfg.plan_oliver_bin.?, cfg.plan_root_dir.?, cfg.plan_dry_run.?, cfg.plan_verbose.?, output.stdout, output.stderr) catch |err| {
         if (err == error.WriteFailed) return error.StdoutWriteFailed;
         if (err == error.StderrWriteFailed) return err;
-        if (err == error.Collision) return 1;
+        if (err == error.Collision or err == error.UnsafeTsvField) return 1;
         try output.print(.stderr, "oliver plan: {s}\n", .{@errorName(err)});
         return 1;
     };
@@ -1620,6 +1630,57 @@ test "cli: --version is a requested outcome, not an error" {
 test "cli: invalid --to values and missing values fail clearly" {
     try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--to", "xml" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--to" }));
+}
+
+test "cli: --to appears at most once" {
+    // A second `--to` would contradict the first (the --from rule):
+    // every order and every repetition is a usage error, never
+    // last-one-wins (issue #166).
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--to", "html", "--to", "xhtml" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--to", "xhtml", "--to", "html" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--to", "html", "--to", "html" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--to", "xhtml", "--to", "html4-strict" }));
+}
+
+test "cli: wrap/plan/manifest flags are scoped to their own commands" {
+    // The filesystem commands own closed flag sets; a wrap/plan/manifest
+    // flag on any other command is a usage error, never silently ignored
+    // (issue #156).
+    for ([_][]const u8{ "--template", "--meta-json", "--assets-root", "--body" }) |flag| {
+        try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", flag, "v" }));
+        try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", flag, "v" }));
+        try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", flag, "v" }));
+        try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", flag, "v" }));
+        try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", flag, "v" }));
+    }
+    for ([_][]const u8{ "--content-dir", "--output-dir", "--template-dir", "--meta-dir", "--default-template", "--oliver-bin", "--root-dir" }) |flag| {
+        try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", flag, "v" }));
+        try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", flag, "v" }));
+        try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--factor", "2", flag, "v" }));
+        try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", flag, "v" }));
+        try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", flag, "v" }));
+    }
+    for ([_][]const u8{ "--dry-run", "--verbose" }) |flag| {
+        try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", flag, "true" }));
+        try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "markdown", "--format", "json", flag, "true" }));
+    }
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--manifest", "m", "--add", "x" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "render", "--from", "markdown", "--verify" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "serialize", "--from", "cooklang", "--add", "x" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "scale", "--from", "cooklang", "--servings", "2", "--manifest", "m", "--verify" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "menu", "--from", "cooklang", "--add", "x" }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "meta", "--from", "cooklang", "--format", "json", "--manifest", "m" }));
+
+    // The scoping is symmetric inside the filesystem commands too.
+    try testing.expectError(error.Usage, parseArgs(&.{
+        "plan",               "--content-dir", "c",            "--output-dir", "o",          "--template-dir", "t",         "--meta-dir", "m",
+        "--default-template", "d",             "--oliver-bin", "b",            "--root-dir", "r",              "--dry-run", "true",       "--verbose",
+        "false",              "--body",        "b",
+    }));
+    try testing.expectError(error.Usage, parseArgs(&.{ "manifest", "--manifest", "m", "--verify", "--content-dir", "c" }));
+    try testing.expectError(error.Usage, parseArgs(&.{
+        "wrap", "--template", "t", "--meta-json", "m", "--assets-root", "a", "--body", "b", "--add", "x",
+    }));
 }
 
 test "cli: --to is rejected on the non-HTML cooklang commands" {

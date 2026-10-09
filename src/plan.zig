@@ -32,6 +32,26 @@ fn countSlashes(s: []const u8) usize {
     return n;
 }
 
+/// The TSV is written unescaped: a `\t` or `\n` inside any column would
+/// corrupt the fixed 13-column record shape, so values containing either
+/// are rejected (see `run`).
+fn isTsvSafe(value: []const u8) bool {
+    return std.mem.indexOfAny(u8, value, "\t\n") == null;
+}
+
+/// The source path relative to `content_dir` (falling back to the
+/// basename when `src` does not sit under it).
+fn relPath(content_dir: []const u8, src: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, src, content_dir)) {
+        var start: usize = content_dir.len;
+        if (start < src.len and src[start] == '/') start += 1;
+        const rel = src[start..];
+        if (rel.len == 0) return std.fs.path.basename(src);
+        return rel;
+    }
+    return std.fs.path.basename(src);
+}
+
 fn upDirs(allocator: std.mem.Allocator, n: usize) ![]u8 {
     const out_len = n * 3; // "../" * n
     var buf = try allocator.alloc(u8, out_len);
@@ -46,8 +66,11 @@ fn upDirs(allocator: std.mem.Allocator, n: usize) ![]u8 {
 }
 
 /// Writes the 13-col TSV to `writer`. On basename collision prints to
-/// `diagnostics` and returns `error.Collision`. Diagnostic write failures
-/// return `error.StderrWriteFailed` so the CLI can name the failed stream.
+/// `diagnostics` and returns `error.Collision`. The record is emitted
+/// unescaped, so a flag value or source filename containing a tab or
+/// newline prints to `diagnostics` and returns `error.UnsafeTsvField`
+/// before any row is written. Diagnostic write failures return
+/// `error.StderrWriteFailed` so the CLI can name the failed stream.
 pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -63,6 +86,26 @@ pub fn run(
     writer: anytype,
     diagnostics: *std.Io.Writer,
 ) !void {
+    // The record is unescaped TSV: every column must be free of `\t` and
+    // `\n`. Reject unsafe flag values before touching the filesystem.
+    const passthroughs = [_]struct { name: []const u8, value: []const u8 }{
+        .{ .name = "--content-dir", .value = content_dir },
+        .{ .name = "--output-dir", .value = output_dir },
+        .{ .name = "--template-dir", .value = template_dir },
+        .{ .name = "--meta-dir", .value = meta_dir },
+        .{ .name = "--default-template", .value = default_template },
+        .{ .name = "--oliver-bin", .value = oliver_bin },
+        .{ .name = "--root-dir", .value = root_dir },
+        .{ .name = "--dry-run", .value = dry_run },
+        .{ .name = "--verbose", .value = verbose },
+    };
+    for (passthroughs) |p| {
+        if (!isTsvSafe(p.value)) {
+            diagnostics.print("oliver plan: {s} value contains a tab or newline; cannot emit a 13-column TSV record\n", .{p.name}) catch return error.StderrWriteFailed;
+            return error.UnsafeTsvField;
+        }
+    }
+
     // Open content_dir for walking.
     const content_dir_handle = std.Io.Dir.openDir(std.Io.Dir.cwd(), io, content_dir, .{ .iterate = true }) catch |err| {
         diagnostics.print("oliver plan: cannot open --content-dir {s}: {s}\n", .{ content_dir, @errorName(err) }) catch return error.StderrWriteFailed;
@@ -94,6 +137,16 @@ pub fn run(
         }
     }.less);
 
+    // Reject unsafe filenames before any row is written so a bad file
+    // never leaves a partial TSV behind.
+    for (srcs.items) |src| {
+        const rel = relPath(content_dir, src);
+        if (!isTsvSafe(rel)) {
+            diagnostics.print("oliver plan: source filename contains a tab or newline; cannot emit a 13-column TSV record: {s}\n", .{rel}) catch return error.StderrWriteFailed;
+            return error.UnsafeTsvField;
+        }
+    }
+
     var seen = std.StringHashMap([]const u8).init(gpa);
     defer {
         var it = seen.iterator();
@@ -105,15 +158,7 @@ pub fn run(
     }
 
     for (srcs.items) |src| {
-        var rel: []const u8 = undefined;
-        if (std.mem.startsWith(u8, src, content_dir)) {
-            var start: usize = content_dir.len;
-            if (start < src.len and src[start] == '/') start += 1;
-            rel = src[start..];
-            if (rel.len == 0) rel = std.fs.path.basename(src);
-        } else {
-            rel = std.fs.path.basename(src);
-        }
+        const rel = relPath(content_dir, src);
 
         const base_with_ext = std.fs.path.basename(rel);
         const base = stripSourceExt(base_with_ext);
@@ -384,4 +429,74 @@ test "plan: collision abort" {
     defer diagnostics.deinit();
     try testing.expectError(error.Collision, run(testing.allocator, threaded, content_dir, output_dir, template_dir, meta_dir, "base.html", "/bin/oliver", base, "false", "false", &aw.writer, &diagnostics.writer));
     try testing.expect(std.mem.indexOf(u8, diagnostics.written(), "basename collision") != null);
+}
+
+test "plan: tab/newline in flag values and filenames is rejected" {
+    // The record is unescaped TSV: a `\t` or `\n` inside any column would
+    // corrupt the fixed 13-column shape, so the values are rejected
+    // before any row is written (issue #160).
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer testing.allocator.free(base);
+    const content_dir = try std.fs.path.join(testing.allocator, &.{ base, "content" });
+    defer testing.allocator.free(content_dir);
+    const output_dir = try std.fs.path.join(testing.allocator, &.{ base, "out" });
+    defer testing.allocator.free(output_dir);
+    const template_dir = try std.fs.path.join(testing.allocator, &.{ base, "templates" });
+    defer testing.allocator.free(template_dir);
+    const meta_dir = try std.fs.path.join(testing.allocator, &.{ base, "meta" });
+    defer testing.allocator.free(meta_dir);
+    var io = std.Io.Threaded.init(testing.allocator, .{});
+    defer io.deinit();
+    const threaded = io.io();
+    try std.Io.Dir.cwd().createDirPath(threaded, content_dir);
+    try std.Io.Dir.cwd().createDirPath(threaded, template_dir);
+    try std.Io.Dir.cwd().createDirPath(threaded, meta_dir);
+    {
+        const p = try std.fs.path.join(testing.allocator, &.{ content_dir, "ok.md" });
+        defer testing.allocator.free(p);
+        var f = try std.Io.Dir.cwd().createFile(threaded, p, .{});
+        defer f.close(threaded);
+        try f.writeStreamingAll(threaded, "a");
+    }
+
+    // A tab/newline inside a flag value is rejected by name.
+    {
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        var diagnostics = std.Io.Writer.Allocating.init(testing.allocator);
+        defer diagnostics.deinit();
+        try testing.expectError(error.UnsafeTsvField, run(testing.allocator, threaded, content_dir, output_dir, template_dir, meta_dir, "base.html", "/bin/oliver", "root\tdir", "false", "false", &aw.writer, &diagnostics.writer));
+        try testing.expectEqualStrings("", aw.written());
+        try testing.expect(std.mem.indexOf(u8, diagnostics.written(), "--root-dir") != null);
+    }
+    {
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        var diagnostics = std.Io.Writer.Allocating.init(testing.allocator);
+        defer diagnostics.deinit();
+        try testing.expectError(error.UnsafeTsvField, run(testing.allocator, threaded, content_dir, output_dir, "tem\nplates", meta_dir, "base.html", "/bin/oliver", base, "false", "false", &aw.writer, &diagnostics.writer));
+        try testing.expectEqualStrings("", aw.written());
+        try testing.expect(std.mem.indexOf(u8, diagnostics.written(), "--template-dir") != null);
+    }
+
+    // A tab/newline inside a source filename is rejected before any row
+    // is written, leaving no partial TSV behind.
+    {
+        const bad = try std.fs.path.join(testing.allocator, &.{ content_dir, "tab\tname.md" });
+        defer testing.allocator.free(bad);
+        var f = try std.Io.Dir.cwd().createFile(threaded, bad, .{});
+        defer f.close(threaded);
+        try f.writeStreamingAll(threaded, "a");
+    }
+    {
+        var aw = std.Io.Writer.Allocating.init(testing.allocator);
+        defer aw.deinit();
+        var diagnostics = std.Io.Writer.Allocating.init(testing.allocator);
+        defer diagnostics.deinit();
+        try testing.expectError(error.UnsafeTsvField, run(testing.allocator, threaded, content_dir, output_dir, template_dir, meta_dir, "base.html", "/bin/oliver", base, "false", "false", &aw.writer, &diagnostics.writer));
+        try testing.expectEqualStrings("", aw.written());
+        try testing.expect(std.mem.indexOf(u8, diagnostics.written(), "source filename") != null);
+    }
 }

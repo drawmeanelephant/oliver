@@ -1,7 +1,8 @@
 //! Phase 6 S5 — `oliver manifest` (deduped manifest log).
 //!
 //! - `oliver manifest --manifest <file> --add <rel>` → dedup `grep -Fxq` then `>>`
-//!   (create parent dirs / touch if missing).
+//!   (create parent dirs / touch if missing; inserts a newline first when
+//!   the file is non-empty and lacks a trailing one).
 //! - `oliver manifest --manifest <file> --verify` → no-op 0 (future hook).
 //! - `oliver manifest --help` → usage.
 //!
@@ -67,12 +68,17 @@ pub fn run(
                 }
                 // Handle last line without trailing newline: already checked.
             }
-            // Not found — append at end.
+            // Not found — append at end. A non-empty file that does not
+            // end with a newline gets one inserted first so the new
+            // entry cannot glue onto the last existing line.
             const len = try file.length(io);
-            try file.writePositionalAll(io, rel, len);
-            // Ensure newline; if file was empty len==0, just add rel + "\n"
-            // If we wrote rel at len, now write "\n"
-            try file.writePositionalAll(io, "\n", len + rel.len);
+            var pos = len;
+            if (content.items.len > 0 and content.items[content.items.len - 1] != '\n') {
+                try file.writePositionalAll(io, "\n", pos);
+                pos += 1;
+            }
+            try file.writePositionalAll(io, rel, pos);
+            try file.writePositionalAll(io, "\n", pos + rel.len);
             break :blk true;
         } else {
             break :blk false;
@@ -160,6 +166,47 @@ test "manifest: --add creates file and dedups" {
         }
         try testing.expectEqualStrings("output/probe.html\noutput/other.html\n", content.items);
     }
+}
+
+test "manifest: --add onto a file without a trailing newline starts a new line" {
+    // Issue #157: appending at the raw file length used to glue the new
+    // entry onto the last existing line. A newline is inserted first.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer testing.allocator.free(base);
+    const manifest = try std.fs.path.join(testing.allocator, &.{ base, "manifest.txt" });
+    defer testing.allocator.free(manifest);
+
+    var io = std.Io.Threaded.init(testing.allocator, .{});
+    defer io.deinit();
+    const threaded = io.io();
+
+    {
+        var f = try std.Io.Dir.cwd().createFile(threaded, manifest, .{});
+        defer f.close(threaded);
+        try f.writeStreamingAll(threaded, "existing-line");
+    }
+    try run(testing.allocator, threaded, manifest, "new-rel", false);
+
+    var file = try std.Io.Dir.cwd().openFile(threaded, manifest, .{});
+    defer file.close(threaded);
+    var buf: [8192]u8 = undefined;
+    var content = std.ArrayList(u8).empty;
+    defer content.deinit(testing.allocator);
+    while (true) {
+        const n = file.readStreaming(threaded, &.{&buf}) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
+        if (n == 0) break;
+        try content.appendSlice(testing.allocator, buf[0..n]);
+    }
+    try testing.expectEqualStrings("existing-line\nnew-rel\n", content.items);
+
+    // Dedup still works line-exact against both entries.
+    try run(testing.allocator, threaded, manifest, "existing-line", false);
+    try run(testing.allocator, threaded, manifest, null, true);
 }
 
 test "manifest: --verify is no-op" {
