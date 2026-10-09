@@ -1673,9 +1673,9 @@ test "cli: wrap/plan/manifest flags are scoped to their own commands" {
 
     // The scoping is symmetric inside the filesystem commands too.
     try testing.expectError(error.Usage, parseArgs(&.{
-        "plan",           "--content-dir", "c", "--output-dir", "o",  "--template-dir", "t", "--meta-dir", "m",
-        "--default-template", "d",       "--oliver-bin",  "b", "--root-dir",  "r",  "--dry-run",     "true",
-        "--verbose",      "false",       "--body",        "b",
+        "plan",               "--content-dir", "c",            "--output-dir", "o",          "--template-dir", "t",         "--meta-dir", "m",
+        "--default-template", "d",             "--oliver-bin", "b",            "--root-dir", "r",              "--dry-run", "true",       "--verbose",
+        "false",              "--body",        "b",
     }));
     try testing.expectError(error.Usage, parseArgs(&.{ "manifest", "--manifest", "m", "--verify", "--content-dir", "c" }));
     try testing.expectError(error.Usage, parseArgs(&.{
