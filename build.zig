@@ -56,7 +56,7 @@ pub fn build(b: *std.Build) void {
     const run_cli_tests = b.addRunArtifact(cli_tests);
 
     const cli_run = b.addRunArtifact(cli);
-    cli_run.addPassthruArgs();
+    addPassthruArgs(b, cli_run);
     const run_step = b.step("run", "Run the oliver CLI");
     run_step.dependOn(&cli_run.step);
 
@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const spec_run = b.addRunArtifact(spec_tool);
-    spec_run.addPassthruArgs();
+    addPassthruArgs(b, spec_run);
     const spec_step = b.step("spec-conformance", "Run the CommonMark spec-conformance scorecard");
     spec_step.dependOn(&spec_run.step);
 
@@ -98,7 +98,7 @@ pub fn build(b: *std.Build) void {
     // tool itself defaults to the vendored corpus (pinned, digest-bound),
     // so a bare `zig build cooklang-conformance` runs the wall. Pass a
     // path to check a freshly fetched copy instead.
-    cook_run.addPassthruArgs();
+    addPassthruArgs(b, cook_run);
     const cook_step = b.step("cooklang-conformance", "Run the Cooklang canonical conformance scorecard");
     cook_step.dependOn(&cook_run.step);
 
@@ -242,12 +242,30 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_fuzz_tests.step);
 }
 
-/// Padded stdin inputs for the CLI read-limit test matrix. Zig 0.17
-/// removed `**` array-repeat; @splat fills them. Declared at container
-/// scope so the slices stored in the run steps point at static memory.
+/// Padded stdin inputs for the CLI read-limit test matrix. `@splat` fills
+/// arrays on both supported toolchains (0.16 and 0.17). Declared at
+/// container scope so the slices stored in the run steps point at static
+/// memory.
 const stdin_pad_8191: [8191]u8 = @splat(' ');
 const stdin_pad_8192: [8192]u8 = @splat(' ');
 const stdin_pad_8193: [8193]u8 = @splat(' ');
+
+/// Forward the build's passthrough arguments (`zig build <step> -- args`)
+/// onto a run step. Zig 0.16 exposes them at configure time as the
+/// `b.args` field; 0.17 removed that field in favor of
+/// `Step.Run.addPassthruArgs`, which captures the `--`-suffixed arguments
+/// at run time instead. The `comptime` condition keeps exactly one branch
+/// analyzed per toolchain, so each side only references APIs that exist
+/// there.
+fn addPassthruArgs(b: *std.Build, run: *std.Build.Step.Run) void {
+    if (comptime @hasField(std.Build, "args")) {
+        // Zig 0.16: b.args is null unless the invocation used `--`.
+        if (b.args) |args| run.addArgs(args);
+    } else {
+        // Zig 0.17: the run step pulls `--` arguments in itself.
+        run.addPassthruArgs();
+    }
+}
 
 /// The package version from build.zig.zon (single source of truth). Zig
 /// 0.17 exposes no Build API for it, so read the zon file at configure

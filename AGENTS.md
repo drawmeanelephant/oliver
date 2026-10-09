@@ -42,7 +42,11 @@ ABI (`include/oliver.h`).
 
 ## Build / test / gates
 
-Requires Zig 0.17.0 (CI pins it).
+Requires Zig 0.16.0 or 0.17.0 (CI exercises both; the zon floor is
+0.16.0). One build file serves both: `build.zig` branches at comptime on
+the presence of `std.Build.args` (removed in 0.17), and `src/c_abi.zig`
+spells ABI codes as an explicit switch instead of a version-dependent
+builtin. Keep both toolchains green when touching those seams.
 
 ```sh
 zig build                                    # library + CLI -> zig-out/

@@ -7,8 +7,18 @@ on:
 
 jobs:
   test:
-    name: fmt + tests + conformance gate
+    # The build deliberately supports both Zig 0.16.0 and 0.17.0 (see
+    # build.zig.zon's minimum_zig_version and the comptime dispatch in
+    # build.zig): 0.16 because pinned downstream consumers (boris) still
+    # build there, 0.17 as the current release. Both legs run the full
+    # gate; the fmt check runs on 0.17 only, whose formatter is the
+    # canonical style.
+    name: fmt + tests + conformance gate (${{ matrix.zig }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        zig: ["0.16.0", "0.17.0"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,12 +31,13 @@ jobs:
       # is the latest release and still declares a node20 runtime (GitHub
       # force-runs it on Node 24). Benign until mlugg publishes a node24
       # release; do not chase the warning by switching actions.
-      - name: Install Zig 0.17.0
+      - name: Install Zig ${{ matrix.zig }}
         uses: drawmeanelephant/zig-zouave@2d8510d62b517fa786279562cf8b1bdcf0c47b9f
         with:
-          version: 0.17.0
+          version: ${{ matrix.zig }}
 
       - name: Format check
+        if: matrix.zig == '0.17.0'
         run: zig fmt --check build.zig build.zig.zon src tests tools
 
       - name: Full test suite
@@ -57,3 +68,20 @@ jobs:
       # round-trips end to end (docs/C-ABI.md).
       - name: C ABI example (compile + run)
         run: zig build c-example-run
+
+  # The "Protect main" ruleset requires a check context with this exact
+  # name. Matrix legs report their own suffixed contexts, so this
+  # aggregate job re-exports the stable name and fails if any leg did —
+  # the matrix can grow (or shrink to one leg) without touching the
+  # ruleset.
+  gate:
+    name: fmt + tests + conformance gate
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all matrix legs green
+        run: |
+          result="${{ needs.test.result }}"
+          echo "matrix legs result: $result"
+          test "$result" = success

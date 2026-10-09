@@ -37,7 +37,9 @@ Details: [docs/CAPABILITIES.md](docs/CAPABILITIES.md) and
 
 ## Building and testing
 
-Requires Zig 0.17.0.
+Requires Zig 0.16.0 or 0.17.0 — both are exercised in CI (the
+[`minimum_zig_version`](build.zig.zon) floor is 0.16.0, the oldest
+verified toolchain).
 
 ```bash
 zig build test                                  # all test suites

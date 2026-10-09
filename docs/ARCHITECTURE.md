@@ -219,7 +219,8 @@ render and is not a Knap engine.
 ## Provisional decisions (revisit deliberately)
 
 - The renderer takes a plain `*std.Io.Writer`-compatible value (anytype
-  `writeAll`), which couples the library to the Zig 0.17 writer shape. The
+  `writeAll`), which couples the library to the Zig 0.16/0.17 writer
+  shape (identical in both supported toolchains). The
   C ABI (`src/c_abi.zig`, docs/C-ABI.md) provides the render-to-buffer
   path on top of it: `oliver_render` parses and renders into an owned,
   exactly-sized buffer through `std.Io.Writer.Allocating`.
