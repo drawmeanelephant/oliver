@@ -93,7 +93,10 @@ recorded here:
 - `key = value` with the same scalar vocabulary (TOML bare/quoted keys:
   `key`, `"key"`, `'key'`).
 - `[table]` headers open a nested map; `[[array-of-tables]]` headers
-  open a list of maps.
+  open a list of maps. Re-opening a `[[name]]` after intervening
+  entries appends a fresh map to *that* entry's list (and re-opening a
+  `[name]` re-enters the matching map) — headers are absolute, so the
+  target is always found by key lookup, never by position (#146).
 - Dotted keys (`a.b = 1`), multi-line strings, dates, and inline tables
   (`a = { x = 1 }`) are outside the subset.
 
@@ -159,7 +162,9 @@ pub const Value = union(enum) {
 - YAML subset fixtures: scalars (bare/quoted/typed), lists, nested maps,
   comments, empty front matter `---\n---` (must not panic — the CK2 fix
   is the precedent), `+++`/`---` fence correctness.
-- TOML fixtures: `key = value`, `[table]`, `[[array-of-tables]]`.
+- TOML fixtures: `key = value`, `[table]`, `[[array-of-tables]]`,
+  including `[[array]]` re-opens after a `[table]` and after another
+  array (`frontmatter-toml-reopen-table` / `-reopen-array`, #146).
 - Out-of-subset fixture: payload stays raw + `frontmatter-parse-unsupported`.
 - Unclosed-opener fixture: bytes pass through, `---` degrades to a
   thematic break (`frontmatter-unclosed`), and `unclosed-frontmatter`

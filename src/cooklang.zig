@@ -110,6 +110,9 @@ pub const Ingredient = struct {
 pub const Cookware = struct {
     name: []const u8,
     name_span: source.Span,
+    /// The whole `{}` content, trimmed — cookware has no `%units`
+    /// segment per the spec, so `#lid{1%large}` keeps `1%large` as its
+    /// quantity text rather than dropping bytes.
     quantity: ?[]const u8,
     quantity_span: source.Span,
     numeric: ?Quantity,
@@ -801,12 +804,15 @@ fn scanLineRange(ps: *ParaState, para: []const source.Span, li: usize, start: us
                     try ps.appendText(text_start, i);
                     emitted = true;
                 }
-                // Resume after `-]`; it may be on a later line.
+                // Resume after `-]`; it may be on a later line. When
+                // the close lands exactly on a line's content end the
+                // resume point is the *next* line's first content byte
+                // — the line terminator is trivia, never step text.
                 var next_line = li;
                 while (next_line + 1 < para.len and close + 2 >= para[next_line].end) next_line += 1;
                 return .{
                     .next_line = next_line,
-                    .next_offset = @intCast(close + 2),
+                    .next_offset = @intCast(@max(close + 2, para[next_line].start)),
                     .emitted = emitted,
                     .broke = false,
                 };
@@ -983,18 +989,23 @@ fn tryToken(ps: *ParaState, marker_pos: usize, line_end: usize) ParseError!?Toke
         const name = bytes[name_tr.s..name_tr.e];
 
         const content_start = b + 1;
-        const pct = findScalar(bytes, content_start, close, '%');
+        // `%units` is an ingredient/timer segment — cookware has no
+        // units per the spec, so `%` inside cookware braces is ordinary
+        // quantity text (kept verbatim; nothing is silently dropped).
+        const pct = if (kind == .cookware) null else findScalar(bytes, content_start, close, '%');
         const qr = if (pct) |p| trimRegion(bytes, content_start, p) else trimRegion(bytes, content_start, close);
         const ur: Trimmed = if (pct) |p| trimRegion(bytes, p + 1, close) else .{ .s = close, .e = close };
         const quantity: ?[]const u8 = if (qr.s < qr.e) bytes[qr.s..qr.e] else "";
         const units: ?[]const u8 = if (ur.s < ur.e) bytes[ur.s..ur.e] else "";
         const numeric: ?Quantity = if (quantity.?.len > 0) parseQuantity(quantity.?) else null;
 
-        // Shorthand preparation: an immediate `(...)` after the `}`.
+        // Shorthand preparation: an immediate `(...)` after the `}` —
+        // ingredient-only per the spec, so on cookware and timers the
+        // paren group is ordinary trailing text.
         var preparation: ?[]const u8 = null;
         var preparation_span: source.Span = .{ .start = @intCast(close + 1), .end = @intCast(close + 1) };
         var token_end = close + 1;
-        if (token_end < line_end and bytes[token_end] == '(') {
+        if (kind == .ingredient and token_end < line_end and bytes[token_end] == '(') {
             if (findScalar(bytes, token_end + 1, line_end, ')')) |pc| {
                 const pr = trimRegion(bytes, token_end + 1, pc);
                 preparation = bytes[pr.s..pr.e];
@@ -1232,6 +1243,23 @@ fn isDigits(text: []const u8) bool {
         if (c < '0' or c > '9') return false;
     }
     return true;
+}
+
+/// Writes `text` to `writer` with every NUL (U+0000) byte replaced by
+/// U+FFFD — the project's policy for text serializations (the HTML
+/// renderers apply the same replacement at their escaping seam; issue
+/// #56). The parser keeps NUL opaque in payloads (docs/COOKLANG.md §4),
+/// so serializers neutralize it on the way out rather than emitting a
+/// corrupt stream for editors, diff, and TSV tooling.
+pub fn writeTextSanitized(writer: anytype, text: []const u8) !void {
+    var start: usize = 0;
+    for (text, 0..) |c, i| {
+        if (c != 0) continue;
+        try writer.writeAll(text[start..i]);
+        try writer.writeAll("\xEF\xBF\xBD");
+        start = i + 1;
+    }
+    try writer.writeAll(text[start..]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1528,6 +1556,56 @@ test "cooklang: block comments are opaque across blank lines and block markers (
     try std.testing.expectEqualStrings("Visible", res.recipe.blocks[1].section.name);
     try std.testing.expectEqualStrings("pepper", res.recipe.blocks[1].section.blocks[0].step.parts[0].ingredient.name);
     try std.testing.expectEqual(@as(usize, 0), res.diagnostics.len);
+}
+
+test "cooklang: block comment closing at line end leaks no newline (issue #159)" {
+    // A `-]` landing exactly on a line's content end resumes at the next
+    // line's first content byte — the terminator is trivia, so the join
+    // produces a space, not a raw `\n` inside the text value.
+    for ([_][]const u8{ "x [- a\n-]\ny\n", "x [- a\r\n-]\r\ny\r\n", "x [- a\r-]\ry\r" }) |input| {
+        var res = try parseT(std.testing.allocator, input);
+        defer res.deinit();
+        try std.testing.expectEqual(@as(usize, 1), res.recipe.blocks.len);
+        const step = res.recipe.blocks[0].step;
+        try std.testing.expectEqual(@as(usize, 1), step.parts.len);
+        try std.testing.expectEqualStrings("x  y", step.parts[0].text.text);
+    }
+    // Closing at the very end of the step is fine too.
+    var res = try parseT(std.testing.allocator, "x [- a\n-]");
+    defer res.deinit();
+    try std.testing.expectEqualStrings("x ", res.recipe.blocks[0].step.parts[0].text.text);
+}
+
+test "cooklang: preparations and %units are not consumed on non-ingredients (issue #167)" {
+    // Per the spec, `(preparation)` attaches to ingredients only and
+    // cookware has no `%units` — so the bytes stay literal instead of
+    // being silently dropped: `(soft)`/`(big)` are trailing text and
+    // `1%large` is the cookware quantity text.
+    var res = try parseT(std.testing.allocator, "Fry ~eggs{3%minutes}(soft) in #pan{2}(big) with #lid{1%large}");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try expectParts(step.parts, &.{ "eggs", "pan", "lid" });
+    const tm = step.parts[1].timer;
+    try std.testing.expectEqualStrings("eggs", tm.name);
+    try std.testing.expectEqualStrings("3", tm.quantity.?);
+    try std.testing.expectEqualStrings("minutes", tm.units.?);
+    try std.testing.expectEqualStrings("(soft) in ", step.parts[2].text.text);
+    const pan = step.parts[3].cookware;
+    try std.testing.expectEqualStrings("2", pan.quantity.?);
+    try std.testing.expectEqualStrings("(big) with ", step.parts[4].text.text);
+    const lid = step.parts[5].cookware;
+    try std.testing.expectEqualStrings("1%large", lid.quantity.?);
+    try std.testing.expect(lid.numeric == null);
+
+    // No warning fires: `(` after a non-ingredient token is ordinary
+    // text, not an unclosed preparation.
+    var res2 = try parseT(std.testing.allocator, "#pan{2}(big and ~t{5}(x");
+    defer res2.deinit();
+    try std.testing.expectEqual(@as(usize, 0), res2.diagnostics.len);
+    // Ingredient preparations are unchanged.
+    var res3 = try parseT(std.testing.allocator, "@onion{1}(peeled)");
+    defer res3.deinit();
+    try std.testing.expectEqualStrings("peeled", res3.recipe.blocks[0].step.parts[0].ingredient.preparation.?);
 }
 
 test "cooklang: comment boundary lookahead respects opaque tokens notes and line comments" {

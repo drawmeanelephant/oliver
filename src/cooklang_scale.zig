@@ -384,8 +384,9 @@ fn pow10(k: u32) u128 {
 /// denominator (spaces around the slash allowed, per the corpus), or
 /// a mixed number `a b/c` (whole + proper fraction). This mirrors
 /// `classifyQuantity` / `parseQuantity` acceptance but exactly — no f64.
-/// Null when not canonical or when the exact rational exceeds 64-bit
-/// bounds.
+/// Null when not canonical or when the exact rational is not
+/// representable in u128 arithmetic (a decimal's `int·10^k + frac`
+/// accumulate is overflow-checked, like the `mul` guard).
 fn rationalOf(text: []const u8) ?Rational {
     if (canonicalU64(text)) |v| return Rational.of(v, 1);
     if (std.mem.indexOfScalar(u8, text, '.')) |d| {
@@ -395,8 +396,16 @@ fn rationalOf(text: []const u8) ?Rational {
         const ipv = canonicalU64(ip) orelse return null;
         const fpv = parseDigitsU64(fp) orelse return null;
         const k: u32 = @intCast(fp.len);
+        // The exact rational is unrepresentable when 10^k exceeds u128
+        // (k > 38, reachable since a leading-zero fraction parses to a
+        // small fpv at any length) or when ipv * 10^k + fpv overflows —
+        // callers then keep the original (never a wrong number), the
+        // same contract as the `mul` guard.
+        if (k > 38) return null;
         const p = pow10(k);
-        return reduce(.{ .num = @as(u128, ipv) * p + fpv, .den = p });
+        const scaled = std.math.mul(u128, @as(u128, ipv), p) catch return null;
+        const num = std.math.add(u128, scaled, fpv) catch return null;
+        return reduce(.{ .num = num, .den = p });
     }
     if (cooklang.parseMixedNumber(text)) |m| {
         const whole_part = std.math.mul(u64, m.whole, m.den) catch return null;
@@ -721,4 +730,49 @@ test "cooklang scale: changed flag distinguishes rewrite from passthrough" {
     try std.testing.expectEqual(QuantityClass.scalable, mixed.class);
     try std.testing.expect(!mixed.changed);
     try std.testing.expect(mixed.scaled.ptr == mixed.original.ptr);
+}
+
+test "cooklang scale: decimal rationals beyond u128 bounds are unchanged, never a panic (issue #147)" {
+    const allocator = std.testing.allocator;
+    const id: ScaleFactor = .{ .num = 1, .den = 1 };
+    const dbl: ScaleFactor = .{ .num = 2, .den = 1 };
+
+    // ipv * 10^k overflows u128 (u64-max integer part, 20-digit
+    // fraction): the exact rational is unrepresentable, so the amount
+    // passes through unchanged — the same contract as the `mul` guard.
+    var huge = try scaleAmount(allocator, "18446744073709551615.00000000000000000000", dbl);
+    defer huge.deinit(allocator);
+    try std.testing.expectEqual(QuantityClass.scalable, huge.class);
+    try std.testing.expect(!huge.changed);
+    try std.testing.expect(huge.scaled.ptr == huge.original.ptr);
+
+    var huge2 = try scaleAmount(allocator, "9999999999999999999.00000000000000000000", dbl);
+    defer huge2.deinit(allocator);
+    try std.testing.expect(!huge2.changed);
+
+    // More than 38 fractional digits: 10^k itself exceeds u128 (a
+    // leading-zero fraction keeps fpv small at any length, so the bound
+    // is on k, not fpv).
+    var digits = try scaleAmount(allocator, "0.00000000000000000000000000000000000000001", id);
+    defer digits.deinit(allocator);
+    try std.testing.expectEqual(QuantityClass.scalable, digits.class);
+    try std.testing.expect(!digits.changed);
+    try std.testing.expect(digits.scaled.ptr == digits.original.ptr);
+
+    // The factor surface rejects the same shapes instead of panicking.
+    try std.testing.expectError(error.InvalidScaleFactor, parseFactor("18446744073709551615.18446744073709551615"));
+    try std.testing.expectError(error.InvalidScaleFactor, parseFactor("1.00000000000000000000000000000000000000001"));
+
+    // The whole-recipe path (servings mode here) leaves the quantity
+    // unchanged and emits the original text.
+    const out = try scaleT(allocator, "@x{18446744073709551615.00000000000000000000%g}", .{ .servings = 2 });
+    defer allocator.free(out);
+    try std.testing.expectEqualStrings("@x{18446744073709551615.00000000000000000000%g}\n", out);
+
+    // Boundary control: the largest representable decimal still parses
+    // and scales — 18446744073709551615.999999999999 x 1 is exact.
+    var edge = try scaleAmount(allocator, "18446744073709551615.999999999999", id);
+    defer edge.deinit(allocator);
+    try std.testing.expect(edge.changed);
+    try std.testing.expectEqualStrings("18446744073709551615.999999999999", edge.scaled);
 }

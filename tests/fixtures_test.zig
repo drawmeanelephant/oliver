@@ -1661,6 +1661,22 @@ const markdown_fm_fixtures = [_]MarkdownFmFixture{
         .input = @embedFile("fixtures/markdown/frontmatter-unclosed.md"),
         .expected = @embedFile("fixtures/markdown/frontmatter-unclosed.html"),
     },
+    // Issue #146: re-opening `[[a]]` appends to a's own list — after a
+    // `[table]` (used to panic) and after another array (used to append
+    // to the wrong list). The metadata tree itself is pinned by the
+    // frontmatter.zig unit tests; these pairs prove the full pipeline.
+    .{
+        .name = "frontmatter-toml-reopen-table",
+        .mode = .toml,
+        .input = @embedFile("fixtures/markdown/frontmatter-toml-reopen-table.md"),
+        .expected = @embedFile("fixtures/markdown/frontmatter-toml-reopen-table.html"),
+    },
+    .{
+        .name = "frontmatter-toml-reopen-array",
+        .mode = .toml,
+        .input = @embedFile("fixtures/markdown/frontmatter-toml-reopen-array.md"),
+        .expected = @embedFile("fixtures/markdown/frontmatter-toml-reopen-array.html"),
+    },
 };
 
 // Textile frontmatter fixture pair (docs/FRONTMATTER.md §10): parsed with
