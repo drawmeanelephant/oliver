@@ -29,7 +29,12 @@ stack_bottom"). When the spliced range's last item extends past the
 closing paren/`]` (e.g. `[foo](/uri) and more`), its tail is re-appended
 as literal text **after** the shrink that consumes the construct — a bug
 that previously dropped all inline content after a link (`table-inline-content`
-and `link-trailing-text` fixtures lock this). Reference links required a two-phase restructure: link
+and `link-trailing-text` fixtures lock this). If that straddling item is
+itself a construct (code span, autolink, raw HTML) whose opener lies inside
+the consumed link, it is dropped whole rather than truncated: left-to-right,
+the link forms before the construct's opener is ever scanned, so the
+construct could never have started — its tail past the link's end reverts
+to literal text (`link-straddle` fixture locks this). Reference links required a two-phase restructure: link
 reference definitions (§4.7) are collected during the block pass (before
 any inline parsing, since a use may precede its definition), and the
 inline pass then resolves the full `[text][label]`, collapsed `[text][]`,

@@ -3159,24 +3159,6 @@ fn itemSpan(item: InlineItem) source.Span {
     };
 }
 
-/// Mutates the source range of any item (every variant carries a span).
-fn setItemSpan(item: *InlineItem, span: source.Span) void {
-    switch (item.*) {
-        .text => |*s| s.* = span,
-        .delimiter => |*d| d.span = span,
-        .brk => |*b| b.span = span,
-        .code_span => |*c| c.span = span,
-        .bracket => |*b| b.span = span,
-        .link => |*l| l.span = span,
-        .image => |*im| im.span = span,
-        .autolink => |*a| a.span = span,
-        .raw_html => |*h| h.span = span,
-        .footnote => |*fn_| fn_.span = span,
-        .wikilink => |*wk| wk.span = span,
-        .task_checkbox => |*tc| tc.span = span,
-    }
-}
-
 /// A code span discovered by `discoverCodeSpans`. Spans are disjoint and
 /// sorted by `span.start`.
 const CodeSpan = struct {
@@ -3922,8 +3904,12 @@ fn discoverLinksAndImages(
                     // Consume the `(...)` items: everything after the `]` up
                     // to (not including) the closing paren. The last
                     // consumed item may extend past the closing paren (e.g.
-                    // `[foo](/uri) and more`) — truncate it so its tail
-                    // stays literal text after the construct. The tail is
+                    // `[foo](/uri) and more`) — its tail stays literal text
+                    // after the construct. When that item is itself a
+                    // construct (code span, autolink, raw HTML) whose opener
+                    // lies inside the consumed link, the whole item is
+                    // dropped: left-to-right, the link forms first and the
+                    // construct could never have started (§6.3). The tail is
                     // re-appended *after* the shrink below, which otherwise
                     // would clobber it (bug: trailing text after an inline
                     // link was dropped).
@@ -3931,7 +3917,7 @@ fn discoverLinksAndImages(
                     while (j < old.len and itemSpan(old[j]).start < lp.paren_end) : (j += 1) {}
                     const keep_tail = j > i + 1 and itemSpan(old[j - 1]).end > lp.paren_end;
                     if (keep_tail) {
-                        setItemSpan(&old[j - 1], .{ .start = lp.paren_end, .end = itemSpan(old[j - 1]).end });
+                        old[j - 1] = .{ .text = .{ .start = lp.paren_end, .end = itemSpan(old[j - 1]).end } };
                     }
 
                     out.shrinkRetainingCapacity(o);
@@ -3984,12 +3970,13 @@ fn discoverLinksAndImages(
                     if (try tryResolveReference(doc, defs, text)) |def| {
                         var children = std.ArrayList(InlineItem).empty;
                         try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
+                        demoteWikilinks(&children); // wikilinks stay literal inside link text
 
                         var j = i + 1;
                         while (j < old.len and itemSpan(old[j]).start < close_end + 2) : (j += 1) {}
                         const keep_tail = j > i + 1 and itemSpan(old[j - 1]).end > close_end + 2;
                         if (keep_tail) {
-                            setItemSpan(&old[j - 1], .{ .start = close_end + 2, .end = itemSpan(old[j - 1]).end });
+                            old[j - 1] = .{ .text = .{ .start = close_end + 2, .end = itemSpan(old[j - 1]).end } };
                         }
 
                         out.shrinkRetainingCapacity(o);
@@ -4031,13 +4018,14 @@ fn discoverLinksAndImages(
                     if (try tryResolveReference(doc, defs, lab.content)) |def| {
                         var children = std.ArrayList(InlineItem).empty;
                         try children.appendSlice(doc.allocator(), out.items[o + 1 ..]);
+                        demoteWikilinks(&children); // wikilinks stay literal inside link text
 
                         // Consume items covering the label `[...]`.
                         var j = i + 1;
                         while (j < old.len and itemSpan(old[j]).start < lab.after) : (j += 1) {}
                         const keep_tail = j > i + 1 and itemSpan(old[j - 1]).end > lab.after;
                         if (keep_tail) {
-                            setItemSpan(&old[j - 1], .{ .start = @intCast(lab.after), .end = itemSpan(old[j - 1]).end });
+                            old[j - 1] = .{ .text = .{ .start = @intCast(lab.after), .end = itemSpan(old[j - 1]).end } };
                         }
 
                         out.shrinkRetainingCapacity(o);

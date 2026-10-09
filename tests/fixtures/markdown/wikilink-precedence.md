@@ -7,3 +7,7 @@
 A [b [[c]] d](/url) keeps the wikilink literal inside its link text.
 
 `[[nope]]` in a code span and <http://x/[[nope]]> in an autolink stay literal.
+
+A [b [[c]] d][l] keeps the wikilink literal inside a full-reference link's text too.
+
+[l]: /url
