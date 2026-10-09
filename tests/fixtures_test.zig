@@ -158,6 +158,16 @@ const markdown_fixtures = [_]MarkdownFixture{
         .expected = @embedFile("fixtures/markdown/html-block-type6.html"),
     },
     .{
+        .name = "html-block-type6-eol",
+        .input = @embedFile("fixtures/markdown/html-block-type6-eol.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type6-eol.html"),
+    },
+    .{
+        .name = "html-block-type6-case",
+        .input = @embedFile("fixtures/markdown/html-block-type6-case.md"),
+        .expected = @embedFile("fixtures/markdown/html-block-type6-case.html"),
+    },
+    .{
         .name = "html-block-type7",
         .input = @embedFile("fixtures/markdown/html-block-type7.md"),
         .expected = @embedFile("fixtures/markdown/html-block-type7.html"),
@@ -1449,6 +1459,11 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/table-literal.md"),
         .expected = @embedFile("fixtures/markdown/table-literal.html"),
     },
+    .{
+        .name = "table-delimiter-needs-pipe",
+        .input = @embedFile("fixtures/markdown/table-delimiter-needs-pipe.md"),
+        .expected = @embedFile("fixtures/markdown/table-delimiter-needs-pipe.html"),
+    },
     // Unrendered Knap source is CommonMark: `{{ }}` / `{% %}` / `{# #}`
     // stay literal text. Knap is not a frontend (docs/KNAP.md).
     .{
@@ -1484,6 +1499,11 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .name = "ext-heading-ids",
         .input = @embedFile("fixtures/markdown/ext-heading-ids.md"),
         .expected = @embedFile("fixtures/markdown/ext-heading-ids.html"),
+    },
+    .{
+        .name = "ext-heading-attrs-empty",
+        .input = @embedFile("fixtures/markdown/ext-heading-attrs-empty.md"),
+        .expected = @embedFile("fixtures/markdown/ext-heading-attrs-empty.html"),
     },
     .{
         .name = "ext-strikethrough",
