@@ -1,17 +1,22 @@
 //! Phase 6 S3 — native link rewriting for `oliver render`.
 //!
-//! Rewrites internal `href`/`src` values ending in `.md`/`.textile`/`.cook`
-//! to `.html`, preserving `?` query and `#` fragment tails, stripping
-//! `<>`/`%3C`/`&lt;` wrappers, and skipping external `://` and `mailto:`.
+//! Rewrites internal `href`/`src` path components ending in
+//! `.md`/`.textile`/`.cook` to `.html`, preserving `?` query and
+//! `#` fragment tails, stripping `<>`/`%3C`/`&lt;` wrappers, and skipping
+//! external absolute URIs (any `scheme:` form, `mailto:` included) and
+//! fragment-only `#…` / query-only `?…` references.
 //!
 //! The transform is a post-parse, pre-render walk over `document.Document`
 //! leaves (`.link.href`, `.image.src`), not a regex over rendered HTML,
-//! so `href=` inside code spans is never mangled. Percent-encoding is left
-//! to `html.zig:writeEscapedHref`.
+//! so `href=` inside code spans is never mangled. `.wikilink` leaves are
+//! not rewritten: their targets are names a `wikilink_resolver` maps to
+//! hrefs at render time, not URLs (docs/WIKILINKS.md §5). Percent-encoding
+//! is left to `html.zig:writeEscapedHref`.
 //!
-//! Rules are byte-exact with `bones/scripts/rc-oliver-adapter.sh:288-353`
-//! (GAWK fallback) so the harness flips `OLIVER_REWRITES=true` and skips
-//! the GAWK pass once this ships.
+//! Rules track `bones/scripts/rc-oliver-adapter.sh:288-353` (GAWK
+//! fallback), tightened where the regex pass corrupted URLs the AST walk
+//! can see whole: only the path component is rewritten, and `scheme:/`
+//! single-slash forms count as external.
 
 const std = @import("std");
 const oliver = @import("oliver");
@@ -19,19 +24,18 @@ const document = oliver.document;
 
 /// Returns true when `url` is external and must not be rewritten.
 ///
-/// External is `mailto:` or a URI scheme `://` (`^[a-zA-Z][a-zA-Z0-9+.-]*://`).
-/// Matches the GAWK `if (target ~ /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\// || target ~ /^mailto:/)`.
+/// External is any absolute URI — a `scheme:` prefix matching
+/// `^[a-zA-Z][a-zA-Z0-9+.-]*:`. That covers `scheme://`, the single-slash
+/// `scheme:/` forms browsers normalize to `scheme://`, and opaque schemes
+/// such as `mailto:`/`data:`/`tel:`. A relative reference cannot contain
+/// a colon in its first path segment, so `./`/`../`/bare source paths
+/// still return false.
 pub fn isExternal(url: []const u8) bool {
-    if (std.mem.startsWith(u8, url, "mailto:")) return true;
-    if (std.mem.indexOf(u8, url, "://")) |idx| {
-        if (idx == 0) return false;
-        const scheme = url[0..idx];
-        if (!std.ascii.isAlphabetic(scheme[0])) return false;
-        for (scheme[1..]) |c| {
-            const ok = std.ascii.isAlphanumeric(c) or c == '+' or c == '-' or c == '.';
-            if (!ok) return false;
-        }
-        return true;
+    if (url.len == 0 or !std.ascii.isAlphabetic(url[0])) return false;
+    for (url[1..]) |c| {
+        if (c == ':') return true;
+        const ok = std.ascii.isAlphanumeric(c) or c == '+' or c == '-' or c == '.';
+        if (!ok) return false;
     }
     return false;
 }
@@ -80,10 +84,13 @@ pub fn stripWrappers(url: []const u8) []const u8 {
 ///
 /// - Strips wrappers via `stripWrappers`.
 /// - Returns the stripped URL unchanged when `isExternal`.
-/// - Otherwise, when the URL contains `.md`/`.textile`/`.cook` before
-///   `?`, `#`, or end-of-string, splices that suffix to `.html` plus tail.
-/// - Only the first qualifying occurrence per suffix is replaced, in the
-///   GAWK order `.md` → `.textile` → `.cook`.
+/// - Splits the URL into a path component and a `?`/`#` tail; only the
+///   path is rewritten. Fragment-only `#…` and query-only `?…` references
+///   have an empty path and are left alone, and a suffix inside a tail
+///   (`foo#bar.md`) is not a path suffix.
+/// - When the path ends in `.md`/`.textile`/`.cook`, splices that suffix
+///   to `.html` plus the tail. Only the last path component's suffix
+///   qualifies, checked in the GAWK order `.md` → `.textile` → `.cook`.
 ///
 /// When a rewrite occurs the result is allocated with `allocator`; otherwise
 /// the returned slice aliases `url` (no allocation). The caller is responsible
@@ -96,26 +103,29 @@ pub fn rewriteUrl(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
         return stripped;
     }
 
+    const path_end = std.mem.indexOfAny(u8, stripped, "?#") orelse stripped.len;
+    const path = stripped[0..path_end];
+    const tail = stripped[path_end..];
+
     // Suffixes in GAWK order, longest first among the non-md? GAWK does
     // .md, .textile, .cook in that order.
     const suffixes = [_][]const u8{ ".md", ".textile", ".cook" };
     for (suffixes) |suffix| {
         var pos: usize = 0;
-        while (std.mem.indexOfPos(u8, stripped, pos, suffix)) |idx| {
+        while (std.mem.indexOfPos(u8, path, pos, suffix)) |idx| {
             const after = idx + suffix.len;
-            const is_boundary = after == stripped.len or (after < stripped.len and (stripped[after] == '?' or stripped[after] == '#'));
-            if (is_boundary) {
-                const base = stripped[0..idx];
-                const tail = stripped[after..];
+            if (after == path.len) {
+                const base = path[0..idx];
                 const out = try allocator.alloc(u8, base.len + 5 + tail.len);
                 @memcpy(out[0..base.len], base);
                 @memcpy(out[base.len .. base.len + 5], ".html");
                 @memcpy(out[base.len + 5 ..], tail);
                 return out;
             }
-            // Not a boundary (e.g. ".md/" ) → keep searching past this occurrence.
+            // Not at the end of the path (e.g. ".md/" ) → keep searching
+            // past this occurrence.
             pos = idx + 1;
-            if (pos >= stripped.len) break;
+            if (pos >= path.len) break;
         }
     }
 
@@ -125,10 +135,13 @@ pub fn rewriteUrl(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
 /// Walks `doc` and rewrites every `.link.href` and `.image.src` leaf via
 /// `rewriteUrl` with the document's arena allocator.
 ///
-/// Leaves `.html_block`/`.raw_html` verbatim (fail-closed XSS) and never
-/// touches text/code spans. Deterministic, arena-owned, and safe for both
-/// `html` and `xhtml` profiles — the caller runs it between `oliver.parse`
-/// and `oliver.html.render` (`src/main.zig:renderWithDiag`).
+/// Leaves `.html_block`/`.raw_html` verbatim (fail-closed XSS), never
+/// touches text/code spans, and does not visit `.wikilink` leaves — a
+/// wikilink target is a name the render-time `wikilink_resolver` maps to
+/// an href, not a URL (docs/WIKILINKS.md §5). Deterministic, arena-owned,
+/// and safe for both `html` and `xhtml` profiles — the caller runs it
+/// between `oliver.parse` and `oliver.html.render`
+/// (`src/main.zig:renderWithDiag`).
 pub fn rewriteDocument(doc: *document.Document) !void {
     var it = try document.Document.Iterator.init(doc.allocator(), doc.root);
     defer it.deinit();
@@ -189,6 +202,20 @@ test "rewrite: isExternal" {
     try testing.expect(!isExternal("//example.com/foo.md")); // protocol-relative is not scheme://
     try testing.expect(!isExternal("mailto")); // no colon
     try testing.expect(!isExternal("://foo")); // no scheme
+    // Any `scheme:` is an absolute URI (issue #158): the single-slash
+    // `https:/x` form browsers normalize to `https://x`, opaque schemes,
+    // and scheme-prefixed source-looking strings.
+    try testing.expect(isExternal("https:/example.com/foo.md"));
+    try testing.expect(isExternal("http:/x"));
+    try testing.expect(isExternal("tel:123"));
+    try testing.expect(isExternal("data:text/plain,x"));
+    try testing.expect(isExternal("a:b.md"));
+    // A colon in the query/fragment or a later path segment does not make
+    // a scheme: the first `: ? # /` ends the check.
+    try testing.expect(!isExternal("foo.md?v=a:b"));
+    try testing.expect(!isExternal("foo.md#a:b"));
+    try testing.expect(!isExternal("dir/x:y/foo.md"));
+    try testing.expect(!isExternal("1:2.md")); // scheme must start alpha
 }
 
 test "rewrite: stripWrappers" {
@@ -257,6 +284,53 @@ test "rewrite: fragment and query preserved" {
     {
         const out = try rewriteUrl(a, "a/b/c/foo.textile?x=1#y");
         try testing.expectEqualStrings("a/b/c/foo.html?x=1#y", out);
+    }
+}
+
+test "rewrite: only the path component is rewritten" {
+    // Issue #158: fragment-only and query-only references have an empty
+    // path and must be left alone; a suffix inside a tail is not a path
+    // suffix; a path suffix still rewrites with its tail preserved.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    {
+        const out = try rewriteUrl(a, "#foo.md");
+        try testing.expectEqualStrings("#foo.md", out);
+    }
+    {
+        const out = try rewriteUrl(a, "#");
+        try testing.expectEqualStrings("#", out);
+    }
+    {
+        const out = try rewriteUrl(a, "?q=foo.md");
+        try testing.expectEqualStrings("?q=foo.md", out);
+    }
+    {
+        const out = try rewriteUrl(a, "foo#bar.md");
+        try testing.expectEqualStrings("foo#bar.md", out);
+    }
+    {
+        const out = try rewriteUrl(a, "foo.md#bar.md");
+        try testing.expectEqualStrings("foo.html#bar.md", out);
+    }
+    {
+        const out = try rewriteUrl(a, "foo.md?next=bar.md");
+        try testing.expectEqualStrings("foo.html?next=bar.md", out);
+    }
+}
+
+test "rewrite: single-slash scheme is external" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    {
+        const out = try rewriteUrl(a, "https:/example.com/foo.md");
+        try testing.expectEqualStrings("https:/example.com/foo.md", out);
+    }
+    {
+        const out = try rewriteUrl(a, "data:text/plain,foo.md");
+        try testing.expectEqualStrings("data:text/plain,foo.md", out);
     }
 }
 

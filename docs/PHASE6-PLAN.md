@@ -136,9 +136,11 @@ oliver wrap --help  # must exit 0, print "Usage: oliver wrap --template ..."
 
 ### Rules (from contract + GAWK + harness)
 * Internal `href="foo.md"` → `href="foo.html"` (same for `src`). Preserve fragment `#sec` and query `?v=1` + `#f` tail. So `foo.md?v=1#f2` → `foo.html?v=1#f2`.
+* Only the path component is rewritten (issue #158): fragment-only `#…` and query-only `?…` references have an empty path and are left alone (`#foo.md` stays `#foo.md`), and a suffix inside a tail is not a path suffix (`foo#bar.md` stays `foo#bar.md`; `foo.md#bar` → `foo.html#bar`).
 * Strip `<>`/`%3C`/`&lt;`/`%3E`/`&gt;` wrapper before testing — the GAWK strips `^(\<|%3C|&lt;).*(>|%3E|&gt;)$`. At AST level the wrapper is already removed by `scanLink` (`"<url>"` → `url` without brackets), but keep a defensive strip for `raw_html` `<a href="...">` fallback if any.
-* Skip external `://` (`^[a-zA-Z][a-zA-Z0-9+.-]*://`) and `mailto:`.
-* Do **not** rewrite `https://example.com/docs.md` or `mailto:a@b` (harness asserts).
+* Skip external absolute URIs — any `scheme:` prefix (`^[a-zA-Z][a-zA-Z0-9+.-]*:`), which covers `scheme://`, the single-slash `scheme:/` forms browsers normalize to `scheme://` (issue #158), and opaque schemes such as `mailto:`/`data:`/`tel:`.
+* Do **not** rewrite `https://example.com/docs.md`, `https:/example.com/docs.md`, or `mailto:a@b` (harness asserts).
+* Do **not** visit `.wikilink` leaves: a wikilink target is a name the render-time `wikilink_resolver` maps to an href, not a URL (docs/WIKILINKS.md §5; issue #158 documents this `.link`-vs-wikilink asymmetry as deliberate).
 * Must be deterministic and respect `html.escape`/`percent_encode` already done in `writeEscapedHref`.
 
 ### Static vs. regex
@@ -149,9 +151,10 @@ oliver wrap --help  # must exit 0, print "Usage: oliver wrap --template ..."
   * `.html_block`/`.raw_html`: leave verbatim (fail-closed XSS risk if rewriting inside raw HTML). Only document-leaves are trusted.
 * Helper `rewriteUrl(allocator, url) []const u8`:
   ```
-  if startsWith "mailto:" or matches scheme:// → return url
+  if matches scheme: (any absolute URI) → return url
   strip angle wrappers
-  find “.md”/“.textile”/“.cook” before (?|#|$) → splice to “.html” + tail
+  split at first ?|# into path + tail
+  if path ends in “.md”/“.textile”/“.cook” → splice to “.html” + tail
   else return url
   ```
   Use owned copies in the arena (like `slugify` scratch) so the rewrite is arena-backed.
@@ -196,6 +199,7 @@ oliver plan \
 5. **`ASSETS_ROOT` depth:** if `reldir == "."` → `./assets/` else `depth = count('/') in reldir` → `ASSETS_ROOT = rk_up_dirs(depth+1) + "assets/"` where `rk_up_dirs(n) = "../" * n`. Example: `content/docs/x/y/foo.md` (`reldir=docs/x/y`, depth=2) → `../../../assets/`. `src/meta.zig` already not involved; keep helper `upDirs(allocator, depth) []const u8`.
 6. **`soul` derivation:** `soul = meta_dir / strip_source_ext(rel) + ".soul.md"` canonicalized; if file exists use its canonical path else `"NONE"` literal (the adapter tests `[[ "$soul_path" == "NONE" ]]`). Keep the `NONE` sentinel.
 7. **Passthrough cols 3/6/7/8/9/10/11/12/13:** `template = template_dir/default_template`, `oliver_bin = --oliver-bin`, `root = --root-dir`, etc. These are opaque; the plan just threads them so the adapter can `read -r src dst template assets_root soul oliver_bin …`.
+8. **TSV safety (issue #160):** the record is emitted unescaped, so a `\t` or `\n` inside any column would corrupt the fixed 13-column shape. `oliver plan` rejects flag values and source filenames containing either before any row is written (diagnostic on stderr, exit 1) — chosen over escaping so the wire stays byte-transparent.
 
 **Fallback:** probe `oliver plan --help` (must print usage). If probe fails, `rc-render.sh` falls back to the Bash loop. After the bump, plan always succeeds.
 
@@ -209,7 +213,7 @@ oliver manifest --manifest <file> --add <rel>   # dedup: grep -Fxq || echo >> fi
 oliver manifest --manifest <file> --verify      # (no-op today, but must exist)
 oliver manifest --help                          # prints usage
 ```
-* `--manifest` is required; `--add <rel>` appends `<rel>` (relative path `rel = "$MANIFEST_TSV" minus "$ROOT_DIR"/` or `output/probe.html`) only if not already present (line-exact `grep -Fxq`). Create `manifest` + parent dirs if missing (`touch`).
+* `--manifest` is required; `--add <rel>` appends `<rel>` (relative path `rel = "$MANIFEST_TSV" minus "$ROOT_DIR"/` or `output/probe.html`) only if not already present (line-exact `grep -Fxq`). Create `manifest` + parent dirs if missing (`touch`). When the file is non-empty and lacks a trailing newline, a `\n` is inserted before the new entry so it cannot glue onto the last existing line (issue #157).
 * `--verify` is a future hook; today it just exits 0 (the fake does `exit 0`).
 * No `--format`, no JSON — plain text, one rel per line.
 

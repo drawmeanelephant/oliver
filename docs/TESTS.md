@@ -184,7 +184,7 @@ sections below:
    complete/nonoverlapping manifest validation, malformed divergence-record
    rejection, outcome classification, and the single-trailing-newline
    comparison. These tests need no downloaded corpus.
-4. **CLI tests** — 45 tests in `src/main.zig`, plus 72 imported CLI-helper
+4. **CLI tests** — 47 tests in `src/main.zig`, plus 76 imported CLI-helper
    tests. Pure
    `parseArgs` unit tests (no allocator, no I/O) pinning the subcommand
    grammar (exactly one of `render`/`serialize`/`scale`/`menu`), flag
@@ -192,7 +192,8 @@ sections below:
    Markdown extension flags `--wikilinks`/`--callouts`/`--smartypants`/
    `--footnotes`/`--definition-lists`/`--heading-attributes`/
    `--strikethrough`/`--heading-ids` render+Markdown-only,
-   `--frontmatter yaml|toml` on any render frontend), the `--factor`
+   `--frontmatter yaml|toml` on any render frontend, and the
+   wrap/plan/manifest flag sets confined to their own commands), the `--factor`
    grammar (routed through `parseFactor` — decimals, mixed numbers,
    spaces around the slash accepted; leading zeros, over-u32 values
    rejected), duplicate value-flag rejection, dialect validation,
@@ -209,13 +210,13 @@ sections below:
    Eight CLI subprocess cases additionally check the stdin byte ceiling,
    including zero, exact-limit, and later-chunk overflow inputs.
 
-The current complete result is **504/504 tests passing** with Zig 0.16.0
+The current complete result is **510/510 tests passing** with Zig 0.16.0
 and 0.17.0 alike (CI runs the full gate on both; the CommonMark 652/652
 classified gate and the Cooklang 60/60 wall are also run under both
 toolchains).
 (335 library module tests — including 8 C-ABI tests over the exported
 `oliver_render`/`oliver_free` surface — + 18 fixture/adversarial tests + 7
-conformance-harness tests + 117 CLI and helper tests + 19 XHTML
+conformance-harness tests + 123 CLI and helper tests + 19 XHTML
 profile tests + 7 HTML 4.01 Strict profile tests + 1 fuzz wall).
 On top of the unit gate: the CommonMark
 0.31.2 corpus stays **652/652** with 0 mismatches (docs/README), the
