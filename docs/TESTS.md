@@ -325,8 +325,14 @@ under `std.testing.allocator`:
 - mixed LF, CRLF, and CR plus NUL bytes;
 - 10,000 repeated Setext/thematic transitions rendered twice and compared;
 - a 20,000-level list/thematic near-miss that exercises linear suffix
-  recognition, and a 2,000-level tab-nested list that exercises bounded
-  container matching (issue #150);
+  recognition, a 2,000-level tab-nested list that exercises bounded
+  container matching (issue #150), and a 2,000-deep list under a
+  10,000-blank-line flood (issue #184: container-span extension and
+  loose/tight marking are deferred, so blank lines are O(1) past the
+  match walk);
+- a 20,000/40,000-deep `[[` wikilink opener storm under `--wikilinks`
+  (issue #183: the `]]` closer search and the nested-`[[` content check
+  are memoized against a monotone scan position);
 - a 64-byte fence with 10,000 near closers and a 20,000-line unclosed literal
   block, each rendered twice.
 
