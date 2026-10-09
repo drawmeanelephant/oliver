@@ -125,6 +125,8 @@ Ingredient {
   span: Span,               // whole token (marker through closing })
 }
 Cookware { name, name_span, quantity: ?[]const u8, span }
+                            // whole {} content — no %units split (spec:
+                            // cookware has no units)
 Timer    { name, quantity: ?[]const u8, units: ?[]const u8, span }
 ```
 
@@ -203,7 +205,19 @@ src/cooklang.zig and/or fixtures, never an accident.
   marker-looking content inside a comment cannot create blocks. Token
   payloads, line comments, notes, and section titles retain their existing
   opaque/plain-text policies. Comment-close indexing and boundary scanning
-  are bounded passes; source spans still cover the original bytes.
+  are bounded passes; source spans still cover the original bytes. A `-]`
+  landing exactly on a line's content end resumes scanning at the next
+  line's first content byte — the terminator is trivia, so the following
+  line joins with a space rather than leaking a raw newline into the
+  text value (#159).
+- **Preparations and `%units` are kind-scoped.** The shorthand
+  `(preparation)` attaches to ingredients only, and `%` splits the
+  quantity only on ingredients and timers — per the spec, preparations
+  are ingredient-only and cookware has no units. On other kinds the
+  bytes are not consumed by the token: `~eggs{3%minutes}(soft)` is a
+  timer followed by the literal text `(soft)`, and `#lid{1%large}`
+  keeps `1%large` as its quantity text. Nothing is silently dropped,
+  and canonical serialization reproduces the source bytes (#167).
 - **Frontmatter** requires both fences: the file's first line must be
   `---` (trailing whitespace/CR allowed) and a later line must be
   exactly `---`. Without a closing fence, the opener is ordinary step
@@ -362,8 +376,15 @@ Canonical rules (as implemented):
 
 - Blocks render in order, separated by one blank line, ending with a
   single `\n`; front matter renders first as `---\n` + raw payload +
-  `---\n` (the payload passes through byte-for-byte — it is data, not
-  parsed).
+  `---\n` (the payload passes through — it is data, not parsed —
+  modulo the NUL policy below).
+- **No raw NUL bytes in the output.** The parser keeps NUL opaque in
+  payloads (§4), so every payload write — step text, token fields,
+  note text, section titles, front matter — replaces U+0000 with
+  U+FFFD on the way out, the same policy the HTML renderers apply at
+  their escaping seam (issues #56, #161). The internal reparse checks
+  run on the unsanitized text, so the safety fallback still compares
+  the model exactly.
 - A step renders its parts in order: text verbatim (text values are
   already join-normalized by the parser, so a multi-line step without
   forced breaks normally collapses to one line), tokens in canonical
@@ -525,11 +546,16 @@ Arithmetic and formatting policy:
   denominator has only 2 and 5 factors, which emits the exact
   terminating decimal (bounded at 12 fractional digits). Results whose
   exact representation would overflow 128-bit arithmetic are left
-  unchanged. Mixed numbers are a canonical **input** form; emission
-  stays integer / fraction / terminating decimal (no mixed-number
-  output). Examples: `1/2 × 2 = 1`, `1/2 × 3 = 3/2`, `1.5 × 3 =
-  4.5`, `1 1/2 × 2 = 3`, `0.1 × 4/3 = 2/15` (fraction, since 15 has a
-  3 factor).
+  unchanged. The decimal *parse* is bounds-checked the same way:
+  `int·10^k + frac` accumulates with overflow-checked arithmetic, and
+  a fraction longer than 38 digits (where 10^k itself exceeds u128) is
+  unrepresentable — the amount passes through unchanged, or
+  `parseFactor` rejects it with `error.InvalidScaleFactor`; never a
+  wrong number, never a panic (#147). Mixed numbers are a canonical
+  **input** form; emission stays integer / fraction / terminating
+  decimal (no mixed-number output). Examples: `1/2 × 2 = 1`, `1/2 × 3
+  = 3/2`, `1.5 × 3 = 4.5`, `1 1/2 × 2 = 3`, `0.1 × 4/3 = 2/15`
+  (fraction, since 15 has a 3 factor).
 - The frontmatter is passed through raw and unmodified: Oliver does not
   rewrite metadata, and the input recipe is never changed. Re-scaling
   the derived recipe is therefore the caller's responsibility.
@@ -563,7 +589,9 @@ the menu *structure* semantically:
 `oliver.cooklang_menu.menuView(allocator, &recipe) -> Menu` builds the
 view; `writeMenu` renders a deterministic plain-text dump (one line
 per day: `Day 1 (2026-03-07): ./breakfast/shakshuka{4%servings}`),
-shared by the `oliver menu --from cooklang` CLI and the fixtures.
+shared by the `oliver menu --from cooklang` CLI and the fixtures. The
+dump follows the same text-output policy as the canonical serializer:
+payload bytes replace NUL (U+0000) with U+FFFD (#161).
 
 Rules (pinned by tests):
 

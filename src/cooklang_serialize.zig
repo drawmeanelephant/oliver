@@ -14,8 +14,9 @@
 //!
 //! - Blocks render in order, separated by one blank line; the recipe ends
 //!   with a single `\n`. Front matter renders first as
-//!   `---\n` + raw payload + `---\n` (the payload is passed through
-//!   byte-for-byte — it is data, not parsed).
+//!   `---\n` + raw payload + `---\n` (the payload is passed through —
+//!   it is data, not parsed — modulo the NUL → U+FFFD output policy
+//!   below).
 //! - A step renders its parts in order: text verbatim (text values are
 //!   already join-normalized by the parser, so a multi-line step without
 //!   forced breaks normally collapses to one line), tokens in canonical form, and
@@ -35,6 +36,11 @@
 //! step's lexical boundaries are retained, with tokens still written in
 //! canonical form. This preserves line-local fallback without inventing
 //! an escape syntax or changing Cooklang token recognition.
+//!
+//! Output policy: the parser keeps NUL bytes opaque in payloads, so every
+//! payload write goes through `cooklang.writeTextSanitized` — NUL (U+0000)
+//! becomes U+FFFD, the same replacement the HTML renderers apply (issue
+//! #56). No `0x00` byte ever reaches the emitted `.cook` text.
 //!
 //! The serializer has no filesystem/network/global-state dependencies,
 //! like the rest of the core. See docs/COOKLANG.md §10 for the policy
@@ -56,7 +62,7 @@ pub fn serialize(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklan
 
     if (recipe.frontmatter) |fm| {
         try writer.writeAll("---\n");
-        try writer.writeAll(fm.raw);
+        try cooklang.writeTextSanitized(writer, fm.raw);
         try writer.writeAll("---\n");
     }
     try writeBlocks(gpa, writer, recipe, recipe.blocks, recipe.frontmatter != null);
@@ -80,13 +86,13 @@ fn writeBlock(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.R
             try writer.writeAll(">");
             if (note.text.len > 0) {
                 try writer.writeAll(" ");
-                try writer.writeAll(note.text);
+                try cooklang.writeTextSanitized(writer, note.text);
             }
             try writer.writeAll("\n");
         },
         .section => |section| {
             try writer.writeAll("= ");
-            try writer.writeAll(section.name);
+            try cooklang.writeTextSanitized(writer, section.name);
             try writer.writeAll("\n");
             try writeBlocks(gpa, writer, recipe, section.blocks, true);
         },
@@ -99,7 +105,7 @@ fn writeStep(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.Re
     for (step.parts) |part| try writePart(&canonical.writer, part);
     try canonical.writer.writeAll("\n");
     if (try stepMatches(gpa, canonical.written(), step)) {
-        try writer.writeAll(canonical.written());
+        try cooklang.writeTextSanitized(writer, canonical.written());
         return;
     }
 
@@ -126,7 +132,7 @@ fn writeStep(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.Re
     try lexical.writer.writeAll(bytes[cursor..step.span.end]);
     try lexical.writer.writeAll("\n");
     if (!try stepMatches(gpa, lexical.written(), step)) return error.UnrepresentableStep;
-    try writer.writeAll(lexical.written());
+    try cooklang.writeTextSanitized(writer, lexical.written());
 }
 
 fn stepMatches(gpa: std.mem.Allocator, text: []const u8, step: cooklang.Step) cooklang.ParseError!bool {
@@ -373,6 +379,46 @@ test "cooklang serialize: canonical spellings" {
     const e = try serializeT(std.testing.allocator, "");
     defer std.testing.allocator.free(e);
     try std.testing.expectEqualStrings("", e);
+}
+
+test "cooklang serialize: block comment at line end joins cleanly (issue #159)" {
+    // The comment is stripped and the step collapses to joined text —
+    // the close-at-line-end case used to leak a raw newline into the
+    // text value and fall back to the lexical (verbatim) path.
+    const out = try serializeT(std.testing.allocator, "x [- a\n-]\ny\n");
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("x  y\n", out);
+    // Round-trips: re-serializing the canonical output is stable.
+    const twice = try serializeT(std.testing.allocator, out);
+    defer std.testing.allocator.free(twice);
+    try std.testing.expectEqualStrings(out, twice);
+}
+
+test "cooklang serialize: non-ingredient preparations and units stay literal (issue #167)" {
+    // `(soft)`/`(big)` are trailing text and `1%large` is the cookware
+    // quantity text — every source byte survives serialization.
+    const input = "Fry ~eggs{3%minutes}(soft) in #pan{2}(big) with #lid{1%large}\n";
+    const out = try serializeT(std.testing.allocator, input);
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings(input, out);
+}
+
+test "cooklang serialize: NUL bytes emit U+FFFD, never raw 0x00 (issue #161)" {
+    // Same policy as the HTML renderers (issue #56): the parser keeps
+    // NUL opaque, so text output replaces it — a raw 0x00 is a corrupt
+    // file for editors, diff, and TSV tooling.
+    const input = "text\x00more\n\n= Se\x00ction\n\n> no\x00te\n\n@sa\x00lt{1\x00} in #pa\x00n{2} for ~e\x00ggs{3%min\x00utes}\n";
+    const out = try serializeT(std.testing.allocator, input);
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOfScalar(u8, out, 0) == null);
+    try std.testing.expectEqualStrings(
+        "text\u{FFFD}more\n\n= Se\u{FFFD}ction\n\n> no\u{FFFD}te\n\n@sa\u{FFFD}lt{1\u{FFFD}} in #pa\u{FFFD}n{2} for ~e\u{FFFD}ggs{3%min\u{FFFD}utes}\n",
+        out,
+    );
+    // Front matter payload gets the same treatment.
+    const fm = try serializeT(std.testing.allocator, "---\nx\x00y: z\n---\n\nAdd @salt.\n");
+    defer std.testing.allocator.free(fm);
+    try std.testing.expect(std.mem.indexOfScalar(u8, fm, 0) == null);
 }
 
 fn expectRoundTrip(input: []const u8) !void {
