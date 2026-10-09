@@ -147,7 +147,8 @@ policy (docs/ARCHITECTURE.md).
 - Fixture wall: `wikilink-basic` (prose, headings, lists, table cells,
   trimming, labels), `wikilink-literal` (the §3 battery + the greedy
   closer `[[a]]]`), `wikilink-precedence` (`[[x]]` vs the `[x]` def,
-  `[[foo]](/url)`, link-text demotion, code-span/autolink opacity),
+  `[[foo]](/url)`, link-text demotion across the inline, full-reference,
+  and shortcut forms, code-span/autolink opacity),
   `wikilink-escapes` (`\[[x]]`, `[[a\]b]]`). Cross-extension
   compositions are pinned by `cross-callout-title` (a `[[x]]` inside a
   callout title and body) and `cross-smartypants-scopes` (a heading

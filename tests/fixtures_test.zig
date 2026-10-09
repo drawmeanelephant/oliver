@@ -390,6 +390,13 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/link-trailing-text.md"),
         .expected = @embedFile("fixtures/markdown/link-trailing-text.html"),
     },
+    // A link's closing delimiter inside a discovered construct (code span,
+    // autolink, raw HTML) drops the construct; its tail is literal text.
+    .{
+        .name = "link-straddle",
+        .input = @embedFile("fixtures/markdown/link-straddle.md"),
+        .expected = @embedFile("fixtures/markdown/link-straddle.html"),
+    },
     .{
         .name = "link-simple",
         .input = @embedFile("fixtures/markdown/link-simple.md"),
