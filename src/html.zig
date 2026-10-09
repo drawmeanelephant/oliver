@@ -143,6 +143,43 @@ pub const RenderOptions = struct {
     wikilink_resolver_ctx: ?*const anyopaque = null,
 };
 
+/// A pre-order document walk in render order. Unlike
+/// `Document.Iterator`, a callout's title nodes are visited ahead of the
+/// quote's body children — the order `pushChildren` renders them — so a
+/// numbering or id-validation pass sees the inline nodes stored in
+/// `block_quote.callout_title_nodes` where the renderer will emit them.
+const RenderOrderIterator = struct {
+    gpa: std.mem.Allocator,
+    stack: std.ArrayList(*const document.Node) = .empty,
+
+    fn init(gpa: std.mem.Allocator, root: *const document.Node) !RenderOrderIterator {
+        var self = RenderOrderIterator{ .gpa = gpa };
+        try self.stack.append(gpa, root);
+        return self;
+    }
+
+    fn next(self: *RenderOrderIterator) !?*const document.Node {
+        const node = self.stack.pop() orelse return null;
+        var i = node.children.items.len;
+        while (i > 0) {
+            i -= 1;
+            try self.stack.append(self.gpa, node.children.items[i]);
+        }
+        if (node.tag == .block_quote) {
+            var t = node.data.block_quote.callout_title_nodes.len;
+            while (t > 0) {
+                t -= 1;
+                try self.stack.append(self.gpa, node.data.block_quote.callout_title_nodes[t]);
+            }
+        }
+        return node;
+    }
+
+    fn deinit(self: *RenderOrderIterator) void {
+        self.stack.deinit(self.gpa);
+    }
+};
+
 /// Footnote rendering context: label → number (first-reference order) and
 /// the used labels in that order. Built by a pre-pass over the document
 /// when the `footnotes` render option is enabled.
@@ -154,29 +191,62 @@ const Footnotes = struct {
     /// reference to a footnote gets id `fnref-N-2`, the third `fnref-N-3`,
     /// and the footnote body emits one backref per reference.
     ref_counts: std.StringHashMap(u32) = undefined,
+    /// label → total reference count across the whole render. Counted in
+    /// the numbering pre-pass because a definition's backrefs are written
+    /// when its own body closes — before later definitions render — and a
+    /// definition body can itself hold references (issue #153), so the
+    /// running `ref_counts` would under-count.
+    ref_totals: std.StringHashMap(u32) = undefined,
 
     fn init(gpa: std.mem.Allocator, doc: *const document.Document) !Footnotes {
         var self = Footnotes{
             .numbers = std.StringHashMap(u32).init(gpa),
             .used = .empty,
             .ref_counts = std.StringHashMap(u32).init(gpa),
+            .ref_totals = std.StringHashMap(u32).init(gpa),
         };
-        var it = try document.Document.Iterator.init(gpa, doc.root);
+        // Numbering is first-reference order in render order: the document
+        // body first — callout titles render ahead of their quote's body,
+        // so the walk sees them there — then each used definition's body.
+        var it = try RenderOrderIterator.init(gpa, doc.root);
         defer it.deinit();
-        while (try it.next()) |n| {
-            if (n.tag != .footnote_ref or n.data.footnote_ref.label.len == 0) continue;
-            const label = n.data.footnote_ref.label;
-            if (self.numbers.contains(label)) continue;
-            try self.numbers.put(label, @intCast(self.used.items.len + 1));
-            try self.used.append(gpa, label);
+        while (try it.next()) |n| try self.noteRef(gpa, n);
+        // Definition bodies are not part of the document tree; they render
+        // in the footnotes section in used order. A body may itself carry
+        // references — including to a definition reachable only through
+        // another definition — so walk them transitively (`used` grows as
+        // new labels are numbered).
+        var u: usize = 0;
+        while (u < self.used.items.len) : (u += 1) {
+            const def = findFootnoteDef(doc, self.used.items[u]) orelse continue;
+            var dit = try RenderOrderIterator.init(gpa, def.node);
+            defer dit.deinit();
+            while (try dit.next()) |n| try self.noteRef(gpa, n);
         }
         return self;
+    }
+
+    /// Counts one node during the numbering walk: a `.footnote_ref` with a
+    /// Markdown label is numbered on first sight, and every occurrence
+    /// adds to the label's total reference count.
+    fn noteRef(self: *Footnotes, gpa: std.mem.Allocator, n: *const document.Node) !void {
+        if (n.tag != .footnote_ref or n.data.footnote_ref.label.len == 0) return;
+        const label = n.data.footnote_ref.label;
+        const gop = try self.ref_totals.getOrPut(label);
+        if (gop.found_existing) {
+            gop.value_ptr.* += 1;
+            return;
+        }
+        gop.value_ptr.* = 1;
+        try self.numbers.put(label, @intCast(self.used.items.len + 1));
+        try self.used.append(gpa, label);
     }
 
     fn deinit(self: *Footnotes, gpa: std.mem.Allocator) void {
         self.numbers.deinit();
         self.used.deinit(gpa);
         self.ref_counts.deinit();
+        self.ref_totals.deinit();
     }
 
     fn number(self: *const Footnotes, label: []const u8) ?u32 {
@@ -225,7 +295,7 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
     var fn_ctx = if (options.footnotes and doc.footnotes.items.len > 0)
         try Footnotes.init(gpa, doc)
     else
-        Footnotes{ .numbers = std.StringHashMap(u32).init(gpa), .ref_counts = std.StringHashMap(u32).init(gpa) };
+        Footnotes{ .numbers = std.StringHashMap(u32).init(gpa), .ref_counts = std.StringHashMap(u32).init(gpa), .ref_totals = std.StringHashMap(u32).init(gpa) };
     defer fn_ctx.deinit(gpa);
 
     try stack.append(gpa, .{ .enter = .{
@@ -958,7 +1028,10 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
 /// back to it, and each anchor has its own target.
 fn writeBackrefs(writer: anytype, fn_ctx: *const Footnotes, n: u32, options: RenderOptions) !void {
     const label = fn_ctx.used.items[n - 1]; // numbers are 1-based, used is 0-based
-    const count = fn_ctx.ref_counts.get(label) orelse 1;
+    // The pre-pass total: a definition's backrefs are written before later
+    // definitions render, and those bodies can hold further references to
+    // this footnote, so the running `ref_counts` would under-count here.
+    const count = fn_ctx.ref_totals.get(label) orelse 1;
     // The valueless `data-footnote-backref` marker is bare in HTML and an
     // explicit empty value under XHTML (issue #60).
     const empty_value = if (options.profile == .xhtml) "=\"\"" else "";
@@ -1238,7 +1311,7 @@ fn validateStrictIds(gpa: std.mem.Allocator, doc: *const document.Document, opti
     defer arena.deinit();
     const a = arena.allocator();
     var seen = std.StringHashMap(void).init(a);
-    var it = try document.Document.Iterator.init(gpa, doc.root);
+    var it = try RenderOrderIterator.init(gpa, doc.root);
     defer it.deinit();
     while (try it.next()) |node| {
         switch (node.tag) {
@@ -1273,19 +1346,23 @@ fn validateStrictIds(gpa: std.mem.Allocator, doc: *const document.Document, opti
         var footnotes = try Footnotes.init(gpa, doc);
         defer footnotes.deinit(gpa);
         var counts = std.StringHashMap(u32).init(a);
-        var refs = try document.Document.Iterator.init(gpa, doc.root);
+        // The fnref ids are assigned in render order: the document body —
+        // callout titles included — then each used definition's body in
+        // used order (a body may itself hold references).
+        var refs = try RenderOrderIterator.init(gpa, doc.root);
         defer refs.deinit();
         while (try refs.next()) |node| {
             if (node.tag != .footnote_ref) continue;
-            const label = node.data.footnote_ref.label;
-            const n = footnotes.number(label) orelse continue;
-            const ord = (counts.get(label) orelse 0) + 1;
-            try counts.put(label, ord);
-            const id = if (ord == 1)
-                try std.fmt.allocPrint(a, "fnref-{d}", .{n})
-            else
-                try std.fmt.allocPrint(a, "fnref-{d}-{d}", .{ n, ord });
-            try registerStrictId(&seen, id);
+            try registerFnrefStrictId(&seen, a, &counts, &footnotes, node.data.footnote_ref.label);
+        }
+        for (footnotes.used.items) |label| {
+            const def = findFootnoteDef(doc, label) orelse continue;
+            var def_refs = try RenderOrderIterator.init(gpa, def.node);
+            defer def_refs.deinit();
+            while (try def_refs.next()) |node| {
+                if (node.tag != .footnote_ref) continue;
+                try registerFnrefStrictId(&seen, a, &counts, &footnotes, node.data.footnote_ref.label);
+            }
         }
         for (footnotes.used.items) |label| {
             if (findFootnoteDef(doc, label) == null) continue;
@@ -1300,6 +1377,20 @@ fn validateStrictIds(gpa: std.mem.Allocator, doc: *const document.Document, opti
             }
         }
     }
+}
+
+/// Registers the strict id the renderer will emit for the next reference
+/// to `label`: `fnref-N` for the first reference, `fnref-N-K` for the
+/// K-th, assigned in render order so the predicted ids match the output.
+fn registerFnrefStrictId(seen: *std.StringHashMap(void), a: std.mem.Allocator, counts: *std.StringHashMap(u32), footnotes: *const Footnotes, label: []const u8) !void {
+    const n = footnotes.number(label) orelse return;
+    const ord = (counts.get(label) orelse 0) + 1;
+    try counts.put(label, ord);
+    const id = if (ord == 1)
+        try std.fmt.allocPrint(a, "fnref-{d}", .{n})
+    else
+        try std.fmt.allocPrint(a, "fnref-{d}-{d}", .{ n, ord });
+    try registerStrictId(seen, id);
 }
 
 fn registerAttrIds(seen: *std.StringHashMap(void), attrs: []const document.Attribute) !void {

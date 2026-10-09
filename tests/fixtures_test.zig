@@ -1503,6 +1503,26 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .expected = @embedFile("fixtures/markdown/ext-footnotes.html"),
     },
     .{
+        .name = "footnote-tab-continuation",
+        .input = @embedFile("fixtures/markdown/footnote-tab-continuation.md"),
+        .expected = @embedFile("fixtures/markdown/footnote-tab-continuation.html"),
+    },
+    .{
+        .name = "footnote-callout-title",
+        .input = @embedFile("fixtures/markdown/footnote-callout-title.md"),
+        .expected = @embedFile("fixtures/markdown/footnote-callout-title.html"),
+    },
+    .{
+        .name = "footnote-definition-ref",
+        .input = @embedFile("fixtures/markdown/footnote-definition-ref.md"),
+        .expected = @embedFile("fixtures/markdown/footnote-definition-ref.html"),
+    },
+    .{
+        .name = "footnote-backref-order",
+        .input = @embedFile("fixtures/markdown/footnote-backref-order.md"),
+        .expected = @embedFile("fixtures/markdown/footnote-backref-order.html"),
+    },
+    .{
         .name = "ext-heading-ids",
         .input = @embedFile("fixtures/markdown/ext-heading-ids.md"),
         .expected = @embedFile("fixtures/markdown/ext-heading-ids.html"),
