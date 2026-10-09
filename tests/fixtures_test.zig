@@ -125,6 +125,13 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/escape-special.md"),
         .expected = @embedFile("fixtures/markdown/escape-special.html"),
     },
+    // issue #152: C0 controls, numeric refs to forbidden code points,
+    // U+FFFE/U+FFFF, and ill-formed UTF-8 all render as U+FFFD.
+    .{
+        .name = "escape-nonxml-chars",
+        .input = @embedFile("fixtures/markdown/escape-nonxml-chars.md"),
+        .expected = @embedFile("fixtures/markdown/escape-nonxml-chars.html"),
+    },
     // --- entities (docs: FEATURE-MATRIX "entity references") ---
     .{
         .name = "entity-text",
@@ -1503,6 +1510,26 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .expected = @embedFile("fixtures/markdown/ext-footnotes.html"),
     },
     .{
+        .name = "footnote-tab-continuation",
+        .input = @embedFile("fixtures/markdown/footnote-tab-continuation.md"),
+        .expected = @embedFile("fixtures/markdown/footnote-tab-continuation.html"),
+    },
+    .{
+        .name = "footnote-callout-title",
+        .input = @embedFile("fixtures/markdown/footnote-callout-title.md"),
+        .expected = @embedFile("fixtures/markdown/footnote-callout-title.html"),
+    },
+    .{
+        .name = "footnote-definition-ref",
+        .input = @embedFile("fixtures/markdown/footnote-definition-ref.md"),
+        .expected = @embedFile("fixtures/markdown/footnote-definition-ref.html"),
+    },
+    .{
+        .name = "footnote-backref-order",
+        .input = @embedFile("fixtures/markdown/footnote-backref-order.md"),
+        .expected = @embedFile("fixtures/markdown/footnote-backref-order.html"),
+    },
+    .{
         .name = "ext-heading-ids",
         .input = @embedFile("fixtures/markdown/ext-heading-ids.md"),
         .expected = @embedFile("fixtures/markdown/ext-heading-ids.html"),
@@ -1640,6 +1667,22 @@ const markdown_fm_fixtures = [_]MarkdownFmFixture{
         .mode = .yaml,
         .input = @embedFile("fixtures/markdown/frontmatter-unclosed.md"),
         .expected = @embedFile("fixtures/markdown/frontmatter-unclosed.html"),
+    },
+    // Issue #146: re-opening `[[a]]` appends to a's own list — after a
+    // `[table]` (used to panic) and after another array (used to append
+    // to the wrong list). The metadata tree itself is pinned by the
+    // frontmatter.zig unit tests; these pairs prove the full pipeline.
+    .{
+        .name = "frontmatter-toml-reopen-table",
+        .mode = .toml,
+        .input = @embedFile("fixtures/markdown/frontmatter-toml-reopen-table.md"),
+        .expected = @embedFile("fixtures/markdown/frontmatter-toml-reopen-table.html"),
+    },
+    .{
+        .name = "frontmatter-toml-reopen-array",
+        .mode = .toml,
+        .input = @embedFile("fixtures/markdown/frontmatter-toml-reopen-array.md"),
+        .expected = @embedFile("fixtures/markdown/frontmatter-toml-reopen-array.html"),
     },
 };
 
@@ -2895,6 +2938,20 @@ test "adversarial smoke: hostile input never crashes or leaks" {
     defer unbalanced_links.deinit(gpa);
     for (0..20_000) |_| try unbalanced_links.appendSlice(gpa, "[a](");
 
+    // `[`*n + `]`*n (issue #151): every `]` used to re-normalize an
+    // O(k)-byte candidate label — quadratic per closer. Both the
+    // no-definitions shape and the same storm over a registered
+    // definition (which exercises the bounded fold) must stay linear.
+    var bracket_storm = std.ArrayList(u8).empty;
+    defer bracket_storm.deinit(gpa);
+    try bracket_storm.appendNTimes(gpa, '[', 50_000);
+    try bracket_storm.appendNTimes(gpa, ']', 50_000);
+    var bracket_storm_defs = std.ArrayList(u8).empty;
+    defer bracket_storm_defs.deinit(gpa);
+    try bracket_storm_defs.appendSlice(gpa, "[a]: /x\n\n");
+    try bracket_storm_defs.appendNTimes(gpa, '[', 50_000);
+    try bracket_storm_defs.appendNTimes(gpa, ']', 50_000);
+
     // Reference-link label bombs: every `]` forces a label scan, case-fold
     // normalization, and map lookup. Shortcut forms must stay linear even
     // when the definitions map is large and labels differ by one codepoint.
@@ -3036,6 +3093,8 @@ test "adversarial smoke: hostile input never crashes or leaks" {
         big_backticks,
         backtick_mix.items,
         big_brackets,
+        bracket_storm.items,
+        bracket_storm_defs.items,
         link_mix.items,
         deep_brackets.items,
         unbalanced_links.items,
@@ -3116,6 +3175,17 @@ test "adversarial: list workloads are stack-safe and deterministic" {
     defer ordered_near_miss.deinit(gpa);
     for (0..8_000) |_| try ordered_near_miss.appendSlice(gpa, "1234567890. item\n");
 
+    // Tab-indented nesting (issue #150): the per-line container match used
+    // to walk every open list item's remaining indentation — O(depth^2)
+    // per line, cubic overall. Matching must stay bounded by each item's
+    // own content indentation.
+    var tab_nesting = std.ArrayList(u8).empty;
+    defer tab_nesting.deinit(gpa);
+    for (0..2_000) |i| {
+        try tab_nesting.appendNTimes(gpa, '\t', i);
+        try tab_nesting.appendSlice(gpa, "- x\n");
+    }
+
     const cases = [_]struct { name: []const u8, input: []const u8 }{
         .{ .name = "deep nesting", .input = deep_nesting.items },
         .{ .name = "same-marker storm", .input = marker_storm.items },
@@ -3123,6 +3193,7 @@ test "adversarial: list workloads are stack-safe and deterministic" {
         .{ .name = "indentation storm", .input = indentation_storm.items },
         .{ .name = "nine-digit ordered-marker storm", .input = ordered_marker_storm.items },
         .{ .name = "ten-digit ordered-marker near-miss", .input = ordered_near_miss.items },
+        .{ .name = "tab-nested deep list", .input = tab_nesting.items },
     };
     for (cases) |case| {
         var first = try renderHtml(case.input, .markdown);
@@ -3145,6 +3216,31 @@ test "adversarial: NUL bytes render as U+FFFD" {
     var out = aw.toArrayList();
     defer out.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("<p>a\u{FFFD}b</p>\n", out.items);
+}
+
+test "adversarial: deeply nested emphasis under heading_ids is stack-safe" {
+    // issue #148: `--heading-ids` projects the heading's inline content to
+    // text for the slug; that walk used to recurse per nesting level, so a
+    // heading carrying ~125k nested <strong>/<em> levels overflowed the
+    // call stack. The collector is iterative now (explicit work stack like
+    // the main traversal); this is the issue's repro shape.
+    const gpa = std.testing.allocator;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(gpa);
+    try input.appendSlice(gpa, "# ");
+    try input.appendNTimes(gpa, '*', 250_000);
+    try input.append(gpa, 'x');
+    try input.appendNTimes(gpa, '*', 250_000);
+    try input.append(gpa, '\n');
+
+    var result = try oliver.parse(gpa, input.items, .markdown, .{});
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(gpa);
+    defer aw.deinit();
+    try oliver.html.render(gpa, &aw.writer, &result.document, .{ .heading_ids = true });
+    var out = aw.toArrayList();
+    defer out.deinit(gpa);
+    try std.testing.expect(std.mem.startsWith(u8, out.items, "<h1 id=\"x\">"));
 }
 
 test "adversarial: thematic and Setext leaf storm is deterministic" {

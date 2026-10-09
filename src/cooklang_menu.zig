@@ -38,7 +38,8 @@
 //! (one line per day: `name (YYYY-MM-DD): path{quantity%units} …`),
 //! shared by the `oliver menu --from cooklang` CLI and the fixtures.
 //! No HTML escaping is performed — it is a text serialization of the
-//! structure, like the canonical Cooklang serializer.
+//! structure, like the canonical Cooklang serializer — but NUL (U+0000)
+//! bytes are replaced with U+FFFD, the project's text-output policy.
 
 const std = @import("std");
 const cooklang = @import("cooklang.zig");
@@ -124,10 +125,12 @@ pub fn menuView(allocator: std.mem.Allocator, recipe: *const cooklang.Recipe) !M
 /// Writes the deterministic plain-text menu dump: one line per day,
 /// `name (YYYY-MM-DD): path{quantity%units} path{...}`. Dates are
 /// zero-padded; references are canonical token text (`{2}`, `{}`,
-/// `{4%servings}`).
+/// `{4%servings}`). Payload bytes go through the shared text policy —
+/// NUL (U+0000) is replaced with U+FFFD, same as the canonical
+/// serializer and the HTML renderers (issues #56, #161).
 pub fn writeMenu(writer: anytype, menu: *const Menu) !void {
     for (menu.days) |day| {
-        try writer.writeAll(day.name);
+        try cooklang.writeTextSanitized(writer, day.name);
         if (day.date) |d| {
             var buf: [16]u8 = undefined;
             // 16 bytes always suffice: ` (9999-99-99)` is 14.
@@ -139,14 +142,14 @@ pub fn writeMenu(writer: anytype, menu: *const Menu) !void {
         for (day.references) |ref| {
             if (!first) try writer.writeAll(" ");
             first = false;
-            try writer.writeAll(ref.path);
+            try cooklang.writeTextSanitized(writer, ref.path);
             if (ref.quantity) |q| {
                 try writer.writeAll("{");
-                try writer.writeAll(q);
+                try cooklang.writeTextSanitized(writer, q);
                 if (ref.units) |u| {
                     if (u.len > 0) {
                         try writer.writeAll("%");
-                        try writer.writeAll(u);
+                        try cooklang.writeTextSanitized(writer, u);
                     }
                 }
                 try writer.writeAll("}");
@@ -281,6 +284,16 @@ test "cooklang menu: empty and reference-less inputs" {
     const b = try menuText(std.testing.allocator, "= Monday\n\nJust some text, no references.");
     defer std.testing.allocator.free(b);
     try std.testing.expectEqualStrings("Monday: \n", b);
+}
+
+test "cooklang menu: NUL bytes emit U+FFFD, never raw 0x00 (issue #161)" {
+    // The text dump follows the same output policy as the canonical
+    // serializer and the HTML renderers: the parser keeps NUL opaque,
+    // so payloads replace it on the way out.
+    const text = try menuText(std.testing.allocator, "= Mon\x00day\n@./x{2\x00} and @./y{1%se\x00rvings}\n");
+    defer std.testing.allocator.free(text);
+    try std.testing.expect(std.mem.indexOfScalar(u8, text, 0) == null);
+    try std.testing.expectEqualStrings("Mon\u{FFFD}day: ./x{2\u{FFFD}} ./y{1%se\u{FFFD}rvings}\n", text);
 }
 
 test "cooklang menu: writeMenu matches the conventions example" {

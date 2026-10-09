@@ -4,8 +4,12 @@
 //! it, and never reparses source. See docs/ARCHITECTURE.md ("HTML output
 //! policy") for the explicit policies this renderer follows:
 //!
-//! - Text is escaped: `&` `&amp;`, `<` `&lt;`, `>` `&gt;`, `"` `&quot;`;
-//!   NUL (U+0000) is emitted as U+FFFD.
+//! - Text is escaped: `&` `&amp;`, `<` `&lt;`, `>` `&gt;`, `"` `&quot;`.
+//!   Bytes that cannot appear in well-formed output — C0 controls other
+//!   than tab/LF/CR (NUL included), the XML-forbidden noncharacters
+//!   U+FFFE/U+FFFF, and ill-formed UTF-8 units — are replaced with U+FFFD
+//!   at the escaping seam (`writeEscapedXml`), so escaped output is
+//!   always well-formed character data under every profile.
 //! - Link attributes: `href` is percent-encoded (a deliberate, documented
 //!   policy derived from the spec examples: encode everything except
 //!   alphanumerics and `-_.~!*'(),;:&=+$#@/%?`) and then HTML-escaped;
@@ -143,6 +147,43 @@ pub const RenderOptions = struct {
     wikilink_resolver_ctx: ?*const anyopaque = null,
 };
 
+/// A pre-order document walk in render order. Unlike
+/// `Document.Iterator`, a callout's title nodes are visited ahead of the
+/// quote's body children — the order `pushChildren` renders them — so a
+/// numbering or id-validation pass sees the inline nodes stored in
+/// `block_quote.callout_title_nodes` where the renderer will emit them.
+const RenderOrderIterator = struct {
+    gpa: std.mem.Allocator,
+    stack: std.ArrayList(*const document.Node) = .empty,
+
+    fn init(gpa: std.mem.Allocator, root: *const document.Node) !RenderOrderIterator {
+        var self = RenderOrderIterator{ .gpa = gpa };
+        try self.stack.append(gpa, root);
+        return self;
+    }
+
+    fn next(self: *RenderOrderIterator) !?*const document.Node {
+        const node = self.stack.pop() orelse return null;
+        var i = node.children.items.len;
+        while (i > 0) {
+            i -= 1;
+            try self.stack.append(self.gpa, node.children.items[i]);
+        }
+        if (node.tag == .block_quote) {
+            var t = node.data.block_quote.callout_title_nodes.len;
+            while (t > 0) {
+                t -= 1;
+                try self.stack.append(self.gpa, node.data.block_quote.callout_title_nodes[t]);
+            }
+        }
+        return node;
+    }
+
+    fn deinit(self: *RenderOrderIterator) void {
+        self.stack.deinit(self.gpa);
+    }
+};
+
 /// Footnote rendering context: label → number (first-reference order) and
 /// the used labels in that order. Built by a pre-pass over the document
 /// when the `footnotes` render option is enabled.
@@ -154,29 +195,62 @@ const Footnotes = struct {
     /// reference to a footnote gets id `fnref-N-2`, the third `fnref-N-3`,
     /// and the footnote body emits one backref per reference.
     ref_counts: std.StringHashMap(u32) = undefined,
+    /// label → total reference count across the whole render. Counted in
+    /// the numbering pre-pass because a definition's backrefs are written
+    /// when its own body closes — before later definitions render — and a
+    /// definition body can itself hold references (issue #153), so the
+    /// running `ref_counts` would under-count.
+    ref_totals: std.StringHashMap(u32) = undefined,
 
     fn init(gpa: std.mem.Allocator, doc: *const document.Document) !Footnotes {
         var self = Footnotes{
             .numbers = std.StringHashMap(u32).init(gpa),
             .used = .empty,
             .ref_counts = std.StringHashMap(u32).init(gpa),
+            .ref_totals = std.StringHashMap(u32).init(gpa),
         };
-        var it = try document.Document.Iterator.init(gpa, doc.root);
+        // Numbering is first-reference order in render order: the document
+        // body first — callout titles render ahead of their quote's body,
+        // so the walk sees them there — then each used definition's body.
+        var it = try RenderOrderIterator.init(gpa, doc.root);
         defer it.deinit();
-        while (try it.next()) |n| {
-            if (n.tag != .footnote_ref or n.data.footnote_ref.label.len == 0) continue;
-            const label = n.data.footnote_ref.label;
-            if (self.numbers.contains(label)) continue;
-            try self.numbers.put(label, @intCast(self.used.items.len + 1));
-            try self.used.append(gpa, label);
+        while (try it.next()) |n| try self.noteRef(gpa, n);
+        // Definition bodies are not part of the document tree; they render
+        // in the footnotes section in used order. A body may itself carry
+        // references — including to a definition reachable only through
+        // another definition — so walk them transitively (`used` grows as
+        // new labels are numbered).
+        var u: usize = 0;
+        while (u < self.used.items.len) : (u += 1) {
+            const def = findFootnoteDef(doc, self.used.items[u]) orelse continue;
+            var dit = try RenderOrderIterator.init(gpa, def.node);
+            defer dit.deinit();
+            while (try dit.next()) |n| try self.noteRef(gpa, n);
         }
         return self;
+    }
+
+    /// Counts one node during the numbering walk: a `.footnote_ref` with a
+    /// Markdown label is numbered on first sight, and every occurrence
+    /// adds to the label's total reference count.
+    fn noteRef(self: *Footnotes, gpa: std.mem.Allocator, n: *const document.Node) !void {
+        if (n.tag != .footnote_ref or n.data.footnote_ref.label.len == 0) return;
+        const label = n.data.footnote_ref.label;
+        const gop = try self.ref_totals.getOrPut(label);
+        if (gop.found_existing) {
+            gop.value_ptr.* += 1;
+            return;
+        }
+        gop.value_ptr.* = 1;
+        try self.numbers.put(label, @intCast(self.used.items.len + 1));
+        try self.used.append(gpa, label);
     }
 
     fn deinit(self: *Footnotes, gpa: std.mem.Allocator) void {
         self.numbers.deinit();
         self.used.deinit(gpa);
         self.ref_counts.deinit();
+        self.ref_totals.deinit();
     }
 
     fn number(self: *const Footnotes, label: []const u8) ?u32 {
@@ -225,7 +299,7 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
     var fn_ctx = if (options.footnotes and doc.footnotes.items.len > 0)
         try Footnotes.init(gpa, doc)
     else
-        Footnotes{ .numbers = std.StringHashMap(u32).init(gpa), .ref_counts = std.StringHashMap(u32).init(gpa) };
+        Footnotes{ .numbers = std.StringHashMap(u32).init(gpa), .ref_counts = std.StringHashMap(u32).init(gpa), .ref_totals = std.StringHashMap(u32).init(gpa) };
     defer fn_ctx.deinit(gpa);
 
     try stack.append(gpa, .{ .enter = .{
@@ -327,6 +401,13 @@ fn pushChildren(
             }
             return;
         }
+        // A hand-built sectioned table can have zero rows (the frontends
+        // never produce one); there is nothing to section, so the markers
+        // and the header-row frame are all skipped. `.html4_strict`
+        // instead fails closed on this shape in `writeOpen`
+        // (EmptyTableNotHtml4Strict); html/xhtml render the empty element
+        // defensively rather than indexing a missing row (issue #170).
+        if (n == 0) return;
         const has_body = n >= 2;
         var i = n;
         while (i > 1) {
@@ -958,7 +1039,10 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
 /// back to it, and each anchor has its own target.
 fn writeBackrefs(writer: anytype, fn_ctx: *const Footnotes, n: u32, options: RenderOptions) !void {
     const label = fn_ctx.used.items[n - 1]; // numbers are 1-based, used is 0-based
-    const count = fn_ctx.ref_counts.get(label) orelse 1;
+    // The pre-pass total: a definition's backrefs are written before later
+    // definitions render, and those bodies can hold further references to
+    // this footnote, so the running `ref_counts` would under-count here.
+    const count = fn_ctx.ref_totals.get(label) orelse 1;
     // The valueless `data-footnote-backref` marker is bare in HTML and an
     // explicit empty value under XHTML (issue #60).
     const empty_value = if (options.profile == .xhtml) "=\"\"" else "";
@@ -1059,20 +1143,35 @@ fn pushFootnotesSection(
 /// (entity-decoded, escapes already split into their own text nodes),
 /// code-span content, image alt, autolink labels, and the text of nested
 /// inline containers. Soft/hard breaks become spaces; raw HTML is skipped.
+///
+/// Iterative like the main traversal and `flattenAlt`: inline containers
+/// nest arbitrarily deep (a hostile heading can carry hundreds of
+/// thousands of nested emphasis levels), so an explicit work stack keeps
+/// the slug computation off the call stack (issue #148).
 fn collectHeadingText(gpa: std.mem.Allocator, node: *const document.Node, out: *std.ArrayList(u8)) !void {
-    switch (node.tag) {
-        .text => try writeDecodedText(gpa, out, node.data.text),
-        .code_span => try out.appendSlice(gpa, node.data.code_span),
-        .image => try out.appendSlice(gpa, node.data.image.alt),
-        .autolink => try out.appendSlice(gpa, node.data.autolink.label),
-        .wikilink => try out.appendSlice(gpa, node.data.wikilink.label orelse node.data.wikilink.target),
-        .soft_break, .hard_break => try out.append(gpa, ' '),
-        .raw_html => {},
-        .task_checkbox => {}, // a checkbox contributes no text to a slug
-        .link, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span => {
-            for (node.children.items) |c| try collectHeadingText(gpa, c, out);
-        },
-        else => {},
+    var stack = std.ArrayList(*const document.Node).empty;
+    defer stack.deinit(gpa);
+    try stack.append(gpa, node);
+    while (stack.pop()) |n| {
+        switch (n.tag) {
+            .text => try writeDecodedText(gpa, out, n.data.text),
+            .code_span => try out.appendSlice(gpa, n.data.code_span),
+            .image => try out.appendSlice(gpa, n.data.image.alt),
+            .autolink => try out.appendSlice(gpa, n.data.autolink.label),
+            .wikilink => try out.appendSlice(gpa, n.data.wikilink.label orelse n.data.wikilink.target),
+            .soft_break, .hard_break => try out.append(gpa, ' '),
+            .raw_html => {},
+            .task_checkbox => {}, // a checkbox contributes no text to a slug
+            .link, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span => {
+                // Pushed in reverse so children pop in document order.
+                var i = n.children.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, n.children.items[i]);
+                }
+            },
+            else => {},
+        }
     }
 }
 
@@ -1238,7 +1337,7 @@ fn validateStrictIds(gpa: std.mem.Allocator, doc: *const document.Document, opti
     defer arena.deinit();
     const a = arena.allocator();
     var seen = std.StringHashMap(void).init(a);
-    var it = try document.Document.Iterator.init(gpa, doc.root);
+    var it = try RenderOrderIterator.init(gpa, doc.root);
     defer it.deinit();
     while (try it.next()) |node| {
         switch (node.tag) {
@@ -1273,19 +1372,23 @@ fn validateStrictIds(gpa: std.mem.Allocator, doc: *const document.Document, opti
         var footnotes = try Footnotes.init(gpa, doc);
         defer footnotes.deinit(gpa);
         var counts = std.StringHashMap(u32).init(a);
-        var refs = try document.Document.Iterator.init(gpa, doc.root);
+        // The fnref ids are assigned in render order: the document body —
+        // callout titles included — then each used definition's body in
+        // used order (a body may itself hold references).
+        var refs = try RenderOrderIterator.init(gpa, doc.root);
         defer refs.deinit();
         while (try refs.next()) |node| {
             if (node.tag != .footnote_ref) continue;
-            const label = node.data.footnote_ref.label;
-            const n = footnotes.number(label) orelse continue;
-            const ord = (counts.get(label) orelse 0) + 1;
-            try counts.put(label, ord);
-            const id = if (ord == 1)
-                try std.fmt.allocPrint(a, "fnref-{d}", .{n})
-            else
-                try std.fmt.allocPrint(a, "fnref-{d}-{d}", .{ n, ord });
-            try registerStrictId(&seen, id);
+            try registerFnrefStrictId(&seen, a, &counts, &footnotes, node.data.footnote_ref.label);
+        }
+        for (footnotes.used.items) |label| {
+            const def = findFootnoteDef(doc, label) orelse continue;
+            var def_refs = try RenderOrderIterator.init(gpa, def.node);
+            defer def_refs.deinit();
+            while (try def_refs.next()) |node| {
+                if (node.tag != .footnote_ref) continue;
+                try registerFnrefStrictId(&seen, a, &counts, &footnotes, node.data.footnote_ref.label);
+            }
         }
         for (footnotes.used.items) |label| {
             if (findFootnoteDef(doc, label) == null) continue;
@@ -1300,6 +1403,20 @@ fn validateStrictIds(gpa: std.mem.Allocator, doc: *const document.Document, opti
             }
         }
     }
+}
+
+/// Registers the strict id the renderer will emit for the next reference
+/// to `label`: `fnref-N` for the first reference, `fnref-N-K` for the
+/// K-th, assigned in render order so the predicted ids match the output.
+fn registerFnrefStrictId(seen: *std.StringHashMap(void), a: std.mem.Allocator, counts: *std.StringHashMap(u32), footnotes: *const Footnotes, label: []const u8) !void {
+    const n = footnotes.number(label) orelse return;
+    const ord = (counts.get(label) orelse 0) + 1;
+    try counts.put(label, ord);
+    const id = if (ord == 1)
+        try std.fmt.allocPrint(a, "fnref-{d}", .{n})
+    else
+        try std.fmt.allocPrint(a, "fnref-{d}-{d}", .{ n, ord });
+    try registerStrictId(seen, id);
 }
 
 fn registerAttrIds(seen: *std.StringHashMap(void), attrs: []const document.Attribute) !void {
@@ -1360,25 +1477,74 @@ fn hrefSafe(b: u8) bool {
     };
 }
 
-/// Escapes text content. `&`, `<`, `>`, and `"` are escaped (the set the
-/// CommonMark reference output escapes); NUL is replaced with U+FFFD.
-fn writeEscaped(writer: anytype, text: []const u8) !void {
+/// The U+FFFD replacement for bytes that cannot appear in well-formed
+/// output (issue #152): C0 controls other than tab/LF/CR (NUL included),
+/// the XML-forbidden noncharacters U+FFFE/U+FFFF, and ill-formed UTF-8
+/// units (bad lead bytes, stray continuations, overlong or truncated
+/// sequences, encoded surrogates, code points past U+10FFFF). U+FFFD is
+/// itself a valid XML Char — the existing NUL policy generalized — so
+/// escaping fails safe rather than failing the render, and escaped output
+/// is always well-formed character data under every profile
+/// (docs/XHTML.md).
+const replacement_char = "\xEF\xBF\xBD"; // U+FFFD
+
+/// The shared escaping seam for HTML/XML character data and attribute
+/// values, used by the document renderer, the Cooklang renderer, and
+/// `oliver wrap` (issue #152). `&`, `<`, `>` always escape to the
+/// predefined entities; `"` and `'` escape to `dquote`/`squote` when
+/// those are non-null — the callers' quote policies differ (the document
+/// renderer escapes `"` everywhere, Cooklang only inside attributes,
+/// `wrap` escapes both as `&quot;`/`&#39;`). Bytes that are not XML 1.0
+/// `Char`s and ill-formed UTF-8 units are replaced with U+FFFD (see
+/// `replacement_char`); everything else — including tab, LF, CR, DEL,
+/// and all valid non-ASCII — passes through unchanged.
+pub fn writeEscapedXml(writer: anytype, text: []const u8, dquote: ?[]const u8, squote: ?[]const u8) !void {
     var start: usize = 0;
     var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        const replacement: []const u8 = switch (text[i]) {
+    while (i < text.len) {
+        const b = text[i];
+        var rep: ?[]const u8 = switch (b) {
             '&' => "&amp;",
             '<' => "&lt;",
             '>' => "&gt;",
-            '"' => "&quot;",
-            0 => "\xEF\xBF\xBD", // U+FFFD
-            else => continue,
+            '"' => dquote,
+            '\'' => squote,
+            else => null,
         };
-        if (i > start) try writer.writeAll(text[start..i]);
-        try writer.writeAll(replacement);
-        start = i + 1;
+        var adv: usize = 1;
+        if (rep == null) {
+            if (b < 0x80) {
+                // C0 controls other than tab/LF/CR are not XML Chars.
+                if (b < 0x20 and b != '\t' and b != '\n' and b != '\r') rep = replacement_char;
+            } else {
+                const n = std.unicode.utf8ByteSequenceLength(b) catch 0;
+                if (n == 0 or i + n > text.len) {
+                    rep = replacement_char;
+                } else if (std.unicode.utf8Decode(text[i..][0..n])) |cp| {
+                    if (cp == 0xFFFE or cp == 0xFFFF) rep = replacement_char;
+                    adv = n;
+                } else |_| {
+                    rep = replacement_char;
+                }
+            }
+        }
+        if (rep) |r| {
+            if (i > start) try writer.writeAll(text[start..i]);
+            try writer.writeAll(r);
+            i += adv;
+            start = i;
+        } else {
+            i += adv;
+        }
     }
     if (start < text.len) try writer.writeAll(text[start..]);
+}
+
+/// Escapes text content. `&`, `<`, `>`, and `"` are escaped (the set the
+/// CommonMark reference output escapes); bytes that cannot appear in
+/// well-formed output are replaced with U+FFFD (`writeEscapedXml`).
+fn writeEscaped(writer: anytype, text: []const u8) !void {
+    try writeEscapedXml(writer, text, "&quot;", null);
 }
 
 /// Escapes text content after decoding §2.5 entity and numeric character
@@ -1435,6 +1601,69 @@ test "html: escaping" {
     var out = try renderDoc(&doc);
     defer out.deinit(testing.allocator);
     try testing.expectEqualStrings("<p>a &amp; b &lt; c &gt; d &quot; e \u{FFFD} f</p>\n", out.items);
+}
+
+test "html: escaping replaces non-XML chars and ill-formed UTF-8 with U+FFFD" {
+    // issue #152: at the escaping seam, C0 controls other than tab/LF/CR,
+    // U+FFFE/U+FFFF, and every ill-formed UTF-8 unit (bad lead bytes,
+    // overlong forms, surrogate encodings, truncated sequences) become
+    // U+FFFD — the NUL policy generalized — under every profile.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(doc.root, p);
+    // C0 controls; U+FFFE/U+FFFF; a bare 0xFF; an overlong '/' (C0 AF);
+    // an encoded surrogate (ED A0 80); a truncated sequence (E2 82 then
+    // a non-continuation); then DEL, tab — both legal — and 'd', 'e'.
+    try addText(&doc, p, "a\x01b\x0bc\x1f\xef\xbf\xbe\xef\xbf\xbf\xff\xc0\xaf\xed\xa0\x80\xe2\x82\x7f\tde");
+    const expected = "<p>a\u{FFFD}b\u{FFFD}c" ++
+        "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}" ++
+        "\x7f\tde</p>\n";
+    for ([_]OutputProfile{ .html, .xhtml, .html4_strict }) |profile| {
+        var out = try renderDocOpts(&doc, .{ .profile = profile });
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings(expected, out.items);
+    }
+}
+
+test "html: escaping sanitizes attribute values too" {
+    // Same seam, attribute context (issue #152): a Textile-style attr
+    // value carrying a C0 control renders with U+FFFD.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{
+        .paragraph = .{ .attrs = &.{.{ .name = "id", .value = "a\x01b" }} },
+    });
+    try doc.appendChild(doc.root, p);
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p id=\"a\u{FFFD}b\"></p>\n", out.items);
+}
+
+test "html: zero-row sectioned table renders empty, never panics" {
+    // issue #170: a hand-built `.table` with `sections = true` and no
+    // rows is legal-per-IR (the frontends never produce it); html/xhtml
+    // emit the empty element rather than indexing a missing header row.
+    // `.html4_strict` keeps its fail-closed EmptyTableNotHtml4Strict.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    try doc.appendChild(doc.root, try doc.createNode(.table, .{ .start = 0, .end = 0 }, .{
+        .table = .{ .alignment = &.{}, .sections = true },
+    }));
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<table>\n</table>\n", out.items);
+
+    var xw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer xw.deinit();
+    try render(testing.allocator, &xw.writer, &doc, .{ .profile = .xhtml });
+    var xout = xw.toArrayList();
+    defer xout.deinit(testing.allocator);
+    try testing.expectEqualStrings("<table>\n</table>\n", xout.items);
+
+    var sw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer sw.deinit();
+    try testing.expectError(EmptyTableNotHtml4Strict, render(testing.allocator, &sw.writer, &doc, .{ .profile = .html4_strict }));
 }
 
 test "html: soft vs hard breaks and void option" {

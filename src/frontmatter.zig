@@ -564,16 +564,21 @@ fn tomlHeader(
     if (std.mem.startsWith(u8, trimmed, "[[")) {
         if (trimmed.len < 4 or !std.mem.endsWith(u8, trimmed, "]]")) return line_start;
         const name = tomlKey(a, trimmed[2 .. trimmed.len - 2]) orelse return line_start;
-        var found = false;
-        for (root.items) |*e| {
+        var idx: ?usize = null;
+        for (root.items, 0..) |*e, ei| {
             if (std.mem.eql(u8, e.key, name)) {
                 if (e.value != .list) return line_start;
-                found = true;
+                idx = ei;
                 break;
             }
         }
-        if (!found) try root.append(a, .{ .key = name, .value = .{ .list = .empty } });
-        const list = &root.items[root.items.len - 1].value.list;
+        // Re-opening appends to the *matched* entry's list — the last
+        // root entry is the right list only for a first-time header.
+        const list_idx = idx orelse blk: {
+            try root.append(a, .{ .key = name, .value = .{ .list = .empty } });
+            break :blk root.items.len - 1;
+        };
+        const list = &root.items[list_idx].value.list;
         try list.append(a, .{ .map = .empty });
         current.* = .{ .array_elem = .{ .key = name, .idx = list.items.len - 1 } };
         return null;
@@ -878,6 +883,35 @@ test "frontmatter toml: quoted keys and table re-open" {
     const server = entry(m, "server").?.map;
     try testing.expectEqualStrings("1", entry(server, "x").?.scalar);
     try testing.expectEqualStrings("2", entry(server, "y").?.scalar);
+}
+
+test "frontmatter toml: re-opened array appends to its own list (issue #146)" {
+    // Re-open after a `[table]`: the matched entry's list is extended,
+    // not the last root entry's — the bug took `root.items[len - 1]`,
+    // panicking on `[b]`'s map.
+    var out = try preprocessT(testing.allocator, "+++\n[[a]]\nx = 1\n[b]\ny = 2\n[[a]]\nz = 3\n+++\n", .toml, true);
+    defer out.arena.deinit();
+    const m = out.result.block.?.metadata.?;
+    const a_list = entry(m, "a").?.list;
+    try testing.expectEqual(@as(usize, 2), a_list.len);
+    try testing.expectEqualStrings("1", entry(a_list[0].map, "x").?.scalar);
+    try testing.expectEqualStrings("3", entry(a_list[1].map, "z").?.scalar);
+    try testing.expectEqualStrings("2", entry(entry(m, "b").?.map, "y").?.scalar);
+
+    // Re-open after another `[[array]]`: the new element lands on a's
+    // list, and keys under it go to a's newest map — previously the
+    // append hit b's list and the next key line flipped the whole
+    // payload to unsupported.
+    var out2 = try preprocessT(testing.allocator, "+++\n[[a]]\nx = 1\n[[b]]\ny = 2\n[[a]]\nz = 3\n+++\n", .toml, true);
+    defer out2.arena.deinit();
+    const m2 = out2.result.block.?.metadata.?;
+    const a2 = entry(m2, "a").?.list;
+    try testing.expectEqual(@as(usize, 2), a2.len);
+    try testing.expectEqualStrings("1", entry(a2[0].map, "x").?.scalar);
+    try testing.expectEqualStrings("3", entry(a2[1].map, "z").?.scalar);
+    const b2 = entry(m2, "b").?.list;
+    try testing.expectEqual(@as(usize, 1), b2.len);
+    try testing.expectEqualStrings("2", entry(b2[0].map, "y").?.scalar);
 }
 
 test "frontmatter: CRLF payload and fences" {

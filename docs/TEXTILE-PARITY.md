@@ -225,6 +225,17 @@ Failing link/image lookaheads only ever scan up to the next `"`/`!` (or a
 URL's whitespace), and those segments are disjoint, so the scan is linear
 even for hostile quote/bang runs.
 
+Modifier-spec lookaheads are bounded the same way. The `{`/`(`/`[` closer
+searches in `scanMods` stop at the owning construct's end (the cell
+boundary for cell modifiers), and `scanImageMods` searches stop at the
+image's closing `!` — a missing closer fails in O(width of the construct),
+never by rescanning to end of line. Phrase-attribute and acronym
+lookaheads have no fixed construct end, so they resolve `}`/`)`/`]`/`#`
+through a per-line next-occurrence index built once per line on first use;
+an unclosed-spec storm (`*{z `, `AB(`, `|{a|` repeated to 640 KB on one
+line) renders in milliseconds and scales linearly (issue #155; the storm
+unit test in `src/textile.zig` exercises all of them).
+
 Table parsing is likewise linear: each row is scanned once into cells and
 a single close-time pass resolves the column defaults, so a 20,000-row
 storm test in `src/textile.zig` runs as an ordinary unit test.
@@ -333,7 +344,10 @@ modifiers without the `. ` terminator; `table.` followed by non-row text
 (`table. of contents` stays a paragraph — the rest after the period must
 parse as a row); a modifier run without a `. ` or `|` terminator; an
 unclosed `{`/`(`/`[` inside a cell (the line is still a row, the cell
-verbatim). `||` is a degenerate one-cell row and stays a table.
+verbatim). `||` is a degenerate one-cell row and stays a table. A
+`\n` colspan / `/n` rowspan number is capped at 20 — a missing, zero,
+or oversized number leaves the cell literal rather than wrapping
+(`|\276. x|` is literal cell text, not colspan 20; issue #165).
 
 ## 7. Link aliases (T9): pinned behaviors
 
@@ -349,10 +363,17 @@ to end of line. Textile 2's "block of its own" is read loosely on purpose:
 the Hobix example places the definition directly after the paragraph with
 no blank line, so a def line needs no separation. A recognized def line
 **vanishes from output without changing the surrounding block** — an open
-paragraph or list continues across it ("place the URL anywhere in your
-document"), and a bare block of def lines renders nothing. A def line that
-lands between table rows closes the table (the table's own rule: any
-non-row line ends it).
+paragraph or `*`/`#` list continues across it ("place the URL anywhere in
+your document"), and a bare block of def lines renders nothing. Two open
+blocks treat it as a terminator instead: a def line between table rows
+closes the table (the table's own rule: any non-row line ends it), and a
+def line closes an open definition list — §21's dl-specific termination
+pin overrides the generic "list continues" reading. A line inside a
+verbatim leaf — a `bc.`/`pre.` code block, a `==` escape region, or a
+`notextile.` raw block — is *displayed* content, and a line that renders
+can never be a def: the collection pass tracks the same block ownership
+the parse loop uses, so verbatim `[alias]url` lines render as content and
+never register (issue #162).
 
 **Resolution.** A `"text":alias` link whose URL token matches a defined
 alias uses the defined URL; the token is otherwise an ordinary URL — an
@@ -675,7 +696,10 @@ an open paragraph, the list tree, an open table, and single-period or
 extended `bc.`/`pre.`/`bq..` blocks alike (a block signature would do
 the same). This is a choice — Textile 2's extended blocks run "until
 the next signature is found" and `==` is not a signature — pinned by
-the `escape-block-*` fixtures.
+the `escape-block-*` fixtures. A pending `clear.` fragment is dropped
+when the region opens: the region's `.html_block` leaf has no
+attribute list to carry it, the identical rule `notextile.` uses
+(§23).
 
 **Inline form.** `==` opens at line start or after a Unicode
 whitespace/punctuation boundary, must be exactly two equals (a `=` run
@@ -804,7 +828,10 @@ list renders through the same `writeAttrs` path as blocks and cells.
 (an unclosed `{` or `(`, a `(`-spec with no `)`), a junk post-src token,
 an empty src, an unclosed `!`, and every malformed size shape — a bare
 `N`, `x20`, `10x`, a `10w20h` run without the separating space, extra
-tokens — keep the whole construct ordinary text. The pre-existing pin
+tokens — keep the whole construct ordinary text. Padding saturates at
+the `u8` counter: a `(`/`)` run longer than 255 makes the image literal
+rather than overflowing — the same guard the block/table modifier
+scanner uses (issue #145). The pre-existing pin
 that all modifier shapes stay literal was updated: `!>obake.gif!` now
 renders Hobix's own aligned form.
 
@@ -1033,7 +1060,12 @@ stops at the space — so it continues the open definition. Pinned by
 
 **Termination.** The list closes at a blank line, a recognized block
 signature (including a fresh `dl.`, which starts a new list), a
-`[alias]url` def line, or end of input. Inside the list, an empty
+`[alias]url` def line, or end of input. The def-line terminator is
+this list's specific rule: §7's generic "an open paragraph or list
+continues across it" describes paragraphs and `*`/`#` lists, while a
+def line inside a `dl.` ends the list — "place the URL anywhere"
+keeps it a definition rather than a continuation of the open
+definition (issue #164). Inside the list, an empty
 `dl.`/`term:`-less signature line stays literal — the same
 conservatism as an empty `bq.`: `dl. plain text`, `dl. term:` (empty
 definition), and `dl. ` (empty signature) are all ordinary text,
