@@ -2518,8 +2518,10 @@ const ParsedFootnoteDefinition = struct {
 /// Recognizes a Markdown footnote definition line at the start of a
 /// paragraph: `[^label]:` with at most three columns of indentation,
 /// followed by optional whitespace and the definition content. Continuation
-/// lines indented 1–3 columns join the definition's paragraph. Any other
-/// shape returns null, so the line stays ordinary paragraph text.
+/// lines indented 1–3 columns join the definition's paragraph; a deeper
+/// indent (4+ columns, or a tab, which advances past column 3) ends the
+/// body without invalidating the definition. Any other shape returns null,
+/// so the line stays ordinary paragraph text.
 fn tryParseFootnoteDefinition(doc: *document.Document, lines: []const Paragraph.LineRef) ?ParsedFootnoteDefinition {
     const bytes = doc.src.bytes;
     const first = lines[0].content;
@@ -2552,7 +2554,11 @@ fn tryParseFootnoteDefinition(doc: *document.Document, lines: []const Paragraph.
             if (t[li] == ' ') {
                 lin += 1;
             } else if (t[li] == '\t') {
-                return null; // tabs in continuation indent are out of scope
+                // A tab anywhere in the indent advances to the next tab
+                // stop (column 4+): like a 4+-space indent it ends the
+                // body, but the definition still stands.
+                lin = 4;
+                break;
             } else break;
         }
         if (lin >= 1 and lin <= 3) {

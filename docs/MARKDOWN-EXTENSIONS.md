@@ -35,9 +35,12 @@ Hi[^note].
 - A definition line is `[^label]:` at the start of a paragraph line with
   at most three columns of indentation, followed by optional whitespace
   and the note body. A definition may be continued on following lines
-  indented 1–3 columns. Definitions are extracted from the start of each
-  paragraph, exactly like §4.7 link reference definitions, and a paragraph
-  consisting only of definitions produces no block.
+  indented 1–3 columns; a deeper indent — 4+ columns, or a tab anywhere in
+  the leading whitespace (a tab advances to the next tab stop, past column
+  3) — ends the body without invalidating the definition, and the line
+  stays ordinary paragraph content. Definitions are extracted from the
+  start of each paragraph, exactly like §4.7 link reference definitions,
+  and a paragraph consisting only of definitions produces no block.
 - Definitions never appear in the body; the renderer (with the `footnotes`
   render option) appends a footnotes section at the end of the document
   containing the **used** definitions in **first-reference order**,
@@ -57,6 +60,12 @@ Hi[^note].
 - Labels match **exactly** (case-sensitive byte equality).
 - Render-side numbering is first-reference order, so the numbers follow the
   order the author references the notes, not the order of the definitions.
+- References are numbered wherever they render — in body text, in callout
+  titles, and inside other footnote definitions (references in definition
+  bodies number after the body's references, in the order the definitions
+  render in the section). A definition reachable only through another
+  definition's body still appears in the section, and every reference id
+  gets a matching backref anchor in its definition's body.
 - **Repeated references are tracked per reference.** The first reference to
   a footnote is `fnref-N`; the second is `fnref-N-2`, the third
   `fnref-N-3`, and so on, so every reference has a unique id (a duplicate
