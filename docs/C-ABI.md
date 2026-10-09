@@ -29,7 +29,8 @@ typedef void *(*oliver_alloc_fn)(void *ctx, size_t size);
 typedef void (*oliver_free_fn)(void *ctx, void *ptr, size_t size);
 
 typedef struct oliver_buffer {
-    uint8_t *data;   /* owned on success; NULL on error */
+    uint8_t *data;   /* owned on success; NULL on error, and NULL when
+                        a successful render produced zero bytes */
     size_t len;      /* byte length of `data` on success; 0 on error */
     int error_code;  /* OLIVER_OK on success, else an OLIVER_ERR_* code */
 } oliver_buffer;
@@ -59,7 +60,11 @@ of the ABI, per issue #96.
   caller**, allocated through the supplied pair. Release them with
   `oliver_free`, passing the **same** `free` and `ctx` used at render
   time (the buffer's size is passed back to `free`, matching the
-  allocation).
+  allocation). A successful render of **empty output** returns
+  `data == NULL` with `len == 0` — distinguish success from error by
+  `error_code`, never by `data` alone (issue #149; Oliver's zero-length
+  sentinel never reaches the caller's `free`). `oliver_free` is a safe
+  no-op for a null buffer.
 - On any error, `error_code` is non-zero, `data` is NULL, `len` is 0,
   and there is nothing to free.
 - The input bytes are borrowed for the duration of the call only.

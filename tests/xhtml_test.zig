@@ -470,6 +470,53 @@ test "xhtml: representative output is well-formed XML" {
     try wellformed.check(wrapped_fn.items);
 }
 
+test "xhtml: hostile escaped input stays well-formed (issue #152)" {
+    // Every byte that cannot be an XML 1.0 Char — C0 controls (raw or
+    // numeric-reference-decoded), the noncharacters U+FFFE/U+FFFF, and
+    // ill-formed UTF-8 units — is replaced with U+FFFD at the escaping
+    // seam, so wrapped fragments remain mechanically valid XML.
+    const hostile_markdown = [_][]const u8{
+        "a\x01b\n", // raw C0 in text
+        "&#1; &#x1F; &#xFFFE; &#xFFFF;\n", // via numeric character refs
+        "a\xef\xbf\xbeb a\xef\xbf\xbfb\n", // literal U+FFFE / U+FFFF
+        "a\xffb a\xc0\xafb a\xed\xa0\x80b a\xe2\x82b\n", // ill-formed UTF-8
+        "`code \x02 span` and `` c\x03 ``\n", // code spans
+        "```\nok \x04 \xff\n```\n", // code block content
+        "# h\x06ead\n", // heading text
+    };
+    for (hostile_markdown) |input| {
+        var frag = try renderXhtml(input, .markdown);
+        defer frag.deinit(std.testing.allocator);
+        var wrapped = std.ArrayList(u8).empty;
+        defer wrapped.deinit(std.testing.allocator);
+        try wrapFragment(frag.items, &wrapped);
+        try wellformed.check(wrapped.items);
+        // Defense in depth on top of the checker: no forbidden C0 byte,
+        // no raw U+FFFE/U+FFFF, valid UTF-8, and the replacement landed.
+        for (frag.items) |b| {
+            try std.testing.expect(b >= 0x20 or b == '\t' or b == '\n' or b == '\r');
+        }
+        try std.testing.expect(std.mem.indexOf(u8, frag.items, "\xef\xbf\xbe") == null);
+        try std.testing.expect(std.mem.indexOf(u8, frag.items, "\xef\xbf\xbf") == null);
+        try std.testing.expect(std.unicode.utf8ValidateSlice(frag.items));
+        try std.testing.expect(std.mem.indexOf(u8, frag.items, "\xef\xbf\xbd") != null);
+    }
+
+    // The Cooklang renderer shares the seam: hostile ingredient/cookware
+    // names and step text are sanitized identically.
+    var ck = try renderCooklangProfile("Add @fl\x07our{2%cup} to the #p\x08ot and stir.\n", .xhtml);
+    defer ck.deinit(std.testing.allocator);
+    var wrapped_ck = std.ArrayList(u8).empty;
+    defer wrapped_ck.deinit(std.testing.allocator);
+    try wrapFragment(ck.items, &wrapped_ck);
+    try wellformed.check(wrapped_ck.items);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(ck.items));
+    for (ck.items) |b| {
+        try std.testing.expect(b >= 0x20 or b == '\t' or b == '\n' or b == '\r');
+    }
+    try std.testing.expect(std.mem.indexOf(u8, ck.items, "\xef\xbf\xbd") != null);
+}
+
 test "xhtml: wellformedness checker itself distinguishes clean from poisoned" {
     const clean = "<p>a &amp; b</p>";
     var wrapped = std.ArrayList(u8).empty;

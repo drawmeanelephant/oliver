@@ -24,6 +24,7 @@
 //! The library stays filesystem-free; this is pure bytes in → bytes out.
 
 const std = @import("std");
+const oliver = @import("oliver");
 
 /// The JSON wire type for the typed meta fields. Unknown fields are
 /// silently ignored (the S1 contract also ships `template` and
@@ -310,26 +311,13 @@ fn nextDollar(s: []const u8, from: usize) usize {
 
 /// Writes `text` with HTML escaping (& < > " ' → entities), matching
 /// the GAWK `html_escape` used by the rotkeeper adapter. The order
-/// (& first) prevents double-escaping.
+/// (& first) prevents double-escaping. The shared escaping seam also
+/// replaces bytes that cannot appear in well-formed output — C0 controls
+/// other than tab/LF/CR (NUL included), U+FFFE/U+FFFF, and ill-formed
+/// UTF-8 — with U+FFFD (issue #152), so meta JSON like `"\u0001"` or
+/// `"\u0000"` never lands in the page raw.
 pub fn htmlEscape(out: anytype, text: []const u8) !void {
-    var start: usize = 0;
-    var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        const replacement: ?[]const u8 = switch (text[i]) {
-            '&' => "&amp;",
-            '<' => "&lt;",
-            '>' => "&gt;",
-            '"' => "&quot;",
-            '\'' => "&#39;",
-            else => null,
-        };
-        if (replacement) |r| {
-            if (i > start) try out.writeAll(text[start..i]);
-            try out.writeAll(r);
-            start = i + 1;
-        }
-    }
-    if (start < text.len) try out.writeAll(text[start..]);
+    try oliver.html.writeEscapedXml(out, text, "&quot;", "&#39;");
 }
 
 // ---------------------------------------------------------------------------
@@ -643,4 +631,23 @@ test "htmlEscape: empty string" {
     defer aw.deinit();
     try htmlEscape(&aw.writer, "");
     try testing.expectEqualStrings("", aw.written());
+}
+
+test "htmlEscape: non-XML chars and ill-formed UTF-8 become U+FFFD" {
+    // issue #152: the shared seam replaces what cannot appear in output.
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try htmlEscape(&aw.writer, "a\x01b\x00c\xef\xbf\xbe\xff\xe2\x82");
+    try testing.expectEqualStrings("a\u{FFFD}b\u{FFFD}c\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}", aw.written());
+}
+
+test "wrap: meta JSON control escapes never reach the page raw" {
+    // issue #152: JSON "\u0001"/"\ufffe" decode to hostile bytes in
+    // the meta strings; interpolation sanitizes them via the shared seam.
+    const meta_json =
+        \\{"title":"a\u0001A\ufffeb","description":"","author":"","date":"","palette":"","template":"","render_profile":""}
+    ;
+    const out = try wrapT("<title>$title$</title>", meta_json, "", "");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("<title>a\u{FFFD}A\u{FFFD}b</title>", out);
 }

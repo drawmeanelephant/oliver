@@ -12,8 +12,10 @@
  *     allocations never request more.
  *   - `oliver_render` returns a buffer. On success (`error_code ==
  *     OLIVER_OK`) the buffer's `data` points to `len` bytes that are
- *     owned by the caller. Release them with `oliver_free`, passing the
- *     SAME `free` function and `ctx` used at render time.
+ *     owned by the caller — or is NULL when `len == 0` (a successful
+ *     empty render). Release them with `oliver_free`, passing the SAME
+ *     `free` function and `ctx` used at render time; `oliver_free` is a
+ *     no-op for a NULL buffer.
  *   - On any error, `error_code` is non-zero and `data` is NULL with
  *     `len == 0`; there is nothing to free.
  *   - The input bytes are borrowed for the duration of the call only.
@@ -96,7 +98,8 @@ enum {
 
 /* An owned render result. */
 typedef struct oliver_buffer {
-    uint8_t *data;      /* owned on success; NULL on error */
+    uint8_t *data;      /* owned on success; NULL on error, and NULL when
+                           a successful render produced zero bytes */
     size_t len;         /* byte length of `data` on success; 0 on error */
     int error_code;     /* OLIVER_OK on success, else an OLIVER_ERR_* code */
 } oliver_buffer;

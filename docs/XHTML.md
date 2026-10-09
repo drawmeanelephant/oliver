@@ -71,7 +71,11 @@ concerns that belong to a full-document API, not the fragment serializer.
   predefined entities plus NUL → U+FFFD, applied to text, code spans, code
   blocks, URLs (`href`/`src` percent-encoding is unchanged), titles, alt
   text, and generated attributes. Unicode passes through as codepoints —
-  no named-entity tables, no lossy rewriting.
+  no named-entity tables, no lossy rewriting. Bytes that cannot be XML 1.0
+  `Char`s — C0 controls other than tab/LF/CR, the noncharacters
+  U+FFFE/U+FFFF, and ill-formed UTF-8 units — are likewise replaced with
+  U+FFFD (the NUL policy generalized, issue #152), so escaped output is
+  always well-formed character data no matter how hostile the input.
 - **Whitespace and newlines** follow the existing policy exactly: `\n`
   only, one trailing `\n` per block, deterministic everywhere.
 
@@ -123,7 +127,9 @@ well-formedness scanner used as **machine evidence** that representative
 XHTML output is valid XML. It checks balanced, name-matched elements;
 quoted, unique attributes; the five predefined entities and numeric
 references; comments, CDATA, and processing instructions; and character
-validity. Representative Markdown, Textile, and Cooklang XHTML fragments
+validity — no C0 controls except tab/LF/CR, no U+FFFE/U+FFFF, well-formed
+UTF-8 only, so hostile escaped input (issue #152) cannot slip a byte past
+the gate. Representative Markdown, Textile, and Cooklang XHTML fragments
 are wrapped in a minimal namespace-aware test wrapper and validated:
 
 ```xml

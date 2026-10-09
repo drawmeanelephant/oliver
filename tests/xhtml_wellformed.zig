@@ -14,7 +14,9 @@
 //!   - text with no bare `<`; `&` only as a predefined or numeric reference
 //!   - comments (`<!-- -->`, no `--`), CDATA sections, processing
 //!     instructions (e.g. `<?xml ... ?>`)
-//!   - no C0 control characters except tab/LF/CR
+//!   - no C0 control characters except tab/LF/CR, no U+FFFE/U+FFFF, and
+//!     well-formed UTF-8 only (no overlongs, surrogates, truncated or
+//!     out-of-range encodings) — what a real XML parser's Char check sees
 //!   - XML Name syntax for element/attribute names (ASCII subset; Oliver
 //!     emits only ASCII element and attribute names)
 
@@ -131,10 +133,7 @@ fn text(s: *Scanner) Error!void {
         switch (c) {
             '<' => return,
             '&' => try entityRef(s),
-            else => {
-                try checkChar(c);
-                s.pos += 1;
-            },
+            else => try xmlChar(s),
         }
     }
 }
@@ -194,8 +193,7 @@ fn comment(s: *Scanner) Error!void {
         }
         // `--` inside a comment is forbidden.
         if (std.mem.startsWith(u8, s.bytes[s.pos..], "--")) return Error.Malformed;
-        try checkChar(s.bytes[s.pos]);
-        s.pos += 1;
+        try xmlChar(s);
     }
 }
 
@@ -218,8 +216,23 @@ fn pi(s: *Scanner) Error!void {
     }
 }
 
-fn checkChar(c: u8) Error!void {
-    if (c < 0x20 and c != '\t' and c != '\n' and c != '\r') return Error.Malformed;
+/// Consumes one XML 1.0 `Char` at the cursor: C0 controls other than
+/// tab/LF/CR, the noncharacters U+FFFE/U+FFFF, and ill-formed UTF-8
+/// (bad lead bytes, stray continuations, overlong or truncated
+/// sequences, encoded surrogates, code points past U+10FFFF) are all
+/// malformed (issue #152 — the gate must see what a real XML parser's
+/// character check sees, not just the C0 range).
+fn xmlChar(s: *Scanner) Error!void {
+    const c = s.next() orelse return Error.Malformed;
+    if (c < 0x80) {
+        if (c < 0x20 and c != '\t' and c != '\n' and c != '\r') return Error.Malformed;
+        return;
+    }
+    const n = std.unicode.utf8ByteSequenceLength(c) catch return Error.Malformed;
+    if (s.pos + n - 1 > s.bytes.len) return Error.Malformed;
+    const cp = std.unicode.utf8Decode(s.bytes[s.pos - 1 ..][0..n]) catch return Error.Malformed;
+    if (cp == 0xFFFE or cp == 0xFFFF) return Error.Malformed;
+    s.pos += n - 1;
 }
 
 const StartTag = struct {
@@ -259,8 +272,7 @@ fn startTag(s: *Scanner) Error!StartTag {
                 s.pos += 1;
                 break;
             }
-            try checkChar(q);
-            s.pos += 1;
+            try xmlChar(s);
         } else return Error.Malformed;
     }
     return .{ .name = name, .self_closing = self_closing };
@@ -302,4 +314,21 @@ test "well-formed: unicode text passes" {
 
 test "well-formed: control chars rejected" {
     try std.testing.expectError(error.Malformed, check("<p>a\x01b</p>"));
+}
+
+test "well-formed: non-XML chars and ill-formed UTF-8 rejected" {
+    // The gate sees what a real XML parser sees (issue #152): U+FFFE,
+    // U+FFFF, stray/invalid UTF-8 bytes, surrogate encodings, overlong
+    // forms, and truncated sequences are all malformed — in text and in
+    // attribute values alike.
+    try std.testing.expectError(error.Malformed, check("<p>a\xef\xbf\xbeb</p>")); // U+FFFE
+    try std.testing.expectError(error.Malformed, check("<p>a\xef\xbf\xbfb</p>")); // U+FFFF
+    try std.testing.expectError(error.Malformed, check("<p>a\xffb</p>")); // bad lead byte
+    try std.testing.expectError(error.Malformed, check("<p>a\x80b</p>")); // stray continuation
+    try std.testing.expectError(error.Malformed, check("<p>a\xed\xa0\x80b</p>")); // encoded surrogate
+    try std.testing.expectError(error.Malformed, check("<p>a\xc0\xafb</p>")); // overlong '/'
+    try std.testing.expectError(error.Malformed, check("<p>a\xe2\x82</p>")); // truncated sequence
+    try std.testing.expectError(error.Malformed, check("<p t=\"a\xef\xbf\xbeb\">x</p>")); // in an attribute
+    // And the replacement itself is fine.
+    try check("<p>a\xef\xbf\xbdb</p>"); // U+FFFD
 }
