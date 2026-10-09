@@ -10,6 +10,7 @@
 //! Filesystem is CLI-only (not library). Deterministic, sorted srcs.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 fn isSourceFile(basename: []const u8) bool {
     return std.mem.endsWith(u8, basename, ".md") or
@@ -65,6 +66,15 @@ fn upDirs(allocator: std.mem.Allocator, n: usize) ![]u8 {
     return buf;
 }
 
+/// Windows: dir-walk and path.join yield '\' separators. The TSV contract is
+/// POSIX-style '/' (bash consumers prefix-strip and count slashes), so every
+/// arg and emitted path is normalized on entry/emission.
+fn posixPath(gpa: std.mem.Allocator, s: []const u8) ![]u8 {
+    const buf = try gpa.dupe(u8, s);
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, buf, '\\', '/');
+    return buf;
+}
+
 /// Writes the 13-col TSV to `writer`. On basename collision prints to
 /// `diagnostics` and returns `error.Collision`. The record is emitted
 /// unescaped, so a flag value or source filename containing a tab or
@@ -74,18 +84,33 @@ fn upDirs(allocator: std.mem.Allocator, n: usize) ![]u8 {
 pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
-    content_dir: []const u8,
-    output_dir: []const u8,
-    template_dir: []const u8,
-    meta_dir: []const u8,
+    content_dir_arg: []const u8,
+    output_dir_arg: []const u8,
+    template_dir_arg: []const u8,
+    meta_dir_arg: []const u8,
     default_template: []const u8,
-    oliver_bin: []const u8,
-    root_dir: []const u8,
+    oliver_bin_arg: []const u8,
+    root_dir_arg: []const u8,
     dry_run: []const u8,
     verbose: []const u8,
     writer: anytype,
     diagnostics: *std.Io.Writer,
 ) !void {
+    const content_dir = try posixPath(gpa, content_dir_arg);
+    const output_dir = try posixPath(gpa, output_dir_arg);
+    const template_dir = try posixPath(gpa, template_dir_arg);
+    const meta_dir = try posixPath(gpa, meta_dir_arg);
+    const oliver_bin = try posixPath(gpa, oliver_bin_arg);
+    const root_dir = try posixPath(gpa, root_dir_arg);
+    defer {
+        gpa.free(content_dir);
+        gpa.free(output_dir);
+        gpa.free(template_dir);
+        gpa.free(meta_dir);
+        gpa.free(oliver_bin);
+        gpa.free(root_dir);
+    }
+
     // The record is unescaped TSV: every column must be free of `\t` and
     // `\n`. Reject unsafe flag values before touching the filesystem.
     const passthroughs = [_]struct { name: []const u8, value: []const u8 }{
@@ -127,6 +152,9 @@ pub fn run(
         if (!isSourceFile(entry.basename)) continue;
         const rel = entry.path;
         const src = try std.fs.path.join(gpa, &.{ content_dir, rel });
+        // On Windows the walker yields '\' separators; normalize to '/' so
+        // prefix-stripping, dirname, and slash-counting behave POSIX-style.
+        if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, src, '\\', '/');
         try srcs.append(gpa, src);
     }
 
@@ -174,6 +202,7 @@ pub fn run(
             defer gpa.free(filename);
             break :blk try std.fs.path.join(gpa, &.{ output_dir, reldir, filename });
         };
+        if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, dst, '\\', '/');
         defer gpa.free(dst);
 
         if (seen.get(dst)) |prev_rel| {
@@ -203,6 +232,7 @@ pub fn run(
         const soul_rel = try std.mem.concat(gpa, u8, &.{ stripped_rel, ".soul.md" });
         defer gpa.free(soul_rel);
         const soul_path = try std.fs.path.join(gpa, &.{ meta_dir, soul_rel });
+        if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, soul_path, '\\', '/');
         defer gpa.free(soul_path);
 
         var soul_final: []const u8 = "NONE";
@@ -223,6 +253,7 @@ pub fn run(
         }
 
         const template = try std.fs.path.join(gpa, &.{ template_dir, default_template });
+        if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, template, '\\', '/');
         defer gpa.free(template);
 
         try writer.writeAll(src);
