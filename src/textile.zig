@@ -197,6 +197,11 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try closeCode(doc, &code);
             try closeDefList(doc, &dlist, &defs);
             try closeRawBlock(doc, &raw);
+            // The region renders a raw `.html_block` leaf with no
+            // attribute list, so a pending `clear.` fragment is dropped
+            // here — identically to `notextile.` (docs/TEXTILE-PARITY.md
+            // §22-§23).
+            _ = takeClear(&pending_clear);
             escape = .{ .start = @intCast(line.end), .end = @intCast(line.end) };
             continue;
         }
@@ -267,8 +272,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         }
         // Def lines disappear everywhere (an open code block claims them as
         // verbatim content above; a def line between table rows closes the
-        // table first).
-        if (tryParseDef(line) != null) continue;
+        // table first). A def line also closes an open definition list —
+        // the §21 termination rule — while a paragraph or `*`/`#` list
+        // continues across it (§7).
+        if (tryParseDef(line) != null) {
+            try closeDefList(doc, &dlist, &defs);
+            continue;
+        }
         // An open definition list absorbs every non-signature line: a
         // `term:definition` line starts a new pair, anything else continues
         // the open definition (Textile 2 "Definition lists": a definition
@@ -900,7 +910,7 @@ fn tryExtendedMarker(doc: *document.Document, line: source.Line) ParseError!?Ext
     if (t[mod_start] == '.') {
         dot = mod_start;
     } else {
-        const scan = scanMods(t, mod_start, .block) orelse return null;
+        const scan = scanMods(t, mod_start, .block, t.len) orelse return null;
         if (!scan.dot_terminated) return null;
         mods = scan.mods;
         dot = scan.end;
@@ -1112,7 +1122,7 @@ fn hasBlockSignaturePrefix(t: []const u8) bool {
     while (i < t.len and std.ascii.isDigit(t[i])) : (i += 1) {}
     if (i == t.len) return false;
     if (t[i] != '.') {
-        const scan = scanMods(t, i, .block) orelse return false;
+        const scan = scanMods(t, i, .block, t.len) orelse return false;
         i = scan.end;
     }
     i += 1;
@@ -1501,19 +1511,23 @@ const ModScan = struct {
 /// allowed in the context, so the whole line stays literal. The run ends at
 /// the first `.` (dot-terminated; the caller checks the required following
 /// whitespace) or, for rows, directly at a `|` (Textile 2's no-period form).
-fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
+/// `limit` bounds the spec-closer searches (`{`/`(`/`[`) to the owning
+/// construct's end — the cell boundary for `.cell` runs, the line end
+/// elsewhere — so repeated lookaheads stay linear (docs/TEXTILE-PARITY.md
+/// §4).
+fn scanMods(bytes: []const u8, i: usize, kind: ModKind, limit: usize) ?ModScan {
     var m = Mods{};
     var j = i;
     while (j < bytes.len) {
         switch (bytes[j]) {
             '{' => {
-                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, '}') orelse return null;
+                const close = indexOfScalarBound(bytes, j + 1, limit, '}') orelse return null;
                 if (close == j + 1) return null;
                 m.user_style = bytes[j + 1 .. close];
                 j = close + 1;
             },
             '[' => {
-                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ']') orelse return null;
+                const close = indexOfScalarBound(bytes, j + 1, limit, ']') orelse return null;
                 if (close == j + 1) return null;
                 m.lang = bytes[j + 1 .. close];
                 j = close + 1;
@@ -1529,7 +1543,7 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
                     m.pad_left += 1;
                     j += 1;
                 } else {
-                    const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ')') orelse return null;
+                    const close = indexOfScalarBound(bytes, j + 1, limit, ')') orelse return null;
                     if (close == j + 1) return null;
                     const inner = bytes[j + 1 .. close];
                     if (std.mem.indexOfScalar(u8, inner, '#')) |h| {
@@ -1600,17 +1614,26 @@ fn scanMods(bytes: []const u8, i: usize, kind: ModKind) ?ModScan {
     return null;
 }
 
+/// Bounded scalar search: the first `b` in `bytes[start..limit]`, or null.
+fn indexOfScalarBound(bytes: []const u8, start: usize, limit: usize, b: u8) ?usize {
+    if (start >= limit) return null;
+    const rel = std.mem.indexOfScalar(u8, bytes[start..limit], b) orelse return null;
+    return start + rel;
+}
+
 /// Reads the span number after a `\`/`/` colspan/rowspan token. A missing,
 /// zero, or oversized span is rejected (the cell stays literal).
 fn scanSpanNumber(bytes: []const u8, i: usize) ?u8 {
     if (i >= bytes.len) return null;
-    var n: u8 = 0;
+    var n: u32 = 0;
     var k = i;
     while (k < bytes.len and bytes[k] >= '0' and bytes[k] <= '9') : (k += 1) {
-        n = n *% 10 +% (bytes[k] - '0');
+        // Clamp instead of wrapping: every value past the documented
+        // ceiling is rejected below, so saturating keeps the check exact.
+        n = @min(n * 10 + @as(u32, bytes[k] - '0'), 21);
     }
     if (k == i or n == 0 or n > 20) return null;
-    return n;
+    return @intCast(n);
 }
 
 fn decimalDigits(bytes: []const u8, i: usize) usize {
@@ -1636,7 +1659,7 @@ fn parseTableRow(doc: *document.Document, line: source.Line, start: usize) Parse
     var i = start;
     var mods = Mods{};
     if (i < t.len and t[i] != '|') {
-        const scan = scanMods(t, i, .row) orelse return null;
+        const scan = scanMods(t, i, .row, t.len) orelse return null;
         mods = scan.mods;
         if (scan.dot_terminated) {
             if (scan.end + 1 >= t.len or !isWhitespaceByte(t[scan.end + 1])) return null;
@@ -1681,7 +1704,7 @@ fn parseCell(doc: *document.Document, line: source.Line, start: usize, end: usiz
     var content_start = start;
     var mods = Mods{};
     if (start < end and isCellModifierStart(t[start])) {
-        if (scanMods(t, start, .cell)) |scan| {
+        if (scanMods(t, start, .cell, end)) |scan| {
             if (scan.dot_terminated and scan.end + 1 < end and isWhitespaceByte(t[scan.end + 1])) {
                 mods = scan.mods;
                 content_start = scan.end + 2;
@@ -1720,7 +1743,7 @@ fn tryTableSignature(doc: *document.Document, line: source.Line) ParseError!?Tab
     var i: usize = 5;
     var mods = Mods{};
     if (i < t.len and t[i] != '.') {
-        const scan = scanMods(t, i, .signature) orelse return null;
+        const scan = scanMods(t, i, .signature, t.len) orelse return null;
         mods = scan.mods;
         if (!scan.dot_terminated) return null;
         i = scan.end;
@@ -1931,7 +1954,7 @@ const BlockSignature = struct {
 /// not followed by a space/tab, make the whole line ordinary text.
 fn parseBlockSignature(doc: *document.Document, line: source.Line, mod_start: usize) ParseError!?BlockSignature {
     const t = line.text;
-    const scan = scanMods(t, mod_start, .block) orelse return null;
+    const scan = scanMods(t, mod_start, .block, t.len) orelse return null;
     if (!scan.dot_terminated) return null;
     if (scan.end + 1 >= t.len or !isWhitespaceByte(t[scan.end + 1])) return null;
     var i = scan.end + 2;
@@ -2023,7 +2046,7 @@ fn tryParagraphMarker(doc: *document.Document, line: source.Line) ParseError!?Bl
 fn tryLineAttr(doc: *document.Document, line: source.Line) ParseError!?BlockSignature {
     const t = line.text;
     if (t.len < 4 or t[0] != '|') return null;
-    const scan = scanMods(t, 1, .line) orelse return null;
+    const scan = scanMods(t, 1, .line, t.len) orelse return null;
     if (scan.dot_terminated) return null; // the run must close with `|`, not `.`
     if (scan.end + 1 >= t.len or t[scan.end + 1] != '.') return null;
     if (scan.end + 2 >= t.len or !isWhitespaceByte(t[scan.end + 2])) return null;
@@ -2110,7 +2133,7 @@ fn tryBlockQuoteMarker(doc: *document.Document, line: source.Line) ParseError!?B
             },
         };
     }
-    const scan = scanMods(t, 2, .block) orelse return null;
+    const scan = scanMods(t, 2, .block, t.len) orelse return null;
     if (!scan.dot_terminated) return null;
     const dot = scan.end;
     if (dot + 1 >= t.len) return null;
@@ -2195,12 +2218,64 @@ fn tryParseDef(line: source.Line) ?DefLine {
 /// Pass 1: walks every line and records `[alias]url` definitions. The first
 /// definition of an alias wins (deterministic, mirroring the Markdown §4.7
 /// first-definition-wins machinery).
+///
+/// The pass mirrors the parse loop's verbatim-ownership rules: a line that
+/// renders as content — inside a `==` escape region, a `bc.`/`pre.` code
+/// block, or a `notextile.` raw block — is displayed text and can never be
+/// a definition (a def line by definition vanishes from output;
+/// docs/TEXTILE-PARITY.md §7, §9, §14, §23).
 fn collectAliases(doc: *document.Document, defs: *AliasTable) ParseError!void {
+    // Which verbatim leaf owns the current line, if any: `.leaf` ends at
+    // the first blank line (single-period `bc.`/`pre.`/`notextile.`), while
+    // `.extended` owns blank lines too and runs until the next
+    // block-signature prefix (`bc..`/`pre..`/`notextile..`). An extended
+    // `bq..` is *not* verbatim for this purpose — def lines vanish inside
+    // it like everywhere else (§10).
+    const Verbatim = enum { leaf, extended };
+    var escape = false;
+    var verbatim: ?Verbatim = null;
     var lines = source.Lines.init(doc.src.bytes);
     while (lines.next()) |line| {
-        const def = tryParseDef(line) orelse continue;
-        if (!defs.contains(def.alias)) {
-            try defs.put(def.alias, def.url);
+        if (escape) {
+            if (isEscapeDelimiter(line.text)) escape = false;
+            continue;
+        }
+        // The lone-`==` check runs before every other rule, so the
+        // delimiter also ends an open verbatim block (§14).
+        if (isEscapeDelimiter(line.text)) {
+            verbatim = null;
+            escape = true;
+            continue;
+        }
+        if (isBlank(line.text)) {
+            if (verbatim == .leaf) verbatim = null;
+            continue;
+        }
+        if (verbatim) |v| {
+            if (v == .extended and try tryExtendedTerminator(doc, line)) {
+                verbatim = null; // the terminator line parses normally below
+            } else {
+                continue; // verbatim content cannot be a definition
+            }
+        }
+        if (tryParseDef(line)) |def| {
+            if (!defs.contains(def.alias)) {
+                try defs.put(def.alias, def.url);
+            }
+            continue;
+        }
+        // Lines that open a verbatim region claim their following lines.
+        if (try tryExtendedMarker(doc, line)) |esig| {
+            if (esig == .code) verbatim = .extended;
+            continue;
+        }
+        if (try tryCodeMarker(doc, line)) |sig| {
+            verbatim = if (sig.extended) .extended else .leaf;
+            continue;
+        }
+        if (tryNoTextileMarker(line)) |sig| {
+            verbatim = if (sig.extended) .extended else .leaf;
+            continue;
         }
     }
 }
@@ -2374,6 +2449,9 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
     const bytes = doc.text(content);
     var run_start: usize = 0;
     var code_opener: ?usize = null;
+    // Built lazily on the first phrase-attribute or acronym attempt; the
+    // arena frees it.
+    var close_index: ?InlineIndex = null;
     var i: usize = 0;
     while (i < bytes.len) {
         const b = bytes[i];
@@ -2453,7 +2531,12 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                 continue;
             }
             if (b >= 'A' and b <= 'Z') {
-                if (scanAcronym(bytes, i)) |a| {
+                var acronym: ?AcronymData = null;
+                if (acronymOpen(bytes, i)) |open| {
+                    if (close_index == null) close_index = try InlineIndex.build(doc.allocator(), bytes);
+                    acronym = scanAcronym(bytes, i, open, close_index.?);
+                }
+                if (acronym) |a| {
                     try appendTextItem(doc.allocator(), items, run_start, i);
                     try items.append(doc.allocator(), .{ .acronym = a });
                     run_start = a.title.end + 1;
@@ -2490,7 +2573,8 @@ fn scanLineItems(doc: *document.Document, items: *std.ArrayList(InlineItem), con
                 // construct literal, like a malformed block modifier.
                 var span_mods: ?SpanMods = null;
                 if (open_ok and i + op.len < bytes.len and isSpanModStart(bytes[i + op.len])) {
-                    if (scanSpanMods(bytes, i + op.len)) |m| {
+                    if (close_index == null) close_index = try InlineIndex.build(doc.allocator(), bytes);
+                    if (scanSpanMods(bytes, i + op.len, close_index.?)) |m| {
                         if (m.content_start < bytes.len and !isWhitespaceByte(bytes[m.content_start])) {
                             span_mods = m;
                         } else {
@@ -2649,8 +2733,10 @@ fn scanEscape(bytes: []const u8, i: usize) ?Range {
 /// `>` right, `=` centered, `-` middle, `^` top, `~` bottom), `{style}`,
 /// `(class)`/`(#id)`/`(class#id)`, and `(`/`)` padding (Textile 2 "Images"
 /// plus the current docs' `=` and style/class forms). The style and class
-/// delimiters are bounded by the construct's closing `!`, so a `)` or `}`
-/// beyond it never leaks in. Multiple alignment modifiers: the last wins
+/// delimiter searches are bounded by the construct's closing `!`, so a `)`
+/// or `}` beyond it never leaks in — and a missing one fails in O(width of
+/// the construct) instead of rescanning to end of line
+/// (docs/TEXTILE-PARITY.md §4). Multiple alignment modifiers: the last wins
 /// (the same rule the block-modifier scanner uses). Returns null on a
 /// malformed token (the whole construct stays literal). `close` is the
 /// image's closing `!`.
@@ -2684,8 +2770,8 @@ fn scanImageMods(bytes: []const u8, i: usize, close: usize) ?ImageMods {
                 j += 1;
             },
             '{' => {
-                const sclose = std.mem.indexOfScalarPos(u8, bytes, j + 1, '}') orelse return null;
-                if (sclose == j + 1 or sclose >= close) return null;
+                const sclose = indexOfScalarBound(bytes, j + 1, close, '}') orelse return null;
+                if (sclose == j + 1) return null;
                 m.style = .{ .start = j + 1, .end = sclose };
                 j = sclose + 1;
             },
@@ -2695,11 +2781,12 @@ fn scanImageMods(bytes: []const u8, i: usize, close: usize) ?ImageMods {
                 // `(class)`/`(#id)`/`(class#id)` spec terminated by `)`
                 // (the current docs' class form, spaces allowed inside).
                 if (j + 1 >= close or bytes[j + 1] == '(' or bytes[j + 1] == ')') {
+                    if (m.pad_left == std.math.maxInt(u8)) return null;
                     m.pad_left += 1;
                     j += 1;
                 } else {
-                    const cclose = std.mem.indexOfScalarPos(u8, bytes, j + 1, ')') orelse return null;
-                    if (cclose == j + 1 or cclose >= close) return null;
+                    const cclose = indexOfScalarBound(bytes, j + 1, close, ')') orelse return null;
+                    if (cclose == j + 1) return null;
                     if (std.mem.indexOfScalar(u8, bytes[j + 1 .. cclose], '#')) |h| {
                         m.class = .{ .start = j + 1, .end = j + 1 + h };
                         m.id = .{ .start = j + 1 + h + 1, .end = cclose };
@@ -2710,6 +2797,7 @@ fn scanImageMods(bytes: []const u8, i: usize, close: usize) ?ImageMods {
                 }
             },
             ')' => {
+                if (m.pad_right == std.math.maxInt(u8)) return null;
                 m.pad_right += 1;
                 j += 1;
             },
@@ -2781,37 +2869,81 @@ fn isSpanModStart(b: u8) bool {
     return b == '{' or b == '(' or b == '[';
 }
 
+/// A per-line next-occurrence index for the bytes the inline spec scanners
+/// look up (`}`, `)`, `]`, `#`): each table answers "the first position
+/// `>= i` holding the byte" in O(1), or `bytes.len` when none follows. The
+/// index is built once per line, on the first phrase-attribute or acronym
+/// attempt, so every subsequent lookahead is O(1) — an unbounded rescan
+/// per candidate made delimiter storms quadratic (docs/TEXTILE-PARITY.md
+/// §4).
+const InlineIndex = struct {
+    /// Next `}` at or after a position (`bytes.len` = none).
+    brace: []usize,
+    /// Next `)` at or after a position.
+    paren: []usize,
+    /// Next `]` at or after a position.
+    bracket: []usize,
+    /// Next `#` at or after a position.
+    hash: []usize,
+
+    fn build(allocator: std.mem.Allocator, bytes: []const u8) ParseError!InlineIndex {
+        const n = bytes.len;
+        const flat = try allocator.alloc(usize, 4 * (n + 1));
+        const idx = InlineIndex{
+            .brace = flat[0 .. n + 1],
+            .paren = flat[n + 1 .. 2 * (n + 1)],
+            .bracket = flat[2 * (n + 1) .. 3 * (n + 1)],
+            .hash = flat[3 * (n + 1) ..],
+        };
+        idx.brace[n] = n;
+        idx.paren[n] = n;
+        idx.bracket[n] = n;
+        idx.hash[n] = n;
+        var i = n;
+        while (i > 0) {
+            i -= 1;
+            idx.brace[i] = if (bytes[i] == '}') i else idx.brace[i + 1];
+            idx.paren[i] = if (bytes[i] == ')') i else idx.paren[i + 1];
+            idx.bracket[i] = if (bytes[i] == ']') i else idx.bracket[i + 1];
+            idx.hash[i] = if (bytes[i] == '#') i else idx.hash[i + 1];
+        }
+        return idx;
+    }
+};
+
 /// Parses a phrase's phrase-attribute run starting at `i` (the byte after
 /// the opener): `{style}`, `(class#id)`, and `[lang]` tokens in any order,
 /// each closed and non-empty. Returns the parsed ranges plus the offset
 /// where the content begins, or null on a malformed token (an unclosed or
 /// empty spec — the whole construct stays literal, the same conservatism
-/// as a malformed block modifier). Any other byte ends the run.
-fn scanSpanMods(bytes: []const u8, i: usize) ?SpanMods {
+/// as a malformed block modifier). Any other byte ends the run. Closer
+/// lookups go through `idx` so a missing one fails in O(1).
+fn scanSpanMods(bytes: []const u8, i: usize, idx: InlineIndex) ?SpanMods {
     var m = SpanMods{ .content_start = i };
     var j = i;
     while (j < bytes.len) {
         switch (bytes[j]) {
             '{' => {
-                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, '}') orelse return null;
-                if (close == j + 1) return null;
+                const close = idx.brace[j + 1];
+                if (close == bytes.len or close == j + 1) return null;
                 m.style = .{ .start = j + 1, .end = close };
                 j = close + 1;
             },
             '(' => {
-                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ')') orelse return null;
-                if (close == j + 1) return null;
-                if (std.mem.indexOfScalar(u8, bytes[j + 1 .. close], '#')) |h| {
-                    m.class = .{ .start = j + 1, .end = j + 1 + h };
-                    m.id = .{ .start = j + 1 + h + 1, .end = close };
+                const close = idx.paren[j + 1];
+                if (close == bytes.len or close == j + 1) return null;
+                const hash = idx.hash[j + 1];
+                if (hash < close) {
+                    m.class = .{ .start = j + 1, .end = hash };
+                    m.id = .{ .start = hash + 1, .end = close };
                 } else {
                     m.class = .{ .start = j + 1, .end = close };
                 }
                 j = close + 1;
             },
             '[' => {
-                const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ']') orelse return null;
-                if (close == j + 1) return null;
+                const close = idx.bracket[j + 1];
+                if (close == bytes.len or close == j + 1) return null;
                 m.lang = .{ .start = j + 1, .end = close };
                 j = close + 1;
             },
@@ -2825,22 +2957,30 @@ fn scanSpanMods(bytes: []const u8, i: usize) ?SpanMods {
     return null;
 }
 
-/// Recognizes Hobix's acronym form `ABC(def)`: a run of 2+ uppercase ASCII
-/// letters at an inline boundary, directly followed by a non-empty
-/// parenthesized definition. The definition closes at the first `)`. Every
-/// other shape stays literal text — a single letter (`I(think)`), an
-/// intraword run, a missing or empty definition, an unclosed paren — so
-/// sentence-like `X(y)` shapes never become acronyms. The definition is
-/// opaque: no phrase formatting and no character replacements.
-fn scanAcronym(bytes: []const u8, i: usize) ?AcronymData {
+/// The cheap half of acronym recognition (Hobix's `ABC(def)` form): an
+/// inline boundary, a 2+ capital run, and a `(` — returns the `(` position
+/// so the caller can decide whether the (lazy) per-line index is worth
+/// building before the `)` lookup.
+fn acronymOpen(bytes: []const u8, i: usize) ?usize {
     if (!isInlineBoundaryBefore(bytes, i)) return null;
     var j = i;
     while (j < bytes.len and bytes[j] >= 'A' and bytes[j] <= 'Z') : (j += 1) {}
     if (j - i < 2) return null;
     if (j >= bytes.len or bytes[j] != '(') return null;
-    const close = std.mem.indexOfScalarPos(u8, bytes, j + 1, ')') orelse return null;
-    if (close == j + 1) return null;
-    return .{ .text = .{ .start = i, .end = j }, .title = .{ .start = j + 1, .end = close } };
+    return j;
+}
+
+/// The `)` half of `ABC(def)`: a non-empty parenthesized definition closed
+/// at the first `)`, looked up through `idx` so an unclosed definition
+/// fails in O(1) instead of rescanning to end of line per capital run.
+/// Every other shape stays literal text — a single letter (`I(think)`),
+/// an intraword run, a missing or empty definition, an unclosed paren —
+/// so sentence-like `X(y)` shapes never become acronyms. The definition
+/// is opaque: no phrase formatting and no character replacements.
+fn scanAcronym(bytes: []const u8, i: usize, open: usize, idx: InlineIndex) ?AcronymData {
+    const close = idx.paren[open + 1];
+    if (close == bytes.len or close == open + 1) return null;
+    return .{ .text = .{ .start = i, .end = open }, .title = .{ .start = open + 1, .end = close } };
 }
 
 /// Recognizes `!url!`, `!url(alt)!` (Hobix) / `!url (alt)!` (Textile 2), and
@@ -6049,4 +6189,218 @@ test "textile: block == escaping emits raw html blocks" {
     const iroot = inter.document.root;
     try std.testing.expectEqual(@as(usize, 3), iroot.children.items.len);
     try std.testing.expectEqualStrings("<b>x</b>\n", iroot.children.items[1].data.html_block);
+}
+
+test "textile: image padding modifier runs saturate at u8 and stay literal" {
+    const oliver = @import("oliver.zig");
+    // The `(`/`)` padding counters are u8: 255 pads render, the 256th makes
+    // the whole image literal — the same guard `scanMods` uses (no panic in
+    // any build mode, no silent wrap in ReleaseFast).
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(std.testing.allocator);
+    for (0..255) |_| try input.append(std.testing.allocator, ')');
+    try input.insertSlice(std.testing.allocator, 0, "!");
+    try input.appendSlice(std.testing.allocator, "x!");
+    var result = try oliver.parse(std.testing.allocator, input.items, .textile, .{});
+    defer result.deinit();
+    {
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<p><img src=\"x\" alt=\"\" style=\"padding-right:255em;\" /></p>\n", out.items);
+    }
+    // 257 left pads (256 past the first token's own `(`) stay literal.
+    input.clearRetainingCapacity();
+    try input.append(std.testing.allocator, '!');
+    for (0..257) |_| try input.append(std.testing.allocator, '(');
+    try input.appendSlice(std.testing.allocator, "x!");
+    var lit = try oliver.parse(std.testing.allocator, input.items, .textile, .{});
+    defer lit.deinit();
+    const p = lit.document.root.children.items[0];
+    try std.testing.expectEqual(document.Tag.paragraph, p.tag);
+    try std.testing.expectEqualStrings(input.items, p.children.items[0].data.text);
+    // And the right-padding mirror.
+    input.clearRetainingCapacity();
+    try input.append(std.testing.allocator, '!');
+    for (0..256) |_| try input.append(std.testing.allocator, ')');
+    try input.appendSlice(std.testing.allocator, "x!");
+    var lit2 = try oliver.parse(std.testing.allocator, input.items, .textile, .{});
+    defer lit2.deinit();
+    const p2 = lit2.document.root.children.items[0];
+    try std.testing.expectEqualStrings(input.items, p2.children.items[0].data.text);
+}
+
+test "textile: oversized colspan/rowspan numbers stay literal" {
+    const oliver = @import("oliver.zig");
+    // Span numbers are capped at 20; a digit run whose value exceeds that
+    // must reject outright rather than wrap u8 (`\276` must not alias to
+    // colspan="20").
+    const literal = [_][]const u8{
+        "|\\276. x|",
+        "|\\516. x|",
+        "|/276. y|",
+        "|\\21. x|",
+        "|\\0. x|",
+        "|\\x. x|",
+    };
+    for (literal) |row| {
+        var input = std.ArrayList(u8).empty;
+        defer input.deinit(std.testing.allocator);
+        try input.appendSlice(std.testing.allocator, row);
+        try input.append(std.testing.allocator, '\n');
+        var result = try oliver.parse(std.testing.allocator, input.items, .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        const want = try std.fmt.allocPrint(std.testing.allocator, "<table>\n<tr>\n<td>{s}</td>\n</tr>\n</table>\n", .{row[1 .. row.len - 1]});
+        defer std.testing.allocator.free(want);
+        try std.testing.expectEqualStrings(want, out.items);
+    }
+    // The ceiling still parses.
+    var ok = try oliver.parse(std.testing.allocator, "|\\20. big|\n", .textile, .{});
+    defer ok.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &ok.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("<table>\n<tr>\n<td colspan=\"20\">big</td>\n</tr>\n</table>\n", out.items);
+}
+
+test "textile: a pending clear. fragment drops at a == escape region" {
+    const oliver = @import("oliver.zig");
+    // The `==` region produces the same attribute-less `.html_block` leaf
+    // as `notextile.`, so a pending `clear.` is dropped identically — the
+    // paragraph after the region must not carry `clear:both`
+    // (docs/TEXTILE-PARITY.md §22-§23).
+    var result = try oliver.parse(std.testing.allocator, "clear.\n==\n<b>x</b>\n==\nplain\n", .textile, .{});
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("<b>x</b>\n<p>plain</p>\n", out.items);
+}
+
+test "textile: a def line closes an open definition list" {
+    const oliver = @import("oliver.zig");
+    // §21's termination rule: the `[alias]url` line ends the list (it does
+    // not continue the open definition like ordinary text), then the
+    // following line is a fresh paragraph — and the alias still registers.
+    var result = try oliver.parse(std.testing.allocator, "dl. a:one\n[x]http://u.example\ncontinuation\n\n\"t\":x\n", .textile, .{});
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+    var out = aw.toArrayList();
+    defer out.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("<dl>\n<dt>a</dt>\n<dd>one</dd>\n</dl>\n<p>continuation</p>\n<p><a href=\"http://u.example\">t</a></p>\n", out.items);
+}
+
+test "textile: alias defs inside verbatim regions never register" {
+    const oliver = @import("oliver.zig");
+    // A `[alias]url` line that is displayed content — inside `bc.`/`pre.`,
+    // a `==` region, or a `notextile.` block, single-period or extended —
+    // stays content and never reaches the alias table (§7, §9, §14, §23).
+    const cases = [_]struct { input: []const u8, want: []const u8 }{
+        .{
+            .input = "bc. code\n[x]http://evil.example\nmore\n\n\"t\":x\n",
+            .want = "<pre><code>code\n[x]http://evil.example\nmore\n</code></pre>\n<p><a href=\"x\">t</a></p>\n",
+        },
+        .{
+            .input = "pre. code\n[x]http://evil.example\n\n\"t\":x\n",
+            .want = "<pre>code\n[x]http://evil.example\n</pre>\n<p><a href=\"x\">t</a></p>\n",
+        },
+        .{
+            .input = "bc.. code\n[x]http://evil.example\n\np. done\n\n\"t\":x\n",
+            .want = "<pre><code>code\n[x]http://evil.example\n\n</code></pre>\n<p>done</p>\n<p><a href=\"x\">t</a></p>\n",
+        },
+        .{
+            .input = "==\n[x]http://evil.example\n==\n\"t\":x\n",
+            .want = "[x]http://evil.example\n<p><a href=\"x\">t</a></p>\n",
+        },
+        .{
+            .input = "notextile.\n[x]http://evil.example\n\n\"t\":x\n",
+            .want = "[x]http://evil.example\n<p><a href=\"x\">t</a></p>\n",
+        },
+        .{
+            // A `==` delimiter interrupts an open code block; the def line
+            // inside the region is escape content, not a definition.
+            .input = "bc. a\n==\n[x]http://evil.example\n==\n\n\"t\":x\n",
+            .want = "<pre><code>a\n</code></pre>\n[x]http://evil.example\n<p><a href=\"x\">t</a></p>\n",
+        },
+    };
+    for (cases) |c| {
+        var result = try oliver.parse(std.testing.allocator, c.input, .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(c.want, out.items);
+    }
+    // Control: a def line inside an extended `bq..` still vanishes and
+    // registers (§10's pin), as does a def after a terminated `bc..`.
+    {
+        var result = try oliver.parse(std.testing.allocator, "bq.. quote\n\n[x]http://u.example\nmore\n\nend.\n\n\"t\":x\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<blockquote>\n<p>quote</p>\n<p>more</p>\n</blockquote>\n<p>end.</p>\n<p><a href=\"http://u.example\">t</a></p>\n", out.items);
+    }
+    {
+        var result = try oliver.parse(std.testing.allocator, "bc.. code\np. para\n[x]http://ok.example\n\n\"t\":x\n", .textile, .{});
+        defer result.deinit();
+        var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer aw.deinit();
+        try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{});
+        var out = aw.toArrayList();
+        defer out.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("<pre><code>code\n</code></pre>\n<p>para</p>\n<p><a href=\"http://ok.example\">t</a></p>\n", out.items);
+    }
+}
+
+test "textile: modifier lookahead storms stay linear and literal" {
+    const oliver = @import("oliver.zig");
+    // Unclosed `{`/`(`/`[` specs in phrase, image, and cell modifier
+    // lookaheads used to rescan to end of line per candidate — quadratic
+    // on a single long line (docs/TEXTILE-PARITY.md §4). The storms all
+    // render as literal content, deterministically.
+    const count = 20_000;
+    const cases = [_]struct { unit: []const u8, tail: []const u8 }{
+        .{ .unit = "*{z ", .tail = "" },
+        .{ .unit = "!{z ", .tail = "" },
+        .{ .unit = "*(z ", .tail = ")" },
+        .{ .unit = "AB(", .tail = "" },
+        .{ .unit = "|{a|", .tail = "" },
+    };
+    for (cases) |c| {
+        var input = std.ArrayList(u8).empty;
+        defer input.deinit(std.testing.allocator);
+        for (0..count) |_| try input.appendSlice(std.testing.allocator, c.unit);
+        try input.appendSlice(std.testing.allocator, c.tail);
+        var result = try oliver.parse(std.testing.allocator, input.items, .textile, .{});
+        defer result.deinit();
+        var first_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer first_writer.deinit();
+        try oliver.html.render(std.testing.allocator, &first_writer.writer, &result.document, .{});
+        var first = first_writer.toArrayList();
+        defer first.deinit(std.testing.allocator);
+        var second_writer = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer second_writer.deinit();
+        try oliver.html.render(std.testing.allocator, &second_writer.writer, &result.document, .{});
+        var second = second_writer.toArrayList();
+        defer second.deinit(std.testing.allocator);
+        try std.testing.expectEqualSlices(u8, first.items, second.items);
+    }
 }
