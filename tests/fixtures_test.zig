@@ -3186,6 +3186,18 @@ test "adversarial: list workloads are stack-safe and deterministic" {
         try tab_nesting.appendSlice(gpa, "- x\n");
     }
 
+    // Deep stack + blank flood (issue #184): span extension and the
+    // list-blank loose/tight marking used to rescan every open container
+    // per blank line — O(depth^2) per line for nested lists. Both are
+    // deferred now (lazy span end on close; `blank_seen` resolved once on
+    // the next nonblank line).
+    var blank_flood = std.ArrayList(u8).empty;
+    defer blank_flood.deinit(gpa);
+    for (0..2_000) |_| try blank_flood.appendSlice(gpa, "- ");
+    try blank_flood.appendSlice(gpa, "leaf");
+    try blank_flood.appendNTimes(gpa, '\n', 10_001);
+    try blank_flood.appendSlice(gpa, "after\n");
+
     const cases = [_]struct { name: []const u8, input: []const u8 }{
         .{ .name = "deep nesting", .input = deep_nesting.items },
         .{ .name = "same-marker storm", .input = marker_storm.items },
@@ -3194,6 +3206,7 @@ test "adversarial: list workloads are stack-safe and deterministic" {
         .{ .name = "nine-digit ordered-marker storm", .input = ordered_marker_storm.items },
         .{ .name = "ten-digit ordered-marker near-miss", .input = ordered_near_miss.items },
         .{ .name = "tab-nested deep list", .input = tab_nesting.items },
+        .{ .name = "deep list with blank-line flood", .input = blank_flood.items },
     };
     for (cases) |case| {
         var first = try renderHtml(case.input, .markdown);
@@ -3265,6 +3278,35 @@ test "adversarial: thematic and Setext leaf storm is deterministic" {
     try deep_near_miss.appendSlice(gpa, "+ x\n");
     var near_miss_out = try renderHtml(deep_near_miss.items, .markdown);
     defer near_miss_out.deinit(gpa);
+}
+
+test "adversarial: wikilink `[[` opener storm stays linear" {
+    const gpa = std.testing.allocator;
+
+    // Issue #183: with --wikilinks on, each `[[` attempt used to rescan the
+    // item tail for a `]]` pair and the whole candidate content for a
+    // nested `[[` — quadratic on `[[`*n shapes. Both scans are memoized
+    // now; only the innermost `[[x]]` forms here.
+    var nested_storm = std.ArrayList(u8).empty;
+    defer nested_storm.deinit(gpa);
+    try nested_storm.appendNTimes(gpa, '[', 20_000);
+    try nested_storm.appendSlice(gpa, "x");
+    try nested_storm.appendNTimes(gpa, ']', 20_000);
+
+    var first = try renderExtHtml(nested_storm.items);
+    defer first.deinit(gpa);
+    var second = try renderExtHtml(nested_storm.items);
+    defer second.deinit(gpa);
+    try std.testing.expectEqualSlices(u8, first.items, second.items);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, first.items, "<a href=\"x\">x</a>"));
+
+    // No closer at all: the failed-scan memo must make every later `[[`
+    // attempt O(1).
+    var open_storm = std.ArrayList(u8).empty;
+    defer open_storm.deinit(gpa);
+    try open_storm.appendNTimes(gpa, '[', 40_000);
+    var open_out = try renderExtHtml(open_storm.items);
+    defer open_out.deinit(gpa);
 }
 
 test "adversarial: fenced code scans literal content linearly and deterministically" {

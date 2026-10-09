@@ -420,6 +420,12 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     // node and its current `.definition_body` node, null when inactive.
     var def_list: ?*document.Node = null;
     var def_body: ?*document.Node = null;
+    // The farthest line end covered so far: container spans extend lazily
+    // (noteCoveredEnd/closeContainersTo). `blank_seen` records that a blank
+    // line ran through the container stack; the per-list loose/tight marks
+    // are derived from it at resolve time (resolveListBlankPending).
+    var span_end: u32 = 0;
+    var blank_seen = false;
 
     var lines = source.Lines.init(doc.src.bytes);
     while (lines.next()) |line| {
@@ -486,12 +492,12 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 if (isFenceClose(view, active.marker, active.fence_len)) {
                     active.node.span.end = @intCast(view.line.content_end);
                     finishFencedCode(&fenced);
-                    extendContainerSpans(&containers, view.line);
+                    noteCoveredEnd(&span_end, view.line);
                     continue;
                 }
                 try appendFencedContentLine(doc, active, view);
                 active.node.span.end = @intCast(view.line.content_end);
-                extendContainerSpans(&containers, view.line);
+                noteCoveredEnd(&span_end, view.line);
                 continue;
             }
             std.debug.assert(matched < active.container_depth);
@@ -509,13 +515,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 if (isBlank(view.line.text)) {
                     try appendCodeContentLine(doc, &active.content, view, 4);
                     active.node.span.end = @intCast(view.line.content_end);
-                    extendContainerSpans(&containers, view.line);
+                    noteCoveredEnd(&span_end, view.line);
                     continue;
                 }
                 if (viewIndent(view) >= 4) {
                     try appendCodeContentLine(doc, &active.content, view, 4);
                     active.node.span.end = @intCast(view.line.content_end);
-                    extendContainerSpans(&containers, view.line);
+                    noteCoveredEnd(&span_end, view.line);
                     continue;
                 }
                 try finishIndentedCode(doc, &indented);
@@ -541,13 +547,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                     if (htmlBlockEnded(active.block_type, view.line.text)) {
                         finishHtmlBlock(&html);
                     }
-                    extendContainerSpans(&containers, view.line);
+                    noteCoveredEnd(&span_end, view.line);
                     continue;
                 }
                 if (!isBlank(view.line.text)) {
                     try appendHtmlBlockLine(doc, &active.content, view);
                     active.node.span.end = @intCast(view.line.content_end);
-                    extendContainerSpans(&containers, view.line);
+                    noteCoveredEnd(&span_end, view.line);
                     continue;
                 }
                 finishHtmlBlock(&html);
@@ -578,7 +584,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                     const cells = try splitRowCells(doc, view.line.contentSpan());
                     try appendTableRow(doc, active.node, view.line.contentSpan(), cells, false, &pending);
                     active.node.span.end = @intCast(view.line.content_end);
-                    extendContainerSpans(&containers, view.line);
+                    noteCoveredEnd(&span_end, view.line);
                     continue;
                 }
             } else {
@@ -599,14 +605,18 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try closeParagraph(doc, &paragraph, close_parent, &defs, &pending, options);
             def_list = null;
             def_body = null;
-            noteListBlankLines(&containers, matched);
-            containers.shrinkRetainingCapacity(matched);
+            // A blank line inside an open list may make it loose; the
+            // per-list marking is deferred to the next nonblank line
+            // (resolveListBlankPending) so a blank line costs O(1)
+            // regardless of stack depth.
+            blank_seen = true;
+            closeContainersTo(&containers, matched, span_end);
             // A blank line with only a dead item on the stack (an inert
             // blank-start item failed to match) closes its list too.
             if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
-                containers.shrinkRetainingCapacity(containers.items.len - 1);
+                closeContainersTo(&containers, containers.items.len - 1, span_end);
             }
-            extendContainerSpans(&containers, view.line);
+            noteCoveredEnd(&span_end, view.line);
             continue;
         }
 
@@ -652,7 +662,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 try doc.appendChild(def_list.?, body);
                 def_body = body;
                 try appendParagraphLine(doc, &paragraph, rest);
-                extendContainerSpans(&containers, view.line);
+                noteCoveredEnd(&span_end, view.line);
                 continue;
             }
             if (def_body != null) {
@@ -661,7 +671,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 const indent = viewIndent(view);
                 if (indent >= 1 and indent < 4 and paragraph != null) {
                     try appendParagraphLine(doc, &paragraph, view);
-                    extendContainerSpans(&containers, view.line);
+                    noteCoveredEnd(&span_end, view.line);
                     continue;
                 }
                 try closeParagraph(doc, &paragraph, def_body.?, &defs, &pending, options);
@@ -677,25 +687,25 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // replacement item closes too.
         if (matched < containers.items.len) {
             const list_sibling = startsListSibling(&containers, matched, view, &thematic_facts);
-            resolveListBlankPending(&containers, matched, view, &thematic_facts);
+            resolveListBlankPending(&containers, matched, view, &thematic_facts, &blank_seen);
             if (paragraph != null and !list_sibling and isParagraphContinuationText(doc, view, &thematic_facts)) {
                 try appendParagraphLine(doc, &paragraph, view);
-                extendContainerSpans(&containers, view.line);
+                noteCoveredEnd(&span_end, view.line);
                 continue;
             }
             try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
             def_list = null;
             def_body = null;
-            containers.shrinkRetainingCapacity(matched);
+            closeContainersTo(&containers, matched, span_end);
             if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
                 const top_list = containers.items[containers.items.len - 1].node;
                 const m = tryListMarkerAfterLeafPrecedence(view, &thematic_facts);
                 if (m == null or !sameListType(top_list, m.?)) {
-                    containers.shrinkRetainingCapacity(containers.items.len - 1);
+                    closeContainersTo(&containers, containers.items.len - 1, span_end);
                 }
             }
         } else {
-            resolveListBlankPending(&containers, matched, view, &thematic_facts);
+            resolveListBlankPending(&containers, matched, view, &thematic_facts, &blank_seen);
         }
 
         // D. New block starts on the remainder. Block quotes and list
@@ -712,7 +722,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 def_body = null;
                 const node = try doc.createNode(.block_quote, stripped.line.contentSpan(), .{ .block_quote = .{} });
                 try doc.appendChild(leafParent(doc, &containers), node);
-                try containers.append(doc.allocator(), .{ .node = node });
+                try pushContainer(doc, &containers, .{ .node = node });
                 view = stripped;
                 // Callout (extension): the first content line of a
                 // blockquote may open a callout. The `[!type] ` marker and
@@ -741,19 +751,19 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                     if (sameListType(top, m)) {
                         list_node = top;
                     } else {
-                        containers.shrinkRetainingCapacity(containers.items.len - 1);
+                        closeContainersTo(&containers, containers.items.len - 1, span_end);
                         list_node = try doc.createNode(.list, m.rest.line.contentSpan(), .{ .list = m.listData() });
                         try doc.appendChild(leafParent(doc, &containers), list_node);
-                        try containers.append(doc.allocator(), .{ .node = list_node });
+                        try pushContainer(doc, &containers, .{ .node = list_node });
                     }
                 } else {
                     list_node = try doc.createNode(.list, m.rest.line.contentSpan(), .{ .list = m.listData() });
                     try doc.appendChild(leafParent(doc, &containers), list_node);
-                    try containers.append(doc.allocator(), .{ .node = list_node });
+                    try pushContainer(doc, &containers, .{ .node = list_node });
                 }
                 const item = try doc.createNode(.list_item, m.rest.line.contentSpan(), .none);
                 try doc.appendChild(list_node, item);
-                try containers.append(doc.allocator(), .{
+                try pushContainer(doc, &containers, .{
                     .node = item,
                     .content_indent = m.content_indent,
                     .initial_blank_pending = m.blank_start,
@@ -773,7 +783,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             try closeParagraph(doc, &paragraph, close_parent, &defs, &pending, options);
             def_list = null;
             def_body = null;
-            extendContainerSpans(&containers, view.line);
+            noteCoveredEnd(&span_end, view.line);
             continue;
         }
         if (tryFenceOpen(view)) |opening| {
@@ -795,7 +805,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
                 .indent = opening.indent,
                 .container_depth = containers.items.len,
             };
-            extendContainerSpans(&containers, view.line);
+            noteCoveredEnd(&span_end, view.line);
             continue;
         }
         if (trySetextUnderline(view)) |underline| {
@@ -811,7 +821,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             )) {
                 def_list = null;
                 def_body = null;
-                extendContainerSpans(&containers, view.line);
+                noteCoveredEnd(&span_end, view.line);
                 continue;
             }
         }
@@ -823,11 +833,11 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             // container. A thematic break is not a sibling item: it belongs
             // beside that list, never directly under the `.list` node.
             if (containers.items.len > 0 and containers.items[containers.items.len - 1].node.tag == .list) {
-                containers.shrinkRetainingCapacity(containers.items.len - 1);
+                closeContainersTo(&containers, containers.items.len - 1, span_end);
             }
             const node = try doc.createNode(.thematic_break, view.line.contentSpan(), .none);
             try doc.appendChild(leafParent(doc, &containers), node);
-            extendContainerSpans(&containers, view.line);
+            noteCoveredEnd(&span_end, view.line);
             continue;
         }
         if (tryAtxHeading(view)) |heading| {
@@ -835,7 +845,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             def_list = null;
             def_body = null;
             try emitHeading(doc, view, heading, leafParent(doc, &containers), &pending, options);
-            extendContainerSpans(&containers, view.line);
+            noteCoveredEnd(&span_end, view.line);
             continue;
         }
         // HTML blocks (§4.6), all seven types. Types 1-6 may interrupt a
@@ -863,7 +873,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             if (block_type <= 5 and htmlBlockEnded(block_type, view.line.text)) {
                 finishHtmlBlock(&html);
             }
-            extendContainerSpans(&containers, view.line);
+            noteCoveredEnd(&span_end, view.line);
             continue;
         }
         // Indented code blocks (§4.4): a chunk needs four or more columns of
@@ -884,7 +894,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             };
             try appendCodeContentLine(doc, &indented.?.content, view, 4);
             node.span.end = @intCast(view.line.content_end);
-            extendContainerSpans(&containers, view.line);
+            noteCoveredEnd(&span_end, view.line);
             continue;
         }
 
@@ -896,11 +906,11 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         if (try tryEmitTable(doc, &paragraph, view, leafParent(doc, &containers), containers.items.len, &table, &pending)) {
             def_list = null;
             def_body = null;
-            extendContainerSpans(&containers, view.line);
+            noteCoveredEnd(&span_end, view.line);
             continue;
         }
         try appendParagraphLine(doc, &paragraph, view);
-        extendContainerSpans(&containers, view.line);
+        noteCoveredEnd(&span_end, view.line);
     }
     finishFencedCode(&fenced);
     try finishIndentedCode(doc, &indented);
@@ -909,6 +919,11 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     // A trailing definition body's paragraph closes into its `<dd>`.
     const close_parent = if (def_body != null) def_body.? else leafParent(doc, &containers);
     try closeParagraph(doc, &paragraph, close_parent, &defs, &pending, options);
+    // Flush the deferred span extension into every container still open at
+    // end of input: their spans reach the last covered line.
+    for (containers.items) |c| {
+        if (c.node.span.end < span_end) c.node.span.end = span_end;
+    }
 
     // Phase 2: inline pass, with the full definitions map available.
     for (pending.items) |job| {
@@ -936,10 +951,12 @@ const ContainerState = struct {
     /// For `.list_item`: dead after its second blank line ("A list item can
     /// begin with at most one blank line"); matches nothing.
     inert: bool = false,
-    /// For `.list`: a blank line was seen while this list was open. The
-    /// loose decision is deferred (docs/BLOCKS-PARSING.md §4) until the next
-    /// line shows whether it separates direct blocks/items in this list.
-    blank_pending: bool = false,
+    /// The number of `.block_quote` containers at or below this entry on
+    /// the stack. The stack only ever shrinks by truncation, so the count
+    /// stays valid for the entry's whole lifetime; `resolveListBlankPending`
+    /// compares it against the stack top's count to tell whether a blank
+    /// line sat inside a quote nested below a list's direct item.
+    quotes_below: u32 = 0,
 };
 
 /// The node under which a new leaf or container is created: the deepest
@@ -949,16 +966,39 @@ fn leafParent(doc: *document.Document, containers: *const std.ArrayList(Containe
     return containers.items[containers.items.len - 1].node;
 }
 
-/// Extends every open container's span end to cover the current line, so a
-/// block quote's or list item's span is the union of its (marker-stripped)
-/// content lines. `line.content_end` is the full line's content end;
-/// stripping only moves the start, so this is correct for matched, lazy,
-/// and blank-marker lines alike.
-fn extendContainerSpans(containers: *const std.ArrayList(ContainerState), line: source.Line) void {
-    const end: u32 = @intCast(line.content_end);
-    for (containers.items) |c| {
-        if (c.node.span.end < end) c.node.span.end = end;
+/// Pushes a container onto the phase-1 stack, recording `quotes_below` —
+/// the number of open `.block_quote` containers at or below it.
+fn pushContainer(
+    doc: *document.Document,
+    containers: *std.ArrayList(ContainerState),
+    state: ContainerState,
+) ParseError!void {
+    var s = state;
+    if (containers.items.len > 0) {
+        s.quotes_below = containers.items[containers.items.len - 1].quotes_below;
     }
+    if (s.node.tag == .block_quote) s.quotes_below += 1;
+    try containers.append(doc.allocator(), s);
+}
+
+/// Records the farthest content end covered so far. A container's span is
+/// the union of its (marker-stripped) content lines; since line content
+/// ends only move forward, the extension is applied lazily at close time
+/// (`closeContainersTo`, or the drain at end of input) instead of touching
+/// every open container per line — O(1) per line regardless of depth.
+fn noteCoveredEnd(span_end: *u32, line: source.Line) void {
+    const end: u32 = @intCast(line.content_end);
+    if (span_end.* < end) span_end.* = end;
+}
+
+/// Pops containers deeper than `keep`, extending each closed node's span
+/// end to the farthest line it covered — the deferred half of
+/// `noteCoveredEnd`.
+fn closeContainersTo(containers: *std.ArrayList(ContainerState), keep: usize, span_end: u32) void {
+    for (containers.items[keep..]) |c| {
+        if (c.node.span.end < span_end) c.node.span.end = span_end;
+    }
+    containers.shrinkRetainingCapacity(keep);
 }
 
 /// Strips one block quote marker (§5.1): up to three columns of leading
@@ -1231,29 +1271,6 @@ fn sameListType(list_node: *document.Node, m: ListMarker) bool {
     };
 }
 
-/// Records a blank line for each open list whose direct item is matched by
-/// this line. A blank line in a nested list must not make an enclosing list
-/// loose; a blank line with no intervening blockquote marker, however, can
-/// separate an outer item's nested block from its next block, so all list
-/// levels are recorded here and resolved when the next nonblank line shows
-/// which level the blank belonged to.
-fn noteListBlankLines(containers: *std.ArrayList(ContainerState), matched: usize) void {
-    for (containers.items, 0..) |*state, i| {
-        if (i >= matched or state.node.tag != .list) continue;
-        if (i + 1 >= matched or containers.items[i + 1].node.tag != .list_item) continue;
-
-        var inside_quote = false;
-        var j = i + 2;
-        while (j < matched) : (j += 1) {
-            if (containers.items[j].node.tag == .block_quote) {
-                inside_quote = true;
-                break;
-            }
-        }
-        if (!inside_quote) state.blank_pending = true;
-    }
-}
-
 /// A marker at the point where an open list's direct item failed is a
 /// sibling item, even when the marker would not be allowed to interrupt a
 /// paragraph at the document level (for example `2.` or a blank item). The
@@ -1273,27 +1290,40 @@ fn startsListSibling(
 /// when the line resumes its direct item after the blank, or starts a sibling
 /// item in that list. If a nested list is still the active destination, the
 /// blank belongs to that nested list and the enclosing list stays tight.
+///
+/// The per-list marking is deferred: a blank line leaves only `blank_seen`,
+/// and the marks are derived here. Within a blank run the stack only ever
+/// shrinks by truncation, so a surviving list saw a qualifying blank exactly
+/// when its direct item is still open and no block quote sits between that
+/// item and the stack top — a blank carried by a quote marker belongs to
+/// the quote, not the enclosing list. `quotes_below` prefix counts make the
+/// check O(1) per list, so a blank line costs O(1) regardless of depth.
 fn resolveListBlankPending(
     containers: *std.ArrayList(ContainerState),
     matched: usize,
     view: View,
     thematic_facts: *const ThematicLineFacts,
+    blank_seen: *bool,
 ) void {
     const old_len = containers.items.len;
     const marker = tryListMarkerAfterLeafPrecedence(view, thematic_facts);
+    const pending_blanks = blank_seen.*;
+    blank_seen.* = false;
+    const top_quotes: u32 = if (old_len > 0) containers.items[old_len - 1].quotes_below else 0;
 
     var i = old_len;
     while (i > 0) {
         i -= 1;
         const state = &containers.items[i];
-        if (state.node.tag != .list or !state.blank_pending) continue;
+        if (state.node.tag != .list) continue;
+        if (!pending_blanks or
+            i + 1 >= old_len or
+            containers.items[i + 1].node.tag != .list_item or
+            containers.items[i + 1].quotes_below != top_quotes) continue;
 
         // The list is closing before this line. A pending blank at the end of
         // a list does not make that list loose.
-        if (i >= matched) {
-            state.blank_pending = false;
-            continue;
-        }
+        if (i >= matched) continue;
 
         // A direct sibling marker follows the list itself when its item did
         // not match. This is a blank-separated item pair.
@@ -1301,7 +1331,6 @@ fn resolveListBlankPending(
             if (i + 1 == matched and marker != null and sameListType(state.node, marker.?)) {
                 state.node.data.list.loose = true;
             }
-            state.blank_pending = false;
             continue;
         }
 
@@ -1309,16 +1338,12 @@ fn resolveListBlankPending(
         // the old stack: this line is a new direct block after the blank.
         if (matched == i + 2) {
             state.node.data.list.loose = true;
-            state.blank_pending = false;
             continue;
         }
 
         // All nested containers matched, so the line remains inside the
         // nested structure and the blank belongs there.
-        if (matched == old_len) {
-            state.blank_pending = false;
-            continue;
-        }
+        if (matched == old_len) continue;
 
         // A nested list remains matched while its item failed. A list marker
         // at the cursor is a sibling in that nested list; otherwise the
@@ -1327,12 +1352,10 @@ fn resolveListBlankPending(
             containers.items[matched - 1].node.tag == .list and
             marker != null)
         {
-            state.blank_pending = false;
             continue;
         }
 
         state.node.data.list.loose = true;
-        state.blank_pending = false;
     }
 }
 
@@ -3863,6 +3886,16 @@ fn splitWikilinkContent(bytes: []const u8, content: source.Span) ?WikilinkParts 
     };
 }
 
+/// The first `[[` byte pair at or after `from`, or null — the raw-byte
+/// check behind a wikilink's no-nested-opener rule (docs/WIKILINKS.md §1).
+fn nextDoubleOpenBracket(bytes: []const u8, from: usize) ?usize {
+    var k = from;
+    while (k + 1 < bytes.len) : (k += 1) {
+        if (bytes[k] == '[' and bytes[k + 1] == '[') return k;
+    }
+    return null;
+}
+
 /// A wikilink that ends up inside a formed link's display text (or an
 /// image description) is demoted to literal text: wikilinks are opaque
 /// inside link text (docs/WIKILINKS.md §2), so `[a [[b]] c](/url)` keeps
@@ -3894,6 +3927,15 @@ fn discoverLinksAndImages(
 
     const old = items.items;
     var max_link_opener_out: usize = 0;
+    // Wikilink scan memos (extension): every `[[` attempt asks for the
+    // first `]]` bracket pair and the first `[[` byte pair at or past a
+    // start that only moves forward, so each answer is cached and rescans
+    // continue where the last one stopped — `[[[[…` storms stay linear
+    // instead of rescanning the tail per opener.
+    var wikilink_close_at: ?usize = null;
+    var wikilink_close_done = false;
+    var wikilink_dbl_at: ?usize = null;
+    var wikilink_dbl_done = false;
     var i: usize = 0;
     while (i < old.len) : (i += 1) {
         const item = old[i];
@@ -3909,14 +3951,28 @@ fn discoverLinksAndImages(
         if (options.wikilinks and item == .bracket and item.bracket.ch == '[' and
             i + 1 < old.len and old[i + 1] == .bracket and old[i + 1].bracket.ch == '[')
         {
-            var close: ?usize = null;
-            var j = i + 2;
-            while (j + 1 < old.len) : (j += 1) {
-                if (old[j] == .bracket and old[j].bracket.ch == ']' and
-                    old[j + 1] == .bracket and old[j + 1].bracket.ch == ']')
-                {
-                    close = j;
-                    break;
+            // The `]]` closer search is memoized: a cached pair is the
+            // first at or past any start between the scan that found it
+            // and the pair itself, and a failed scan means no `]]` pair
+            // exists at or past that start — later starts only move
+            // forward, so each attempt is amortized O(1).
+            const start = i + 2;
+            var close: ?usize = wikilink_close_at;
+            if (close != null and start > close.?) close = null;
+            if (close == null and !wikilink_close_done) {
+                var j = start;
+                while (j + 1 < old.len) : (j += 1) {
+                    if (old[j] == .bracket and old[j].bracket.ch == ']' and
+                        old[j + 1] == .bracket and old[j + 1].bracket.ch == ']')
+                    {
+                        close = j;
+                        break;
+                    }
+                }
+                if (close) |c| {
+                    wikilink_close_at = c;
+                } else {
+                    wikilink_close_done = true;
                 }
             }
             var matched = false;
@@ -3926,15 +3982,21 @@ fn discoverLinksAndImages(
                     .end = old[c].bracket.span.start,
                 };
                 // The target may not contain `[[` (docs/WIKILINKS.md §1):
-                // checked on the raw content bytes.
-                var no_nested = true;
-                var k = content.start;
-                while (k + 1 < content.end) : (k += 1) {
-                    if (bytes[k] == '[' and bytes[k + 1] == '[') {
-                        no_nested = false;
-                        break;
-                    }
+                // checked on the raw content bytes. `wikilink_dbl_at` is
+                // the first `[[` byte pair at or past the last query
+                // start; content starts only move forward, so the check
+                // is amortized O(1) per attempt.
+                while (!wikilink_dbl_done) {
+                    const d = wikilink_dbl_at orelse {
+                        wikilink_dbl_at = nextDoubleOpenBracket(bytes, content.start);
+                        if (wikilink_dbl_at == null) wikilink_dbl_done = true;
+                        continue;
+                    };
+                    if (d >= content.start) break;
+                    wikilink_dbl_at = nextDoubleOpenBracket(bytes, d + 1);
+                    if (wikilink_dbl_at == null) wikilink_dbl_done = true;
                 }
+                const no_nested = wikilink_dbl_at == null or wikilink_dbl_at.? + 1 >= content.end;
                 if (no_nested and splitWikilinkContent(bytes, content) != null) {
                     matched = true;
                     try out.append(doc.allocator(), .{
@@ -7873,6 +7935,62 @@ test "markdown: a 10,000-wikilink storm renders deterministically (extension)" {
     defer b.deinit(testing.allocator);
     try testing.expectEqualSlices(u8, a.items, b.items);
     try testing.expect(std.mem.count(u8, a.items, "<a href=\"Page%20") == 10_000);
+}
+
+test "markdown: a `[[` opener storm stays linear (extension, issue #183)" {
+    // Every `[[` attempt used to rescan the item tail for `]]` and the
+    // whole content for a nested `[[` — quadratic on this shape. The
+    // memoized scans keep it linear; 20,000 openers must complete.
+    var open_storm = std.ArrayList(u8).empty;
+    defer open_storm.deinit(testing.allocator);
+    try open_storm.appendNTimes(testing.allocator, '[', 40_000);
+    var a = try renderWikilinksHtml(open_storm.items, .{});
+    defer a.deinit(testing.allocator);
+    var expected = std.ArrayList(u8).empty;
+    defer expected.deinit(testing.allocator);
+    try expected.appendSlice(testing.allocator, "<p>");
+    try expected.appendNTimes(testing.allocator, '[', 40_000);
+    try expected.appendSlice(testing.allocator, "</p>\n");
+    try testing.expectEqualSlices(u8, expected.items, a.items);
+
+    // Nested-failure shape: each outer `[[` fails the no-nested-opener
+    // check against the same shared `]]` closer — the innermost one forms.
+    var nested_storm = std.ArrayList(u8).empty;
+    defer nested_storm.deinit(testing.allocator);
+    try nested_storm.appendNTimes(testing.allocator, '[', 20_000);
+    try nested_storm.appendSlice(testing.allocator, "x");
+    try nested_storm.appendNTimes(testing.allocator, ']', 20_000);
+    var out = try renderWikilinksHtml(nested_storm.items, .{});
+    defer out.deinit(testing.allocator);
+    var b = try renderWikilinksHtml(nested_storm.items, .{});
+    defer b.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, out.items, b.items);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.items, "<a href=\"x\">x</a>"));
+}
+
+test "markdown: deep container stack plus blank-line storm stays fast (issue #184)" {
+    // A 2,000-deep list stack with 20,000 trailing blank lines used to
+    // rescan every open container twice per line (span extension and
+    // list-blank marking) — O(depth^2) per blank. Both are deferred now.
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var k: usize = 0;
+    while (k < 2_000) : (k += 1) try input.appendSlice(testing.allocator, "- ");
+    try input.appendSlice(testing.allocator, "leaf");
+    try input.appendNTimes(testing.allocator, '\n', 20_001);
+    const oliver = @import("oliver.zig");
+    var a = try oliver.parse(testing.allocator, input.items, .markdown, .{});
+    defer a.deinit();
+    var aw_a = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw_a.deinit();
+    try oliver.html.render(testing.allocator, &aw_a.writer, &a.document, .{});
+    var b = try oliver.parse(testing.allocator, input.items, .markdown, .{});
+    defer b.deinit();
+    var aw_b = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw_b.deinit();
+    try oliver.html.render(testing.allocator, &aw_b.writer, &b.document, .{});
+    try testing.expectEqualSlices(u8, aw_a.writer.buffered(), aw_b.writer.buffered());
+    try testing.expectEqual(@as(usize, 2_000), std.mem.count(u8, aw_a.writer.buffered(), "<ul>"));
 }
 
 test "markdown: callout parses type and title onto the blockquote (extension)" {
