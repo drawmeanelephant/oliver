@@ -1434,8 +1434,11 @@ fn tableHeaderCandidate(doc: *document.Document, span: source.Span) bool {
 /// per-column alignment, or null. Delimiter cells must match the chosen
 /// grammar `:?-+:?`: at least three hyphens, or at least one hyphen when a
 /// colon is present (docs/TABLES.md §3 — the GFM spec's alignment example
-/// uses the single-hyphen `:-:`). Leading/trailing pipes are optional and
-/// stripped escape-aware; the alignment is arena-allocated on success.
+/// uses the single-hyphen `:-:`). The row must contain at least one
+/// unescaped pipe — a bare `---` is a setext underline or thematic break,
+/// never a table delimiter (docs/TABLES.md §3). Leading/trailing pipes are
+/// optional and stripped escape-aware; the alignment is arena-allocated on
+/// success.
 fn tryTableDelimiter(doc: *document.Document, view: View) ParseError!?DelimiterParse {
     const bytes = doc.src.bytes;
     const t = bytes[view.line.contentSpan().start..view.line.contentSpan().end];
@@ -1443,6 +1446,15 @@ fn tryTableDelimiter(doc: *document.Document, view: View) ParseError!?DelimiterP
     var hi: usize = t.len;
     while (lo < hi and (t[lo] == ' ' or t[lo] == '\t')) lo += 1;
     while (hi > lo and (t[hi - 1] == ' ' or t[hi - 1] == '\t')) hi -= 1;
+    var has_pipe = false;
+    var k = lo;
+    while (k < hi) : (k += 1) {
+        if (t[k] == '|' and !isEscaped(t, k)) {
+            has_pipe = true;
+            break;
+        }
+    }
+    if (!has_pipe) return null;
     if (lo < hi and t[lo] == '|') lo += 1;
     if (hi > lo and t[hi - 1] == '|' and !isEscaped(t, hi - 1)) hi -= 1;
 
@@ -1742,16 +1754,16 @@ fn asciiLower(b: u8) u8 {
     return if (b >= 'A' and b <= 'Z') b + 32 else b;
 }
 
-/// Type 6 start: `<` or `</` + one of the block tag names + a space, tab,
-/// vertical tab, form feed, `>`, `/>`, or end of line (cmark's
-/// `[<] [/]? blocktagname (spacechar | [/]? [>])`).
+/// Type 6 start: `<` or `</` + one of the block tag names (case-insensitive,
+/// per §4.6) + a space, tab, vertical tab, form feed, `>`, `/>`, or end of
+/// line (cmark's `[<] [/]? blocktagname (spacechar | [/]? [>])`).
 fn scanHtmlBlockType6(text: []const u8, i: usize) bool {
     var p = i + 1;
     if (p < text.len and text[p] == '/') p += 1;
     for (html_block_tags) |name| {
-        if (p + name.len > text.len or !std.mem.eql(u8, text[p .. p + name.len], name)) continue;
+        if (p + name.len > text.len or !eqlIgnoreCase(text[p .. p + name.len], name)) continue;
         const after = p + name.len;
-        if (after >= text.len) return false;
+        if (after >= text.len) return true; // end of line
         switch (text[after]) {
             ' ', '\t', '\x0B', '\x0C', '\r', '\n', '>' => return true,
             '/' => return after + 1 < text.len and text[after + 1] == '>',
@@ -2807,6 +2819,10 @@ fn stripHeadingAttributes(bytes: []const u8, content: source.Span) struct {
         }
         return .{ .content = content, .id = null, .class = null }; // unknown token shape: not an IAL
     }
+
+    // An empty `{}` (or whitespace-only) group is not an IAL: the braces
+    // stay literal (docs/MARKDOWN-EXTENSIONS.md §3).
+    if (id == null and cls == null) return .{ .content = content, .id = null, .class = null };
 
     // Strip the IAL (and the whitespace before it) from the content.
     var new_end = o;
@@ -5286,6 +5302,24 @@ test "markdown: GFM tables consume escaped pipes and stay paragraphs on mismatch
         defer result.deinit();
         try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
     }
+    // The delimiter row must contain a pipe (docs/TABLES.md §3): a
+    // pipe-less `:-` or `:--:` line is never a delimiter — a bare `---`
+    // is a setext underline, not a one-column delimiter either.
+    {
+        var result = try oliver.parse(testing.allocator, "| a |\n:-\n", .markdown, .{});
+        defer result.deinit();
+        try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "| a |\n:--:\n", .markdown, .{});
+        defer result.deinit();
+        try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[0].tag);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "| a |\n---\n", .markdown, .{});
+        defer result.deinit();
+        try testing.expectEqual(document.Tag.heading, result.document.root.children.items[0].tag);
+    }
 }
 
 test "markdown: heading recognition edge cases" {
@@ -6915,6 +6949,50 @@ test "markdown: HTML block types 6 and 7" {
         try testing.expectEqual(document.Tag.html_block, root.children.items[1].tag);
     }
 
+    // Type 6 accepts the end of the line after the tag name (§4.6): a
+    // bare `<div`/`</div` line starts a block — including at EOF — and
+    // can interrupt a paragraph.
+    {
+        var result = try oliver.parse(testing.allocator, "<div\nx\n", .markdown, .{});
+        defer result.deinit();
+        const block = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.html_block, block.tag);
+        try testing.expectEqualStrings("<div\nx\n", block.data.html_block);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "<div", .markdown, .{});
+        defer result.deinit();
+        const block = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.html_block, block.tag);
+        try testing.expectEqualStrings("<div", block.data.html_block);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "foo\n</div\nbar\n", .markdown, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try testing.expectEqual(document.Tag.paragraph, root.children.items[0].tag);
+        try testing.expectEqual(document.Tag.html_block, root.children.items[1].tag);
+    }
+
+    // Type-6 tag names match case-insensitively (§4.6): an uppercase
+    // block tag takes the type-6 path — which can interrupt a paragraph —
+    // even when the tag is not alone on its line (the type-7 shape does
+    // not cover it).
+    {
+        var result = try oliver.parse(testing.allocator, "<DIV class=\"a\">x\ny\n", .markdown, .{});
+        defer result.deinit();
+        const block = result.document.root.children.items[0];
+        try testing.expectEqual(document.Tag.html_block, block.tag);
+        try testing.expectEqualStrings("<DIV class=\"a\">x\ny\n", block.data.html_block);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "foo\n<DIV>\nbar\n", .markdown, .{});
+        defer result.deinit();
+        const root = result.document.root;
+        try testing.expectEqual(document.Tag.paragraph, root.children.items[0].tag);
+        try testing.expectEqual(document.Tag.html_block, root.children.items[1].tag);
+    }
+
     // `pre`/`script`/`style`/`textarea` belong to type 1: an open tag on its
     // own line is an HTML block (ending at its matching closing tag), not a
     // type-7 block (which excludes those names).
@@ -7354,6 +7432,36 @@ test "markdown: Setext heading attribute list (extension)" {
     try testing.expectEqual(document.Tag.heading, h.tag);
     try testing.expectEqual(@as(u8, 1), h.data.heading.level);
     try testing.expectEqualStrings("setext-id", h.data.heading.id.?);
+}
+
+test "markdown: empty heading attribute list stays literal (extension)" {
+    const oliver = @import("oliver.zig");
+    // An empty `{}` or whitespace-only group is not an IAL: the braces
+    // stay literal heading text and contribute no id/class
+    // (docs/MARKDOWN-EXTENSIONS.md §3).
+    {
+        var result = try oliver.parse(testing.allocator, "## H {}\n", .markdown, ext_parse(.{ .heading_attributes = true }));
+        defer result.deinit();
+        const h = result.document.root.children.items[0];
+        try testing.expectEqual(@as(?[]const u8, null), h.data.heading.id);
+        try testing.expectEqual(@as(?[]const u8, null), h.data.heading.class);
+        try testing.expectEqual(@as(usize, 1), h.children.items.len);
+        try testing.expectEqualStrings("H {}", h.children.items[0].data.text);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "## H { }\n", .markdown, ext_parse(.{ .heading_attributes = true }));
+        defer result.deinit();
+        const h = result.document.root.children.items[0];
+        try testing.expectEqual(@as(?[]const u8, null), h.data.heading.id);
+        try testing.expectEqualStrings("H { }", h.children.items[0].data.text);
+    }
+    {
+        var result = try oliver.parse(testing.allocator, "H {}\n===\n", .markdown, ext_parse(.{ .heading_attributes = true }));
+        defer result.deinit();
+        const h = result.document.root.children.items[0];
+        try testing.expectEqual(@as(?[]const u8, null), h.data.heading.id);
+        try testing.expectEqualStrings("H {}", h.children.items[0].data.text);
+    }
 }
 
 test "markdown: footnotes collect definitions and references (extension)" {
