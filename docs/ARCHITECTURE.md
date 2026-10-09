@@ -120,11 +120,18 @@ Explicit, documented policies:
 - Text escaping: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`, `"` → `&quot;`;
   NUL (U+0000) → U+FFFD. The CommonMark reference output escapes the same
   set. (CommonMark replaces NUL during parsing; Oliver defers replacement to
-  rendering and documents the divergence.) Text written through
-  `writeEscapedText` first decodes §2.5 entity/numeric references, then
-  escapes the decoded bytes like any other text — so `&lt;` → `&lt;` and
-  `&ouml;` → `ö` (docs/ENTITIES.md). Code spans and code blocks use plain
-  `writeEscaped` and keep references literal.
+  rendering and documents the divergence.) The U+FFFD policy is general:
+  every byte that cannot appear in well-formed output — C0 controls other
+  than tab/LF/CR, the XML-forbidden noncharacters U+FFFE/U+FFFF, and
+  ill-formed UTF-8 units — is replaced at the one escaping seam
+  (`writeEscapedXml`, shared with the Cooklang renderer and `oliver wrap`),
+  so escaped text and attribute values are always well-formed character
+  data (issue #152). Text written through `writeEscapedText` first decodes
+  §2.5 entity/numeric references, then escapes the decoded bytes like any
+  other text — so `&lt;` → `&lt;` and `&ouml;` → `ö` (docs/ENTITIES.md), and
+  a numeric reference to a forbidden code point (`&#1;`, `&#xFFFE;`)
+  surfaces as U+FFFD. Code spans and code blocks use plain `writeEscaped`
+  and keep references literal.
 - Link `href` percent-encoding: a deliberate renderer policy derived from
   the spec examples (the spec leaves URL rendering policy open). Safe
   characters are alphanumerics plus `-_.~!*'(),;:&=+$#@/%?`; everything

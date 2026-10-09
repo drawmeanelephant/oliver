@@ -118,6 +118,11 @@ non-blank line that is not a block start continues the table as a row.
 - HTML: `<table>` with `<thead>` (header row of `<th>`) and, when there is
   at least one body row, `<tbody>` of `<td>` rows. Aligned columns carry
   `align="left|center|right"`. `<tbody>` is omitted with no body rows.
+  A caller-built `.table` node with `sections = true` and **no rows at
+  all** — a shape the frontends never produce, but legal for hand-built
+  IR — renders as an empty `<table>` under `html`/`xhtml` rather than
+  indexing a missing header row (issue #170); `html4_strict` stays
+  fail-closed with `error.EmptyTableNotHtml4Strict`.
 - Cells are single-line: no block-level elements, no multi-line content.
 
 ## 8. Conformance status

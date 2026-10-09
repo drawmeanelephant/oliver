@@ -19,7 +19,8 @@
 //!   more.
 //! - The returned buffer is owned by the caller and must be released with
 //!   `oliver_free`, passing the **same** `free` and `ctx` used at render
-//!   time.
+//!   time. A successful render of empty output returns `data == null`,
+//!   `len == 0` (issue #149) — `oliver_free` is a no-op for it.
 //! - Documented failures return an explicit error code in
 //!   `Buffer.error_code` (`data` is null, `len` is 0, nothing to free);
 //!   internal bugs abort rather than returning garbage. Input bytes are
@@ -51,7 +52,10 @@ pub const Error = enum(c_int) {
 
 /// An owned render result. On success (`error_code == ok`), `data`
 /// points to `len` bytes owned by the caller (release with
-/// `oliver_free`); on any error, `data` is null and `len` is 0.
+/// `oliver_free`); a successful render of empty output returns
+/// `data == null`, `len == 0` — success is distinguished by
+/// `error_code`, and `oliver_free` is a no-op for a null buffer. On any
+/// error, `data` is null and `len` is 0.
 pub const Buffer = extern struct {
     data: ?[*]u8 = null,
     len: usize = 0,
@@ -304,6 +308,13 @@ fn renderImpl(
     // allocation size.
     var list = aw.toArrayList();
     defer list.deinit(a);
+    // A zero-length render returns a null buffer rather than calling the
+    // allocator with len 0: Zig's `alloc(u8, 0)` returns a zero-length
+    // sentinel pointer without invoking the caller's vtable — a pointer
+    // `oliver_free` would then hand to the caller's `free` (issue #149).
+    // The contract already makes `oliver_free` a no-op on null data and
+    // distinguishes success by `error_code`, not by `data`.
+    if (list.items.len == 0) return .{ .data = null, .len = 0, .error_code = abiCode(.ok) };
     const out = try a.alloc(u8, list.items.len);
     @memcpy(out, list.items);
     return .{ .data = out.ptr, .len = out.len, .error_code = abiCode(.ok) };
@@ -345,6 +356,38 @@ fn testFree(ctx: ?*anyopaque, ptr: ?*anyopaque, size: usize) callconv(.c) void {
     _ = ctx;
     _ = ptr;
     _ = size;
+}
+
+/// A strict malloc/free pair over `std.testing.allocator`: every returned
+/// pointer is recorded with its size, and `free` panics on a pointer it
+/// never issued or a size mismatch — so a wild buffer (issue #149) cannot
+/// pass silently, and a leak shows up as a nonzero live count.
+const Tracker = struct {
+    gpa: std.mem.Allocator,
+    live: std.AutoHashMap(usize, usize),
+};
+
+fn trackAlloc(ctx: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
+    const t: *Tracker = @ptrCast(@alignCast(ctx.?));
+    const mem = t.gpa.alignedAlloc(u8, .fromByteUnits(16), size) catch return null;
+    t.live.put(@intFromPtr(mem.ptr), size) catch {
+        t.gpa.rawFree(mem, .fromByteUnits(16), @returnAddress());
+        return null;
+    };
+    return mem.ptr;
+}
+
+fn trackFree(ctx: ?*anyopaque, ptr: ?*anyopaque, size: usize) callconv(.c) void {
+    const t: *Tracker = @ptrCast(@alignCast(ctx.?));
+    const p = ptr orelse return;
+    const kv = t.live.fetchRemove(@intFromPtr(p)) orelse
+        @panic("free of a pointer this allocator never issued");
+    std.debug.assert(kv.value == size);
+    const bytes: [*]u8 = @ptrCast(@alignCast(p));
+    // The C ABI free contract carries no alignment; a real consumer is a
+    // malloc pair, so the tracker frees with the same alignment trackAlloc
+    // used.
+    t.gpa.rawFree(bytes[0..size], .fromByteUnits(16), @returnAddress());
 }
 
 fn render(
@@ -494,4 +537,32 @@ test "c-abi: oliver_free releases the buffer through the same allocator" {
     try std.testing.expectEqual(@as(c_int, 0), buf.error_code);
     oliver_free(testFree, &arena, buf); // no-op under the arena; the contract is exercised
     try std.testing.expectEqual(@as(c_int, 0), buf.error_code);
+}
+
+test "c-abi: zero-length render returns null data; oliver_free stays a safe no-op" {
+    // issue #149: `alloc(u8, 0)` returns Zig's zero-length sentinel
+    // without calling the caller's vtable — a wild pointer `oliver_free`
+    // would hand to the caller's `free`. The contract for a successful
+    // empty render is `data == null, len == 0` (success is distinguished
+    // by `error_code`), and `oliver_free` must not call `free` at all.
+    var tracker = Tracker{
+        .gpa = std.testing.allocator,
+        .live = std.AutoHashMap(usize, usize).init(std.testing.allocator),
+    };
+    defer tracker.live.deinit();
+
+    const buf = oliver_render(trackAlloc, trackFree, &tracker, null, 0, 0, 0, 0, 0, 0, 0, 0);
+    try std.testing.expectEqual(@as(c_int, 0), buf.error_code);
+    try std.testing.expect(buf.data == null);
+    try std.testing.expectEqual(@as(usize, 0), buf.len);
+    oliver_free(trackFree, &tracker, buf); // a no-op — would abort on the sentinel
+    try std.testing.expectEqual(@as(usize, 0), tracker.live.count());
+
+    // The same pair serves a non-empty render end to end: the returned
+    // buffer is a real tracked allocation freed through `oliver_free`.
+    const buf2 = oliver_render(trackAlloc, trackFree, &tracker, "# x\n".ptr, 4, 0, 0, 0, 0, 0, 0, 0);
+    try std.testing.expectEqual(@as(c_int, 0), buf2.error_code);
+    try std.testing.expectEqualStrings("<h1>x</h1>\n", buf2.data.?[0..buf2.len]);
+    oliver_free(trackFree, &tracker, buf2);
+    try std.testing.expectEqual(@as(usize, 0), tracker.live.count());
 }

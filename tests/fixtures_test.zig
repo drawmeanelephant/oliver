@@ -125,6 +125,13 @@ const markdown_fixtures = [_]MarkdownFixture{
         .input = @embedFile("fixtures/markdown/escape-special.md"),
         .expected = @embedFile("fixtures/markdown/escape-special.html"),
     },
+    // issue #152: C0 controls, numeric refs to forbidden code points,
+    // U+FFFE/U+FFFF, and ill-formed UTF-8 all render as U+FFFD.
+    .{
+        .name = "escape-nonxml-chars",
+        .input = @embedFile("fixtures/markdown/escape-nonxml-chars.md"),
+        .expected = @embedFile("fixtures/markdown/escape-nonxml-chars.html"),
+    },
     // --- entities (docs: FEATURE-MATRIX "entity references") ---
     .{
         .name = "entity-text",
@@ -3181,6 +3188,31 @@ test "adversarial: NUL bytes render as U+FFFD" {
     var out = aw.toArrayList();
     defer out.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("<p>a\u{FFFD}b</p>\n", out.items);
+}
+
+test "adversarial: deeply nested emphasis under heading_ids is stack-safe" {
+    // issue #148: `--heading-ids` projects the heading's inline content to
+    // text for the slug; that walk used to recurse per nesting level, so a
+    // heading carrying ~125k nested <strong>/<em> levels overflowed the
+    // call stack. The collector is iterative now (explicit work stack like
+    // the main traversal); this is the issue's repro shape.
+    const gpa = std.testing.allocator;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(gpa);
+    try input.appendSlice(gpa, "# ");
+    try input.appendNTimes(gpa, '*', 250_000);
+    try input.append(gpa, 'x');
+    try input.appendNTimes(gpa, '*', 250_000);
+    try input.append(gpa, '\n');
+
+    var result = try oliver.parse(gpa, input.items, .markdown, .{});
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(gpa);
+    defer aw.deinit();
+    try oliver.html.render(gpa, &aw.writer, &result.document, .{ .heading_ids = true });
+    var out = aw.toArrayList();
+    defer out.deinit(gpa);
+    try std.testing.expect(std.mem.startsWith(u8, out.items, "<h1 id=\"x\">"));
 }
 
 test "adversarial: thematic and Setext leaf storm is deterministic" {

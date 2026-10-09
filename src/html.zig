@@ -4,8 +4,12 @@
 //! it, and never reparses source. See docs/ARCHITECTURE.md ("HTML output
 //! policy") for the explicit policies this renderer follows:
 //!
-//! - Text is escaped: `&` `&amp;`, `<` `&lt;`, `>` `&gt;`, `"` `&quot;`;
-//!   NUL (U+0000) is emitted as U+FFFD.
+//! - Text is escaped: `&` `&amp;`, `<` `&lt;`, `>` `&gt;`, `"` `&quot;`.
+//!   Bytes that cannot appear in well-formed output — C0 controls other
+//!   than tab/LF/CR (NUL included), the XML-forbidden noncharacters
+//!   U+FFFE/U+FFFF, and ill-formed UTF-8 units — are replaced with U+FFFD
+//!   at the escaping seam (`writeEscapedXml`), so escaped output is
+//!   always well-formed character data under every profile.
 //! - Link attributes: `href` is percent-encoded (a deliberate, documented
 //!   policy derived from the spec examples: encode everything except
 //!   alphanumerics and `-_.~!*'(),;:&=+$#@/%?`) and then HTML-escaped;
@@ -397,6 +401,13 @@ fn pushChildren(
             }
             return;
         }
+        // A hand-built sectioned table can have zero rows (the frontends
+        // never produce one); there is nothing to section, so the markers
+        // and the header-row frame are all skipped. `.html4_strict`
+        // instead fails closed on this shape in `writeOpen`
+        // (EmptyTableNotHtml4Strict); html/xhtml render the empty element
+        // defensively rather than indexing a missing row (issue #170).
+        if (n == 0) return;
         const has_body = n >= 2;
         var i = n;
         while (i > 1) {
@@ -1132,20 +1143,35 @@ fn pushFootnotesSection(
 /// (entity-decoded, escapes already split into their own text nodes),
 /// code-span content, image alt, autolink labels, and the text of nested
 /// inline containers. Soft/hard breaks become spaces; raw HTML is skipped.
+///
+/// Iterative like the main traversal and `flattenAlt`: inline containers
+/// nest arbitrarily deep (a hostile heading can carry hundreds of
+/// thousands of nested emphasis levels), so an explicit work stack keeps
+/// the slug computation off the call stack (issue #148).
 fn collectHeadingText(gpa: std.mem.Allocator, node: *const document.Node, out: *std.ArrayList(u8)) !void {
-    switch (node.tag) {
-        .text => try writeDecodedText(gpa, out, node.data.text),
-        .code_span => try out.appendSlice(gpa, node.data.code_span),
-        .image => try out.appendSlice(gpa, node.data.image.alt),
-        .autolink => try out.appendSlice(gpa, node.data.autolink.label),
-        .wikilink => try out.appendSlice(gpa, node.data.wikilink.label orelse node.data.wikilink.target),
-        .soft_break, .hard_break => try out.append(gpa, ' '),
-        .raw_html => {},
-        .task_checkbox => {}, // a checkbox contributes no text to a slug
-        .link, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span => {
-            for (node.children.items) |c| try collectHeadingText(gpa, c, out);
-        },
-        else => {},
+    var stack = std.ArrayList(*const document.Node).empty;
+    defer stack.deinit(gpa);
+    try stack.append(gpa, node);
+    while (stack.pop()) |n| {
+        switch (n.tag) {
+            .text => try writeDecodedText(gpa, out, n.data.text),
+            .code_span => try out.appendSlice(gpa, n.data.code_span),
+            .image => try out.appendSlice(gpa, n.data.image.alt),
+            .autolink => try out.appendSlice(gpa, n.data.autolink.label),
+            .wikilink => try out.appendSlice(gpa, n.data.wikilink.label orelse n.data.wikilink.target),
+            .soft_break, .hard_break => try out.append(gpa, ' '),
+            .raw_html => {},
+            .task_checkbox => {}, // a checkbox contributes no text to a slug
+            .link, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span => {
+                // Pushed in reverse so children pop in document order.
+                var i = n.children.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, n.children.items[i]);
+                }
+            },
+            else => {},
+        }
     }
 }
 
@@ -1451,25 +1477,74 @@ fn hrefSafe(b: u8) bool {
     };
 }
 
-/// Escapes text content. `&`, `<`, `>`, and `"` are escaped (the set the
-/// CommonMark reference output escapes); NUL is replaced with U+FFFD.
-fn writeEscaped(writer: anytype, text: []const u8) !void {
+/// The U+FFFD replacement for bytes that cannot appear in well-formed
+/// output (issue #152): C0 controls other than tab/LF/CR (NUL included),
+/// the XML-forbidden noncharacters U+FFFE/U+FFFF, and ill-formed UTF-8
+/// units (bad lead bytes, stray continuations, overlong or truncated
+/// sequences, encoded surrogates, code points past U+10FFFF). U+FFFD is
+/// itself a valid XML Char — the existing NUL policy generalized — so
+/// escaping fails safe rather than failing the render, and escaped output
+/// is always well-formed character data under every profile
+/// (docs/XHTML.md).
+const replacement_char = "\xEF\xBF\xBD"; // U+FFFD
+
+/// The shared escaping seam for HTML/XML character data and attribute
+/// values, used by the document renderer, the Cooklang renderer, and
+/// `oliver wrap` (issue #152). `&`, `<`, `>` always escape to the
+/// predefined entities; `"` and `'` escape to `dquote`/`squote` when
+/// those are non-null — the callers' quote policies differ (the document
+/// renderer escapes `"` everywhere, Cooklang only inside attributes,
+/// `wrap` escapes both as `&quot;`/`&#39;`). Bytes that are not XML 1.0
+/// `Char`s and ill-formed UTF-8 units are replaced with U+FFFD (see
+/// `replacement_char`); everything else — including tab, LF, CR, DEL,
+/// and all valid non-ASCII — passes through unchanged.
+pub fn writeEscapedXml(writer: anytype, text: []const u8, dquote: ?[]const u8, squote: ?[]const u8) !void {
     var start: usize = 0;
     var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        const replacement: []const u8 = switch (text[i]) {
+    while (i < text.len) {
+        const b = text[i];
+        var rep: ?[]const u8 = switch (b) {
             '&' => "&amp;",
             '<' => "&lt;",
             '>' => "&gt;",
-            '"' => "&quot;",
-            0 => "\xEF\xBF\xBD", // U+FFFD
-            else => continue,
+            '"' => dquote,
+            '\'' => squote,
+            else => null,
         };
-        if (i > start) try writer.writeAll(text[start..i]);
-        try writer.writeAll(replacement);
-        start = i + 1;
+        var adv: usize = 1;
+        if (rep == null) {
+            if (b < 0x80) {
+                // C0 controls other than tab/LF/CR are not XML Chars.
+                if (b < 0x20 and b != '\t' and b != '\n' and b != '\r') rep = replacement_char;
+            } else {
+                const n = std.unicode.utf8ByteSequenceLength(b) catch 0;
+                if (n == 0 or i + n > text.len) {
+                    rep = replacement_char;
+                } else if (std.unicode.utf8Decode(text[i..][0..n])) |cp| {
+                    if (cp == 0xFFFE or cp == 0xFFFF) rep = replacement_char;
+                    adv = n;
+                } else |_| {
+                    rep = replacement_char;
+                }
+            }
+        }
+        if (rep) |r| {
+            if (i > start) try writer.writeAll(text[start..i]);
+            try writer.writeAll(r);
+            i += adv;
+            start = i;
+        } else {
+            i += adv;
+        }
     }
     if (start < text.len) try writer.writeAll(text[start..]);
+}
+
+/// Escapes text content. `&`, `<`, `>`, and `"` are escaped (the set the
+/// CommonMark reference output escapes); bytes that cannot appear in
+/// well-formed output are replaced with U+FFFD (`writeEscapedXml`).
+fn writeEscaped(writer: anytype, text: []const u8) !void {
+    try writeEscapedXml(writer, text, "&quot;", null);
 }
 
 /// Escapes text content after decoding §2.5 entity and numeric character
@@ -1526,6 +1601,69 @@ test "html: escaping" {
     var out = try renderDoc(&doc);
     defer out.deinit(testing.allocator);
     try testing.expectEqualStrings("<p>a &amp; b &lt; c &gt; d &quot; e \u{FFFD} f</p>\n", out.items);
+}
+
+test "html: escaping replaces non-XML chars and ill-formed UTF-8 with U+FFFD" {
+    // issue #152: at the escaping seam, C0 controls other than tab/LF/CR,
+    // U+FFFE/U+FFFF, and every ill-formed UTF-8 unit (bad lead bytes,
+    // overlong forms, surrogate encodings, truncated sequences) become
+    // U+FFFD — the NUL policy generalized — under every profile.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{ .paragraph = .{} });
+    try doc.appendChild(doc.root, p);
+    // C0 controls; U+FFFE/U+FFFF; a bare 0xFF; an overlong '/' (C0 AF);
+    // an encoded surrogate (ED A0 80); a truncated sequence (E2 82 then
+    // a non-continuation); then DEL, tab — both legal — and 'd', 'e'.
+    try addText(&doc, p, "a\x01b\x0bc\x1f\xef\xbf\xbe\xef\xbf\xbf\xff\xc0\xaf\xed\xa0\x80\xe2\x82\x7f\tde");
+    const expected = "<p>a\u{FFFD}b\u{FFFD}c" ++
+        "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}" ++
+        "\x7f\tde</p>\n";
+    for ([_]OutputProfile{ .html, .xhtml, .html4_strict }) |profile| {
+        var out = try renderDocOpts(&doc, .{ .profile = profile });
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings(expected, out.items);
+    }
+}
+
+test "html: escaping sanitizes attribute values too" {
+    // Same seam, attribute context (issue #152): a Textile-style attr
+    // value carrying a C0 control renders with U+FFFD.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    const p = try doc.createNode(.paragraph, .{ .start = 0, .end = 0 }, .{
+        .paragraph = .{ .attrs = &.{.{ .name = "id", .value = "a\x01b" }} },
+    });
+    try doc.appendChild(doc.root, p);
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p id=\"a\u{FFFD}b\"></p>\n", out.items);
+}
+
+test "html: zero-row sectioned table renders empty, never panics" {
+    // issue #170: a hand-built `.table` with `sections = true` and no
+    // rows is legal-per-IR (the frontends never produce it); html/xhtml
+    // emit the empty element rather than indexing a missing header row.
+    // `.html4_strict` keeps its fail-closed EmptyTableNotHtml4Strict.
+    var doc = try document.Document.init(testing.allocator, .{ .bytes = "" });
+    defer doc.deinit();
+    try doc.appendChild(doc.root, try doc.createNode(.table, .{ .start = 0, .end = 0 }, .{
+        .table = .{ .alignment = &.{}, .sections = true },
+    }));
+    var out = try renderDoc(&doc);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<table>\n</table>\n", out.items);
+
+    var xw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer xw.deinit();
+    try render(testing.allocator, &xw.writer, &doc, .{ .profile = .xhtml });
+    var xout = xw.toArrayList();
+    defer xout.deinit(testing.allocator);
+    try testing.expectEqualStrings("<table>\n</table>\n", xout.items);
+
+    var sw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer sw.deinit();
+    try testing.expectError(EmptyTableNotHtml4Strict, render(testing.allocator, &sw.writer, &doc, .{ .profile = .html4_strict }));
 }
 
 test "html: soft vs hard breaks and void option" {

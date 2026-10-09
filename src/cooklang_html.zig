@@ -35,10 +35,13 @@
 //! day/hour/minute/second form (case-insensitive); everything else keeps
 //! the `data-quantity`/`data-units` contract without `datetime`.
 //!
-//! Text and attribute values are HTML-escaped (`&`, `<`, `>`, `"`), and
-//! NUL (U+0000) is replaced with U+FFFD like the shared renderer
-//! (docs/ARCHITECTURE.md), so the XHTML profile stays well-formed even
-//! for hostile input. Quantities render as their trimmed source text;
+//! Text and attribute values are HTML-escaped (`&`, `<`, `>`, `"` in
+//! attribute contexts) through the shared escaping seam
+//! (`html.writeEscapedXml`): bytes that cannot appear in well-formed
+//! output — C0 controls other than tab/LF/CR (NUL included), U+FFFE,
+//! U+FFFF, and ill-formed UTF-8 — are replaced with U+FFFD like the
+//! shared renderer (docs/ARCHITECTURE.md), so the XHTML profile stays
+//! well-formed even for hostile input. Quantities render as their trimmed source text;
 //! `data-quantity` is emitted only when the token carried an explicit
 //! non-empty quantity, and `data-units` only when units are present.
 //! Recipe references stay
@@ -361,30 +364,16 @@ fn unitsEqual(a: []const u8, b: []const u8) bool {
     return true;
 }
 
-/// Escapes `&`, `<`, `>`, NUL (U+0000 → U+FFFD), and `"` for attribute
-/// contexts into `writer`. The NUL replacement mirrors the shared
-/// renderer's text-escaping policy (docs/ARCHITECTURE.md): the parser
-/// deliberately preserves NUL in payloads (docs/COOKLANG.md §4), so it
-/// must be neutralized here, and U+FFFD is a valid XML character, so the
-/// XHTML profile stays well-formed (docs/XHTML.md).
+/// Escapes `&`, `<`, `>`, and `"` for attribute contexts into `writer`
+/// through the shared escaping seam (`html.writeEscapedXml`), which also
+/// replaces bytes that cannot appear in well-formed output — C0 controls
+/// other than tab/LF/CR (NUL included), U+FFFE/U+FFFF, and ill-formed
+/// UTF-8 — with U+FFFD (issue #152): the parser deliberately preserves
+/// NUL in payloads (docs/COOKLANG.md §4), so it must be neutralized here,
+/// and U+FFFD is a valid XML character, so the XHTML profile stays
+/// well-formed (docs/XHTML.md).
 fn escapeInto(writer: anytype, text: []const u8, attribute: bool) !void {
-    var start: usize = 0;
-    for (text, 0..) |c, i| {
-        const rep: ?[]const u8 = switch (c) {
-            '&' => "&amp;",
-            '<' => "&lt;",
-            '>' => "&gt;",
-            '"' => if (attribute) "&quot;" else null,
-            0 => "\xEF\xBF\xBD", // U+FFFD
-            else => null,
-        };
-        if (rep) |r| {
-            try writer.writeAll(text[start..i]);
-            try writer.writeAll(r);
-            start = i + 1;
-        }
-    }
-    try writer.writeAll(text[start..]);
+    try html_mod.writeEscapedXml(writer, text, if (attribute) "&quot;" else null, null);
 }
 
 // ---------------------------------------------------------------------------
