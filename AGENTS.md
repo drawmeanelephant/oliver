@@ -61,6 +61,20 @@ The spec harness verifies the official corpus by SHA-256 and classifies
 every example in a reviewed manifest; `--gate` makes the corpus a
 regression wall. Fuzz coverage lives in `tests/fuzz.zig`.
 
+The Cooklang corpus is vendored at `tests/cooklang/canonical.yaml`. The
+CommonMark corpus is **not** vendored — fetch the official 0.31.2 spec
+before running the scorecard (the same file CI pins by SHA-256):
+
+```sh
+curl -fsSL -o spec.txt https://spec.commonmark.org/0.31.2/spec.txt
+```
+
+Zig comes from the official download index
+(`https://ziglang.org/download/index.json`; verify the published SHA-256) —
+0.16.0 and 0.17.0 are both green in CI, so either works. Unix convention:
+unpack under `~/.local/opt/`, symlink `~/.local/bin/zig`. Windows: unzip
+and add to `PATH`.
+
 ## Layout
 
 - `src/markdown.zig`, `src/textile.zig` — the two markup parsers.
