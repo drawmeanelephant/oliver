@@ -153,6 +153,10 @@ pub const Tag = enum {
     /// docs/HIGHLIGHTS.md). Children: inlines. `data.highlight` carries
     /// the optional color marker consumed after the opening `==`.
     highlight,
+    /// A TeX math span (Markdown `$x$` / `$$x$$` extension,
+    /// docs/MATH.md). Leaf: no children. `data.math` holds the TeX
+    /// source and whether it is display math (`$$…$$`).
+    math_inline,
     /// A raw HTML tag (Markdown §6.6): an open/closing tag, comment,
     /// processing instruction, declaration, or CDATA section. Leaf: no
     /// children. No data payload — the renderer writes the source bytes
@@ -185,18 +189,22 @@ pub const Tag = enum {
     /// container whose children are blocks. Never a document child — the
     /// renderer emits it inside the footnotes section.
     footnote,
+    /// A TeX math block (Markdown `$$`-fenced extension, docs/MATH.md
+    /// §2). Leaf: no children. `data.math` holds the TeX source with one
+    /// `\n` per content line; `display` is always true.
+    math_block,
 
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
-            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => true,
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .highlight, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
+            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote, .math_block => true,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .highlight, .math_inline, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .highlight, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
-            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => false,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .highlight, .math_inline, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
+            .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote, .math_block => false,
         };
     }
 };
@@ -265,6 +273,10 @@ pub const Data = union(enum) {
     /// extension, docs/HIGHLIGHTS.md §2–§3). Null means the default
     /// highlight color.
     highlight: Highlight,
+    /// `.math_inline` and `.math_block`: the TeX source and whether the
+    /// span is display math (Markdown `$…$` extension, docs/MATH.md §3).
+    /// `display` is false only for single-`$` inline math.
+    math: Math,
     /// `.list`: the list's type, its bullet character or ordered delimiter,
     /// the ordered start number (1 for bullet lists; the first item's number
     /// for ordered), and the tight/loose flag (docs/BLOCKS-PARSING.md §4:
@@ -367,6 +379,16 @@ pub const Highlight = struct {
 /// selected by an emoji marker immediately after the opening `==`. The
 /// rendered class names come from these tag names, never source bytes.
 pub const HighlightColor = enum { red, orange, yellow, green, blue, purple };
+
+/// The payload of `.math_inline` and `.math_block` nodes (Markdown
+/// `$…$` extension, docs/MATH.md §3): the TeX source — a source slice
+/// for single-line spans, arena-owned when line normalization or
+/// container stripping was needed — and the display flag.
+pub const Math = struct {
+    tex: []const u8,
+    /// True for `$$…$$` and fenced `$$` blocks; false only for `$…$`.
+    display: bool,
+};
 
 /// The payload of a `.heading` node: the level (1..6) and the Textile
 /// block attributes, plus the optional Markdown heading-attribute-list

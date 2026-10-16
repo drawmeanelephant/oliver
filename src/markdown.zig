@@ -173,6 +173,13 @@ pub const Options = struct {
     /// six-color table is consumed into `data.highlight.color`. Off by
     /// default so the CommonMark corpus stays byte-exact.
     highlights: bool = false,
+    /// TeX math (docs/MATH.md): `$…$` inline, `$$…$$` display inside a
+    /// paragraph (Pandoc `tex_math_dollars` disambiguation), and
+    /// `$$`-fenced display blocks. Math joins the first-opener-wins
+    /// construct family (code spans, autolinks, raw HTML); the TeX is
+    /// passed through verbatim — Oliver never typesets it. Off by
+    /// default so the CommonMark corpus stays byte-exact.
+    math: bool = false,
 };
 
 const tab_stop: u32 = 4;
@@ -421,6 +428,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     defer containers.deinit(doc.allocator());
     var paragraph: ?Paragraph = null;
     var fenced: ?FencedCode = null;
+    var math_block: ?MathBlock = null;
     var indented: ?IndentedCode = null;
     var html: ?HtmlBlock = null;
     var table: ?TableBlock = null;
@@ -512,6 +520,27 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             finishFencedCode(&fenced);
         }
 
+        // An open math-block leaf owns every line while its containing
+        // containers still match — the same ownership rule as fenced
+        // code (docs/MATH.md §2). No close line exists inside container
+        // markers that failed; the block just ends there.
+        if (math_block) |*active| {
+            if (matched == active.container_depth) {
+                if (mathFenceLine(view) != null) {
+                    active.node.span.end = @intCast(view.line.content_end);
+                    finishMathBlock(&math_block);
+                    noteCoveredEnd(&span_end, view.line);
+                    continue;
+                }
+                try appendCodeContentLine(doc, &active.content, view, active.indent);
+                active.node.span.end = @intCast(view.line.content_end);
+                noteCoveredEnd(&span_end, view.line);
+                continue;
+            }
+            std.debug.assert(matched < active.container_depth);
+            finishMathBlock(&math_block);
+        }
+
         // An open indented-code leaf owns every line while its containing
         // containers still match: blank lines are chunk separators (§4.4),
         // and a nonblank line continues the block only while it is indented
@@ -586,7 +615,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // paragraph).
         if (table) |*active| {
             if (matched == active.container_depth) {
-                if (isBlank(view.line.text) or !isParagraphContinuationText(doc, view, &thematic_facts)) {
+                if (isBlank(view.line.text) or !isParagraphContinuationText(doc, view, &thematic_facts, options)) {
                     finishTable(&table);
                 } else {
                     const cells = try splitRowCells(doc, view.line.contentSpan());
@@ -696,7 +725,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         if (matched < containers.items.len) {
             const list_sibling = startsListSibling(&containers, matched, view, &thematic_facts);
             resolveListBlankPending(&containers, matched, view, &thematic_facts, &blank_seen);
-            if (paragraph != null and !list_sibling and isParagraphContinuationText(doc, view, &thematic_facts)) {
+            if (paragraph != null and !list_sibling and isParagraphContinuationText(doc, view, &thematic_facts, options)) {
                 try appendParagraphLine(doc, &paragraph, view);
                 noteCoveredEnd(&span_end, view.line);
                 continue;
@@ -816,6 +845,28 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             noteCoveredEnd(&span_end, view.line);
             continue;
         }
+        // Obsidian `$$` math block (docs/MATH.md §2): like a fenced code
+        // block it may interrupt a paragraph; the opener is `$$` then
+        // only whitespace — a `$$x$$` line is a paragraph with inline
+        // display math, never a block.
+        if (options.math) {
+            if (mathFenceLine(view)) |indent| {
+                try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+                def_list = null;
+                def_body = null;
+                const node = try doc.createNode(.math_block, view.line.contentSpan(), .{
+                    .math = .{ .tex = &.{}, .display = true },
+                });
+                try doc.appendChild(leafParent(doc, &containers), node);
+                math_block = .{
+                    .node = node,
+                    .indent = indent,
+                    .container_depth = containers.items.len,
+                };
+                noteCoveredEnd(&span_end, view.line);
+                continue;
+            }
+        }
         if (trySetextUnderline(view)) |underline| {
             if (try emitSetextHeading(
                 doc,
@@ -921,6 +972,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         noteCoveredEnd(&span_end, view.line);
     }
     finishFencedCode(&fenced);
+    finishMathBlock(&math_block);
     try finishIndentedCode(doc, &indented);
     finishHtmlBlock(&html);
     finishTable(&table);
@@ -1394,10 +1446,12 @@ fn isParagraphContinuationText(
     doc: *document.Document,
     view: View,
     thematic_facts: *const ThematicLineFacts,
+    options: Options,
 ) bool {
     if (tryStripBlockQuoteMarker(view) != null) return false;
     if (tryAtxHeading(view) != null) return false;
     if (tryFenceOpen(view) != null) return false;
+    if (options.math and mathFenceLine(view) != null) return false;
     if (isThematicBreak(view, thematic_facts)) return false;
     if (tryListMarker(view)) |m| return !m.can_interrupt;
     // Types 1-6 may interrupt a paragraph; a type-7 start may not (so it is
@@ -1733,6 +1787,41 @@ const FencedCode = struct {
     container_depth: usize,
     content: std.ArrayList(u8) = .empty,
 };
+
+/// The one open `$$` math-block leaf (docs/MATH.md §2). Content
+/// accumulates verbatim (blank lines included) with up to `indent`
+/// columns stripped per line, like fenced code; the block ends at the
+/// first `$$` close line or its container, with no diagnostic.
+const MathBlock = struct {
+    node: *document.Node,
+    indent: u8,
+    container_depth: usize,
+    content: std.ArrayList(u8) = .empty,
+};
+
+/// A `$$` math-block fence line (docs/MATH.md §2): up to 3 columns of
+/// indentation, exactly `$$`, then only spaces and tabs. Returns the
+/// opener's indent for content stripping, or null. The same shape opens
+/// and closes the block; a `$$x$$` line fails (content after the fence).
+fn mathFenceLine(view: View) ?u8 {
+    const text = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return null;
+    var i = skipped.i;
+    if (i + 2 > text.len or text[i] != '$' or text[i + 1] != '$') return null;
+    i += 2;
+    if (i < text.len and text[i] == '$') return null; // a 3+ run is literal
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
+    if (i != text.len) return null;
+    return @intCast(skipped.cols);
+}
+
+/// Publishes the arena-backed verbatim payload (fenced-code behavior:
+/// unclosed blocks keep their accumulated content, no diagnostic).
+fn finishMathBlock(math_block: *?MathBlock) void {
+    const active = math_block.* orelse return;
+    active.node.data = .{ .math = .{ .tex = active.content.items, .display = true } };
+    math_block.* = null;
+}
 
 /// The one open indented-code leaf (§4.4). Content accumulates literally
 /// (chunk separator blank lines included); trailing blank lines are dropped
@@ -2810,9 +2899,12 @@ fn parseMultilineBlockInlines(
     var tags = std.ArrayList(HtmlTag).empty;
     defer tags.deinit(doc.allocator());
     try discoverHtmlTags(doc, contents, &tags);
+    var maths = std.ArrayList(MathSpan).empty;
+    defer maths.deinit(doc.allocator());
+    if (options.math) try discoverMath(doc, contents, &maths);
     var constructs = std.ArrayList(Construct).empty;
     defer constructs.deinit(doc.allocator());
-    try mergeConstructs(doc, spans.items, tags.items, &constructs);
+    try mergeConstructs(doc, contents, spans.items, tags.items, maths.items, &constructs);
 
     // A construct consumed by an autolink (first-come at the `<`) is dead
     // for the whole paragraph, including lines scanned later; `exclude` is
@@ -3032,9 +3124,12 @@ fn parseTableCellInlines(
     var tags = std.ArrayList(HtmlTag).empty;
     defer tags.deinit(doc.allocator());
     try discoverHtmlTags(doc, &[_]source.Span{content}, &tags);
+    var maths = std.ArrayList(MathSpan).empty;
+    defer maths.deinit(doc.allocator());
+    if (options.math) try discoverMath(doc, &[_]source.Span{content}, &maths);
     var constructs = std.ArrayList(Construct).empty;
     defer constructs.deinit(doc.allocator());
-    try mergeConstructs(doc, spans.items, tags.items, &constructs);
+    try mergeConstructs(doc, &[_]source.Span{content}, spans.items, tags.items, maths.items, &constructs);
     var exclude: u32 = 0;
     try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
@@ -3105,9 +3200,12 @@ fn parseHeadingInlines(
     var tags = std.ArrayList(HtmlTag).empty;
     defer tags.deinit(doc.allocator());
     try discoverHtmlTags(doc, &[_]source.Span{content}, &tags);
+    var maths = std.ArrayList(MathSpan).empty;
+    defer maths.deinit(doc.allocator());
+    if (options.math) try discoverMath(doc, &[_]source.Span{content}, &maths);
     var constructs = std.ArrayList(Construct).empty;
     defer constructs.deinit(doc.allocator());
-    try mergeConstructs(doc, spans.items, tags.items, &constructs);
+    try mergeConstructs(doc, &[_]source.Span{content}, spans.items, tags.items, maths.items, &constructs);
     var exclude: u32 = 0;
     try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
@@ -3246,6 +3344,13 @@ const InlineItem = union(enum) {
     /// the scan (docs/TASK-LISTS.md §1). Leaf item: opaque to the
     /// delimiter stack and link discovery.
     task_checkbox: TaskCheckboxItem,
+    /// A recognized math span (`$…$` / `$$…$$`, extension): `span`
+    /// covers the whole construct; `tex` is the materialized TeX source
+    /// (source slice for single-line spans, arena-owned for multi-line,
+    /// per docs/MATH.md §1 "Content"); `display` is true for `$$…$$`.
+    /// Leaf item: opaque to the delimiter stack, link discovery, and
+    /// break processing — first-opener-wins with the other constructs.
+    math: MathItem,
 };
 
 /// A recognized GFM task list checkbox item (extension). See
@@ -3269,6 +3374,16 @@ const WikilinkItem = struct {
     span: source.Span,
     /// The raw bytes between `[[` and `]]` (before trimming/splitting).
     content: source.Span,
+};
+
+/// A recognized math span item (extension). See `InlineItem.math`.
+const MathItem = struct {
+    /// The whole `$…$` / `$$…$$` construct.
+    span: source.Span,
+    /// The materialized TeX source (borrow-or-copy).
+    tex: []const u8,
+    /// True for `$$…$$` display math.
+    display: bool,
 };
 
 /// A raw HTML tag item (§6.6): the whole construct span. The tag's bytes
@@ -3309,6 +3424,7 @@ fn itemSpan(item: InlineItem) source.Span {
         .footnote => |fn_| fn_.span,
         .wikilink => |wk| wk.span,
         .task_checkbox => |tc| tc.span,
+        .math => |m| m.span,
     };
 }
 
@@ -3330,18 +3446,34 @@ const HtmlTag = struct {
     span: source.Span,
 };
 
-/// A paragraph-level opaque inline construct: a code span or a raw HTML
-/// tag, resolved for first-come precedence. `mergeConstructs` drops any
-/// construct that starts inside an already-accepted one, so the list is
-/// disjoint and sorted by `span.start`. The scan consumes constructs in
-/// order; everything inside them is opaque to the delimiter stack, link
-/// discovery, and break processing.
+/// A math span discovered by `discoverMath` (docs/MATH.md §1). Spans are
+/// disjoint and sorted by `span.start`.
+const MathSpan = struct {
+    /// Opening delimiter .. closing delimiter.
+    span: source.Span,
+    /// The raw bytes between the delimiters (may span line endings).
+    content: source.Span,
+    /// True for `$$…$$` display math.
+    display: bool,
+};
+
+/// A paragraph-level opaque inline construct: a code span, a raw HTML
+/// tag, or a math span, resolved for first-come precedence.
+/// `mergeConstructs` drops any construct that starts inside an
+/// already-accepted one, so the list is disjoint and sorted by
+/// `span.start`. The scan consumes constructs in order; everything
+/// inside them is opaque to the delimiter stack, link discovery, and
+/// break processing.
 const Construct = struct {
-    kind: enum { code_span, html_tag },
+    kind: enum { code_span, html_tag, math },
     span: source.Span,
     /// Code spans: the raw content bounds (see `CodeSpan.content`).
-    /// Unused for HTML tags.
+    /// Unused for HTML tags and math.
     content: source.Span,
+    /// Math spans: the materialized TeX source (borrow-or-copy, see
+    /// `mathContent`) and whether it is display math. Unused elsewhere.
+    tex: []const u8 = &.{},
+    display: bool = false,
 };
 
 /// Discovers code spans (§6.1) over the concatenated raw content of the
@@ -3418,28 +3550,173 @@ fn terminatorInsideConstruct(term: source.Span, constructs: []const Construct) b
     return false;
 }
 
-/// Merges the discovered code spans and HTML tags into one resolved,
-/// overlap-free list ordered by start. First-come wins: a construct whose
-/// start lies inside an already-accepted construct's span is dropped (the
-/// earlier construct's opener precedes it, so per §6.1 the earlier
-/// construct is parsed and the later one never starts). Both input lists
-/// are sorted and internally disjoint, so a linear walk suffices
-/// (docs/RAW-HTML.md §2).
+/// Discovers math spans (docs/MATH.md §1) over the concatenated raw
+/// content of the given spans (one entry per line of the block). A run
+/// of exactly one unescaped `$` opens `$…$` inline math under the
+/// Pandoc `tex_math_dollars` rules; exactly two opens `$$…$$` display
+/// math; runs of three or more stay literal and are consumed whole. An
+/// escaped `\$` is never a delimiter, and escapes inside the content are
+/// inert. Like `discoverCodeSpans`, precedence is resolved by
+/// `mergeConstructs`.
+fn discoverMath(doc: *document.Document, contents: []const source.Span, maths: *std.ArrayList(MathSpan)) ParseError!void {
+    const bytes = doc.src.bytes;
+    const para_start = contents[0].start;
+    const para_end = contents[contents.len - 1].end;
+
+    var i = para_start;
+    outer: while (i < para_end) {
+        const at_run_start = bytes[i] == '$' and
+            !isEscaped(bytes, i) and
+            (i == para_start or bytes[i - 1] != '$');
+        if (!at_run_start) {
+            i += 1;
+            continue;
+        }
+        var e = i + 1;
+        while (e < para_end and bytes[e] == '$') : (e += 1) {}
+        const run_len = e - i;
+        if (run_len == 1) {
+            // `$…$`: the opener needs a non-space immediately right.
+            if (e >= para_end or isMathSpace(bytes[e])) {
+                i = e;
+                continue;
+            }
+            // First later single-`$` run that is unescaped, preceded by
+            // a non-space, and not followed by an ASCII digit closes.
+            var j = e;
+            while (j < para_end) : (j += 1) {
+                if (bytes[j] != '$' or isEscaped(bytes, j) or bytes[j - 1] == '$') continue;
+                var k = j + 1;
+                while (k < para_end and bytes[k] == '$') : (k += 1) {}
+                if (k - j == 1 and !isMathSpace(bytes[j - 1]) and
+                    (j + 1 >= para_end or !std.ascii.isDigit(bytes[j + 1])))
+                {
+                    try maths.append(doc.allocator(), .{
+                        .span = .{ .start = @intCast(i), .end = @intCast(j + 1) },
+                        .content = .{ .start = @intCast(e), .end = @intCast(j) },
+                        .display = false,
+                    });
+                    i = j + 1;
+                    continue :outer;
+                }
+                j = k - 1; // not a closer (or not a single-`$` run): content
+            }
+            i = e; // unclosed: literal `$`, resume after it
+            continue;
+        }
+        if (run_len == 2) {
+            // `$$…$$`: closes at the next unescaped run of exactly two.
+            // The space rules do not apply, but empty or
+            // whitespace-only content is literal.
+            var j = e;
+            while (j < para_end) : (j += 1) {
+                if (bytes[j] != '$' or isEscaped(bytes, j) or bytes[j - 1] == '$') continue;
+                var k = j + 1;
+                while (k < para_end and bytes[k] == '$') : (k += 1) {}
+                if (k - j == 2) {
+                    if (!allMathSpace(bytes[e..j])) {
+                        try maths.append(doc.allocator(), .{
+                            .span = .{ .start = @intCast(i), .end = @intCast(k) },
+                            .content = .{ .start = @intCast(e), .end = @intCast(j) },
+                            .display = true,
+                        });
+                    }
+                    // Matched or not, the pair consumes itself: empty or
+                    // whitespace-only content makes "the whole thing
+                    // literal" — the closing `$$` never re-opens.
+                    i = k;
+                    continue :outer;
+                }
+                j = k - 1;
+            }
+        }
+        i = e; // unmatched or 3+ run: literal, resume after the run
+    }
+}
+
+/// Whitespace for the math span rules (docs/MATH.md §1): ASCII space,
+/// tab, and line endings — the same set that flanking treats as Unicode
+/// whitespace at this byte width.
+fn isMathSpace(b: u8) bool {
+    return b == ' ' or b == '\t' or b == '\n' or b == '\r';
+}
+
+/// True when every byte of `s` is math whitespace (the `$$…$$`
+/// empty-content check).
+fn allMathSpace(s: []const u8) bool {
+    for (s) |b| {
+        if (!isMathSpace(b)) return false;
+    }
+    return true;
+}
+
+/// Materializes a math span's TeX content from the paragraph's per-line
+/// content spans: container prefixes never appear (the gap between line
+/// spans is skipped, not copied), each continuation line drops its
+/// leading whitespace, and line endings join as `\n` — never spaces, so
+/// a TeX `%` comment cannot swallow the rest of the formula
+/// (docs/MATH.md §1 "Content"). A single-line span borrows the source.
+fn mathContent(doc: *document.Document, contents: []const source.Span, content: source.Span) ParseError![]const u8 {
+    const bytes = doc.src.bytes;
+    var lines_touched: usize = 0;
+    for (contents) |l| {
+        if (l.end > content.start and l.start < content.end) lines_touched += 1;
+    }
+    if (lines_touched <= 1) return bytes[content.start..content.end];
+
+    var buf = std.ArrayList(u8).empty;
+    var seen: usize = 0;
+    for (contents) |l| {
+        if (l.end <= content.start or l.start >= content.end) continue;
+        var s: u32 = @max(l.start, content.start);
+        const e: u32 = @min(l.end, content.end);
+        if (seen > 0) {
+            try buf.append(doc.allocator(), '\n');
+            while (s < e and (bytes[s] == ' ' or bytes[s] == '\t')) : (s += 1) {}
+        }
+        try buf.appendSlice(doc.allocator(), bytes[s..e]);
+        seen += 1;
+    }
+    return buf.items;
+}
+
+/// Merges the discovered code spans, HTML tags, and math spans into one
+/// resolved, overlap-free list ordered by start. First-come wins: a
+/// construct whose start lies inside an already-accepted construct's
+/// span is dropped (the earlier construct's opener precedes it, so the
+/// earlier construct is parsed and the later one never starts). The
+/// input lists are sorted and internally disjoint, so a linear walk
+/// suffices (docs/RAW-HTML.md §2).
 fn mergeConstructs(
     doc: *document.Document,
+    contents: []const source.Span,
     spans: []const CodeSpan,
     tags: []const HtmlTag,
+    maths: []const MathSpan,
     out: *std.ArrayList(Construct),
 ) ParseError!void {
     var si: usize = 0;
     var ti: usize = 0;
+    var mi: usize = 0;
     var last_end: u32 = 0;
-    while (si < spans.len or ti < tags.len) {
-        const span_next = si < spans.len;
-        const tag_next = ti < tags.len;
-        const from_tag = if (!span_next) true else if (!tag_next) false else tags[ti].span.start < spans[si].span.start;
-        if (from_tag) {
-            if (tags[ti].span.start >= last_end) {
+    while (si < spans.len or ti < tags.len or mi < maths.len) {
+        // The earliest unaccepted construct starts next.
+        var start: u32 = std.math.maxInt(u32);
+        if (si < spans.len) start = @min(start, spans[si].span.start);
+        if (ti < tags.len) start = @min(start, tags[ti].span.start);
+        if (mi < maths.len) start = @min(start, maths[mi].span.start);
+        if (si < spans.len and spans[si].span.start == start) {
+            if (start >= last_end) {
+                try out.append(doc.allocator(), .{
+                    .kind = .code_span,
+                    .span = spans[si].span,
+                    .content = spans[si].content,
+                });
+                last_end = spans[si].span.end;
+            }
+            si += 1;
+        } else if (ti < tags.len and tags[ti].span.start == start) {
+            if (start >= last_end) {
                 try out.append(doc.allocator(), .{
                     .kind = .html_tag,
                     .span = tags[ti].span,
@@ -3449,15 +3726,17 @@ fn mergeConstructs(
             }
             ti += 1;
         } else {
-            if (spans[si].span.start >= last_end) {
+            if (start >= last_end) {
                 try out.append(doc.allocator(), .{
-                    .kind = .code_span,
-                    .span = spans[si].span,
-                    .content = spans[si].content,
+                    .kind = .math,
+                    .span = maths[mi].span,
+                    .content = .{ .start = 0, .end = 0 },
+                    .tex = try mathContent(doc, contents, maths[mi].content),
+                    .display = maths[mi].display,
                 });
-                last_end = spans[si].span.end;
+                last_end = maths[mi].span.end;
             }
-            si += 1;
+            mi += 1;
         }
     }
 }
@@ -4571,6 +4850,13 @@ fn scanLine(
                 .html_tag => try items.append(doc.allocator(), .{
                     .raw_html = .{ .span = constructs[ci].span },
                 }),
+                .math => try items.append(doc.allocator(), .{
+                    .math = .{
+                        .span = constructs[ci].span,
+                        .tex = constructs[ci].tex,
+                        .display = constructs[ci].display,
+                    },
+                }),
             }
             i = constructs[ci].span.end - 1;
             run_start = constructs[ci].span.end;
@@ -5068,6 +5354,15 @@ fn emitInlines(
                 });
                 try doc.appendChild(current, node);
             },
+            .math => |m| {
+                // Leaf node (extension, docs/MATH.md §3): the TeX was
+                // materialized at discovery (borrow-or-copy); the node
+                // span covers both delimiters.
+                const node = try doc.createNode(.math_inline, m.span, .{
+                    .math = .{ .tex = m.tex, .display = m.display },
+                });
+                try doc.appendChild(current, node);
+            },
             .autolink => |al| {
                 // Leaf node: the content between `<` and `>` becomes both
                 // the label and the href (with `mailto:` prepended for
@@ -5433,6 +5728,7 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
                 try buf.appendSlice(doc.allocator(), try resolveEscapes(doc, s));
             },
             .code_span => |cs| try buf.appendSlice(doc.allocator(), try normalizeCodeSpan(doc, cs.content)),
+            .math => |m| try buf.appendSlice(doc.allocator(), m.tex),
             .brk => try buf.append(doc.allocator(), '\n'),
             .delimiter => |run| {
                 try buf.appendSlice(doc.allocator(), doc.src.bytes[run.span.start + run.front_used .. run.span.end - run.back_used]);
@@ -8369,6 +8665,147 @@ test "markdown: 10,000-highlight determinism storm (extension)" {
     defer b.deinit(testing.allocator);
     try testing.expectEqualSlices(u8, a.items, b.items);
     try testing.expectEqual(@as(usize, 10_000), std.mem.count(u8, a.items, "<mark>"));
+}
+
+fn renderMathHtml(input: []const u8) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{ .math = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "markdown: math parses into leaf nodes with tex and display (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "a $x$ b $$y$$ c\n",
+        .markdown,
+        ext_parse(.{ .math = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    const inl = p.children.items[1];
+    try testing.expectEqual(document.Tag.math_inline, inl.tag);
+    try testing.expectEqualStrings("x", inl.data.math.tex);
+    try testing.expect(!inl.data.math.display);
+    try testing.expectEqualStrings("$x$", result.document.src.bytes[inl.span.start..inl.span.end]);
+    const disp = p.children.items[3];
+    try testing.expectEqual(document.Tag.math_inline, disp.tag);
+    try testing.expectEqualStrings("y", disp.data.math.tex);
+    try testing.expect(disp.data.math.display);
+    try testing.expectEqualStrings("$$y$$", result.document.src.bytes[disp.span.start..disp.span.end]);
+}
+
+test "markdown: tex_math_dollars disambiguation (extension)" {
+    // The §1 worked-case table: space rules, the digit rule, middle
+    // dollars as content, escaped delimiters — kept on separate lines so
+    // a later valid closer cannot reach back across an example.
+    const cases = [_]struct { in: []const u8, out: []const u8 }{
+        .{ .in = "$x$\n", .out = "<p><span class=\"math inline\">x</span></p>\n" },
+        .{ .in = "$20,000 and $30,000\n", .out = "<p>$20,000 and $30,000</p>\n" },
+        .{ .in = "$x$5\n", .out = "<p>$x$5</p>\n" },
+        .{ .in = "$ x $\n", .out = "<p>$ x $</p>\n" },
+        .{ .in = "$a $b$\n", .out = "<p><span class=\"math inline\">a $b</span></p>\n" },
+        .{ .in = "$\\$5$\n", .out = "<p><span class=\"math inline\">\\$5</span></p>\n" },
+        .{ .in = "\\$x$\n", .out = "<p>$x$</p>\n" },
+    };
+    for (cases) |c| {
+        var out = try renderMathHtml(c.in);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings(c.out, out.items);
+    }
+}
+
+test "markdown: math run lengths and unclosed spans stay literal (extension)" {
+    var out = try renderMathHtml("$$$x$$$ and $$ $$ and $unclosed and $$unclosed\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>$$$x$$$ and $$ $$ and $unclosed and $$unclosed</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: math is opaque inside and cannot be entered (extension)" {
+    // Code spans win over math and math is opaque to emphasis/links.
+    var out = try renderMathHtml("`$x$` and $`x`$ and $a_1 + b_1$ and $*x*$\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p><code>$x$</code> and <span class=\"math inline\">`x`</span> and <span class=\"math inline\">a_1 + b_1</span> and <span class=\"math inline\">*x*</span></p>\n",
+        out.items,
+    );
+}
+
+test "markdown: math blocks fence, strip indentation, and interrupt (extension)" {
+    var out = try renderMathHtml("para\n$$\na & b\n$$\n\n  $$\n  ind\n  $$\n\n$$x$$\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>para</p>\n" ++
+            "<div class=\"math display\">a &amp; b\n</div>\n" ++
+            "<div class=\"math display\">ind\n</div>\n" ++
+            "<p><span class=\"math display\">x</span></p>\n",
+        out.items,
+    );
+}
+
+test "markdown: math blocks close at container end, unclosed keeps content (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "> $$\n> inside\n\n$$\nunclosed\n",
+        .markdown,
+        ext_parse(.{ .math = true }),
+    );
+    defer result.deinit();
+    const q = result.document.root.children.items[0];
+    const mb = q.children.items[0];
+    try testing.expectEqual(document.Tag.math_block, mb.tag);
+    try testing.expect(mb.data.math.display);
+    try testing.expectEqualStrings("inside\n", mb.data.math.tex);
+    const tail = result.document.root.children.items[1];
+    try testing.expectEqual(document.Tag.math_block, tail.tag);
+    try testing.expectEqualStrings("unclosed\n", tail.data.math.tex);
+}
+
+test "markdown: math is off by default (extension)" {
+    var out = try renderCalloutsHtml("$x$ and $$y$$\n\n$$\nz\n$$\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>$x$ and $$y$$</p>\n<p>$$\nz\n$$</p>\n", out.items);
+}
+
+test "markdown: multi-line math preserves line endings and strips prefixes (extension)" {
+    const oliver = @import("oliver.zig");
+    // A TeX `%` comment runs to end of line, so endings stay `\n`
+    // (never spaces), and the continuation line's leading whitespace —
+    // container prefix included — is stripped.
+    var result = try oliver.parse(
+        testing.allocator,
+        "$a % comment\n   b$\n\n> $c\n> d$\n",
+        .markdown,
+        ext_parse(.{ .math = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    const m = p.children.items[0];
+    try testing.expectEqualStrings("a % comment\nb", m.data.math.tex);
+    const q = result.document.root.children.items[1];
+    const mq = q.children.items[0].children.items[0];
+    try testing.expectEqualStrings("c\nd", mq.data.math.tex);
+}
+
+test "markdown: 10,000-math determinism storm (extension)" {
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var k: usize = 0;
+    while (k < 10_000) : (k += 1) try input.appendSlice(testing.allocator, "$x$ ");
+    var a = try renderMathHtml(input.items);
+    defer a.deinit(testing.allocator);
+    var b = try renderMathHtml(input.items);
+    defer b.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, a.items, b.items);
+    try testing.expectEqual(@as(usize, 10_000), std.mem.count(u8, a.items, "<span class=\"math inline\">"));
 }
 
 fn renderSmartypantsHtml(input: []const u8) !std.ArrayList(u8) {

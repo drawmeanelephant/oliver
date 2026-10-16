@@ -95,6 +95,7 @@ enum {
     OLIVER_MD_SMARTYPANTS = 1 << 6,
     OLIVER_MD_TASK_LISTS = 1 << 7,
     OLIVER_MD_HIGHLIGHTS = 1 << 8,
+    OLIVER_MD_MATH = 1 << 9,
 };
 
 /* An owned render result. */

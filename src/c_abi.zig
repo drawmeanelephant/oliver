@@ -176,6 +176,7 @@ pub const MarkdownFlag = struct {
     pub const smartypants: u32 = 1 << 6;
     pub const task_lists: u32 = 1 << 7;
     pub const highlights: u32 = 1 << 8;
+    pub const math: u32 = 1 << 9;
 };
 
 /// Renders `bytes` in the given dialect into an owned buffer.
@@ -284,6 +285,7 @@ fn renderImpl(
             .smartypants = markdown_flags & MarkdownFlag.smartypants != 0,
             .task_lists = markdown_flags & MarkdownFlag.task_lists != 0,
             .highlights = markdown_flags & MarkdownFlag.highlights != 0,
+            .math = markdown_flags & MarkdownFlag.math != 0,
         },
     });
     defer result.deinit();
