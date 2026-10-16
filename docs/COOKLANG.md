@@ -402,7 +402,9 @@ Canonical rules (as implemented):
   brace verbatim. Recipe references need no special form:
   `is_recipe_reference` is a derived flag, and the name renders as-is.
 - Notes render as `> ` plus the text; sections render as `= Name` (the
-  `== Name ==` variant normalizes to `= Name`).
+  `== Name ==` variant normalizes to `= Name`). A section name that
+  ends with `=` gets a separated ` =` closer (`= Name =`) — otherwise
+  the reparsed name would absorb the trailing run into the name itself.
 - No new escaping syntax is introduced. Literal fallback and malformed
   token diagnostics remain line-local and intentional. The serializer
   uses the supplied allocator for temporary step buffers and safety-check

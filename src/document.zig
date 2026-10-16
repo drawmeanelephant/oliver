@@ -15,7 +15,8 @@
 //!   `table_cell` blocks, and `table_cell` children are inlines (a cell
 //!   behaves like a paragraph: inline content only, no blocks).
 //! - `emphasis`/`strong`/`bold`/`italic`/`deleted`/`inserted`/
-//!   `superscript`/`subscript`/`span`/`link` contain inline children; the
+//!   `superscript`/`subscript`/`span`/`link`/`highlight` contain inline
+//!   children; the
 //!   leaf inline tags (`text`, `code_span`, `image`, `autolink`, `raw_html`,
 //!   `soft_break`, `hard_break`) never have children.
 //! - `list` children are `list_item` blocks; `list_item` children are blocks.
@@ -148,6 +149,10 @@ pub const Tag = enum {
     /// checkbox bytes. Only ever the first inline node of the first
     /// paragraph of a list item.
     task_checkbox,
+    /// A highlighted inline (Markdown `==text==` extension,
+    /// docs/HIGHLIGHTS.md). Children: inlines. `data.highlight` carries
+    /// the optional color marker consumed after the opening `==`.
+    highlight,
     /// A raw HTML tag (Markdown §6.6): an open/closing tag, comment,
     /// processing instruction, declaration, or CDATA section. Leaf: no
     /// children. No data payload — the renderer writes the source bytes
@@ -184,13 +189,13 @@ pub const Tag = enum {
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => true,
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .highlight, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .highlight, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote => false,
         };
     }
@@ -256,6 +261,10 @@ pub const Data = union(enum) {
     /// `.task_checkbox`: whether a GFM task list checkbox is checked
     /// (Markdown extension, docs/TASK-LISTS.md).
     task_checkbox: TaskCheckbox,
+    /// `.highlight`: the optional color marker (Markdown `==x==`
+    /// extension, docs/HIGHLIGHTS.md §2–§3). Null means the default
+    /// highlight color.
+    highlight: Highlight,
     /// `.list`: the list's type, its bullet character or ordered delimiter,
     /// the ordered start number (1 for bullet lists; the first item's number
     /// for ordered), and the tight/loose flag (docs/BLOCKS-PARSING.md §4:
@@ -346,6 +355,18 @@ pub const BlockQuote = struct {
 /// The fold state of a callout blockquote (docs/CALLOUTS.md §10): `+` is
 /// expanded by default, `-` collapsed.
 pub const CalloutFold = enum { none, open, closed };
+
+/// The payload of a `.highlight` node (Markdown `==x==` extension,
+/// docs/HIGHLIGHTS.md §3): the optional color marker. Null means the
+/// default (theme) highlight.
+pub const Highlight = struct {
+    color: ?HighlightColor = null,
+};
+
+/// The six highlight colors Obsidian documents (docs/HIGHLIGHTS.md §2),
+/// selected by an emoji marker immediately after the opening `==`. The
+/// rendered class names come from these tag names, never source bytes.
+pub const HighlightColor = enum { red, orange, yellow, green, blue, purple };
 
 /// The payload of a `.heading` node: the level (1..6) and the Textile
 /// block attributes, plus the optional Markdown heading-attribute-list

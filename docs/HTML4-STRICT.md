@@ -34,6 +34,7 @@ XHTML (1) values are unchanged. The default remains HTML.
 | Cooklang `data-quantity`, `data-units`, `data-ref` | Omitted; quantities, units, names, and references remain visible text | Machine-readable quantity/units/reference contract is **not** available |
 | Markdown footnote `section`, `data-*`, `aria-label` | `div class="footnotes"`; data markers omitted; backrefs keep their `href` and use `title="Back to reference N"` | No data markers; title is not a full replacement for the accessible name |
 | Task-list `disabled=""`, `checked=""` | `disabled="disabled"`, `checked="checked"` | Required enumerated attribute tokens in the Strict DTD |
+| Highlight `mark` | `span class="mark"` (colored: `span class="mark highlight-<color>"`) | `<mark>` is not in HTML 4.01 (docs/HIGHLIGHTS.md §4) |
 | GFM table-cell `align`, Textile `style`/`class`/`id` | Unchanged | These attributes *are* permitted by Strict |
 | Textile flat table rows | Wrapped in `<tbody>`; HTML and XHTML remain flat | Strict requires an explicit table body in Oliver's output |
 | GFM table with only a header row | The `<th>` row moves into `<tbody>` instead of a lone `<thead>` | Strict requires `TBODY+`; header cells remain `th` |

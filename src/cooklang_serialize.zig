@@ -93,6 +93,11 @@ fn writeBlock(gpa: std.mem.Allocator, writer: anytype, recipe: *const cooklang.R
         .section => |section| {
             try writer.writeAll("= ");
             try cooklang.writeTextSanitized(writer, section.name);
+            // A name ending in `=` needs a separated closing run or the
+            // reparse reads the name's own `=`s as the closer
+            // (proposal 0006 strips a trailing `=` run plus whitespace).
+            if (section.name.len > 0 and section.name[section.name.len - 1] == '=')
+                try writer.writeAll(" =");
             try writer.writeAll("\n");
             try writeBlocks(gpa, writer, recipe, section.blocks, true);
         },
@@ -432,6 +437,22 @@ fn expectRoundTrip(input: []const u8) !void {
     var reparsed = try cooklang.parse(std.testing.allocator, once, .{});
     defer reparsed.deinit();
     try expectSemanticEqual(&original.recipe, &reparsed.recipe);
+}
+
+test "cooklang serialize: a section title ending in '=' is a fixed point" {
+    // `= name` with a name ending in `=` must round-trip: emitting the
+    // bare name lets the reparse read its `=`s as the closing run, so
+    // the serializer appends a separated ` =` (found by the fuzz wall).
+    const cases = [_][]const u8{
+        "= a *b* c== ==x== =\nstep\n",
+        "= Filling =\n",
+        "= name== =\n\n@x{}\n",
+        "= == =\n",
+    };
+    for (cases) |input| try expectRoundTrip(input);
+    const canonical = try serializeT(std.testing.allocator, "= name== =\n");
+    defer std.testing.allocator.free(canonical);
+    try std.testing.expectEqualStrings("= name== =\n", canonical);
 }
 
 test "cooklang serialize: line-split literal tokens retain their boundaries (#134)" {

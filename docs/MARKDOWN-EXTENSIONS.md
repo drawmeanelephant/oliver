@@ -2,7 +2,7 @@
 
 **Status:** implemented — opt-in Markdown dialect extensions  \
 **Modules:** `src/markdown.zig` (parse), `src/html.zig` (render), `src/document.zig` (model)  \
-**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, `--task-lists`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
+**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, `--task-lists`, `--highlights`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
 
 The Markdown frontend is byte-exact CommonMark 0.31.2 by default (the
 652/652 conformance corpus is green with default options). The extensions
@@ -335,6 +335,26 @@ normally (emphasis, links, and other extensions work inside it).
 - Fixtures: `tests/fixtures/markdown/ext-task-lists.md`; tests in
   `src/main.zig` (CLI end-to-end) and `tests/xhtml_test.zig`.
 
+## 10. Highlights (`parse: highlights`)
+
+Obsidian-style `==text==` highlights, per the contract in
+docs/HIGHLIGHTS.md:
+
+- A run of **exactly two** `=` is the delimiter; runs of one or
+  three-plus stay literal. Flanking follows the CommonMark emphasis
+  rules (`==x==` and intraword `a==b==c` match; `== x ==` stays
+  literal), and a `==` line under a paragraph is still a Setext h1
+  (block structure wins). Content is inline-parsed — emphasis, links,
+  wikilinks, and highlights themselves nest inside.
+- A leading emoji from Obsidian's six-color table (`==🔴x==`) is
+  consumed into `data.highlight.color`; any other emoji stays content.
+- The node is a `.highlight` inline container rendered `<mark>` —
+  `<mark class="highlight-<color>">` when colored — and mapped to
+  `<span class="mark">` under HTML 4.01 Strict (`<mark>` is not in
+  HTML 4.01).
+- Fixtures: `tests/fixtures/markdown/highlight-*.md`; unit tests in
+  `src/markdown.zig` and `tests/xhtml_test.zig`.
+
 ---
 
 ## Interaction and precedence
@@ -349,7 +369,7 @@ normally (emphasis, links, and other extensions work inside it).
   in the callout title or body is a normal inline; smartypants applies
   to plain text in every scope, with wikilink payloads exempt.
 - Fenced code, code spans, HTML blocks, and raw HTML are opaque to all
-  eight extensions (a `[^x]:` line inside a fence is code, not a
+  nine extensions (a `[^x]:` line inside a fence is code, not a
   definition; a `[!note]` line inside a fence is code, not a callout; a
   `~~` pair inside a code span or fence is literal; a `[[x]]` inside a
   code span or autolink is literal; quotes and dashes inside a code
@@ -357,6 +377,7 @@ normally (emphasis, links, and other extensions work inside it).
 - In GFM table cells an unescaped `|` is a cell separator (GFM §4.10), so
   a pipe-label wikilink inside a cell needs `\|` (docs/WIKILINKS.md §7).
 - Fixtures: `tests/fixtures/markdown/ext-*.md`, `wikilink-*.md`,
-  `callout-*.md`, `smartypants-*.md`, and the cross-extension
-  `cross-*.md` composition pairs (parsed with all extensions enabled)
+  `callout-*.md`, `smartypants-*.md`, `highlight-*.md`, and the
+  cross-extension `cross-*.md` composition pairs (parsed with all
+  extensions enabled)
   plus unit tests in `src/markdown.zig` and `src/html.zig`.
