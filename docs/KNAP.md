@@ -68,8 +68,8 @@ Knap fails that test on every axis:
   (several as opt-in, Obsidian-adjacent extensions). Supporting Knap
   inside Oliver would be reimplementing the generator of documents
   Oliver already reads. The exceptions are the `highlight`,
-  `math`/`math_block`, `comment`, and `embed` filters and callout fold
-  markers. They emit Obsidian syntax that Oliver does not parse yet,
+  `math`/`math_block`, `comment`, and `embed` filters. They emit
+  Obsidian syntax that Oliver does not parse yet,
   planned as ordinary opt-in Markdown extensions
   ([Obsidian-flavor extensions](OBSIDIAN-EXTENSIONS.html), issue #189),
   not as Knap support.
