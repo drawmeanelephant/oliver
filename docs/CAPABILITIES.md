@@ -102,7 +102,8 @@ YAML). Derived operations over the same model:
   also exposes the extension surface as flags (`--wikilinks`,
   `--callouts`, `--smartypants`, `--footnotes`, `--definition-lists`,
   `--heading-attributes`, `--strikethrough`, `--heading-ids`,
-  `--task-lists`, `--highlights`, `--math`, `--comments`, `--embeds`) and `--frontmatter yaml|toml` on any render frontend
+  `--task-lists`, `--highlights`, `--math`, `--comments`, `--embeds`,
+and the `--obsidian` preset) and `--frontmatter yaml|toml` on any render frontend
   — all off by default — plus `--raw-html allowed|escaped|rejected`
   (default `allowed`) for how raw content is emitted.
 

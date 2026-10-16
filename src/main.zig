@@ -341,6 +341,19 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             comments = true;
         } else if (std.mem.eql(u8, arg, "--embeds")) {
             embeds = true;
+        } else if (std.mem.eql(u8, arg, "--obsidian")) {
+            // The Obsidian preset (docs/OBSIDIAN-EXTENSIONS.md §4):
+            // expands to the individual extension flags — not
+            // smartypants, definition-lists, or heading-attributes.
+            footnotes = true;
+            strikethrough = true;
+            wikilinks = true;
+            callouts = true;
+            task_lists = true;
+            highlights = true;
+            math = true;
+            comments = true;
+            embeds = true;
         } else if (std.mem.eql(u8, arg, "--frontmatter")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -1322,6 +1335,9 @@ fn printUsage(output: Output) Output.Error!void {
         \\  --math  (Obsidian $…$ and $$…$$ TeX math)
         \\  --comments  (Obsidian %%…%% comments)
         \\  --embeds  (Obsidian ![[x]] embeds)
+        \\  --obsidian  (the Obsidian preset: wikilinks, embeds, callouts,
+        \\               highlights, comments, math, strikethrough,
+        \\               task lists, footnotes)
         \\  --heading-ids  (GFM-style auto ids on headings)
         \\  --task-lists  (GFM checkboxes on list items)
         \\Front matter (render with any frontend, off by default):
