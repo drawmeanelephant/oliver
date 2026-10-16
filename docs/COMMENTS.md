@@ -106,6 +106,10 @@ Block comments can span multiple lines.
   renders `<p>visible <em>text</em></p>`, matching Obsidian's "text
   after the closing `%%` stays visible". The line view machinery already
   supports resuming mid-line (`View.after`).
+  - An empty or whitespace-only remainder is **not** a new line — the
+    whole line was comment, so it stays invisible. In particular it is
+    not a blank line: it does not loosen a tight list or close a
+    paragraph.
 - **Containers.**
   - A block comment belongs to the container it started in. Closing
     lines need that container's prefixes (`> %%` … `> %%`).

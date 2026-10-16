@@ -628,7 +628,18 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             if (matched == active.container_depth) {
                 if (commentCloseMarker(doc.src.bytes, view)) |close| {
                     comment_block = null;
-                    view = view.after(close.i + 2, close.col + 2);
+                    const rest = view.after(close.i + 2, close.col + 2);
+                    if (isBlank(rest.line.text)) {
+                        // An empty or whitespace-only remainder is not
+                        // "a new line" — the whole line was comment.
+                        // Letting it reach the blank-line path would
+                        // mark `blank_seen` and could flip a tight list
+                        // to loose: the comment must stay invisible
+                        // (docs/COMMENTS.md §4).
+                        noteCoveredEnd(&span_end, view.line);
+                        continue;
+                    }
+                    view = rest;
                     thematic_facts = ThematicLineFacts.init(view.line);
                     // Fall through: the remainder is a new line.
                 } else {
@@ -9145,6 +9156,18 @@ test "markdown: block comments in containers and the unclosed diagnostic (extens
     try testing.expectEqualStrings(
         "<blockquote>\n<p>shown</p>\n</blockquote>\n",
         aw.written(),
+    );
+}
+
+test "markdown: an end-of-line close stays invisible to list tightness (extension)" {
+    // §3/§4: the bytes after a closing `%%` resume as a new line, but a
+    // *blank* remainder is no line at all — the comment must not set
+    // `blank_seen` and loosen the list (review finding on PR #194).
+    var out = try renderCommentsHtml("- a\n- %%\n  hidden\n  %%\n- b\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<ul>\n<li>a</li>\n<li></li>\n<li>b</li>\n</ul>\n",
+        out.items,
     );
 }
 
