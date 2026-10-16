@@ -7,7 +7,7 @@ summary: Contract for the opt-in Obsidian-style callout extension (> [!note]) in
 
 **Status:** implemented — shipped via issue #65 (milestone v0.6, "The
 Obsidian Run"); the provenance record is in docs/CLEANROOM.md session
-26.  \
+26. Folds (§10) are planned (issue #189).  \
 **Modules:** `src/markdown.zig` (parse), `src/document.zig` (model),
 `src/html.zig` (render)  \
 **Options:** `markdown.Options.callouts: bool = false`
@@ -172,3 +172,54 @@ cross-extension `cross-callout-title` (wikilinks + smartypants in
 titles, the no-space `>[!note]` form) and `cross-callout-edges`
 (`[!two words]`/`[!note!]`, the §1 lazy-continuation boundary). The
 XHTML well-formedness gate covers the div wrapper under both profiles.
+
+## 10. Folds (planned)
+
+**Status:** planned — spec under review in issue #189; not implemented.
+Today `> [!note]+ Title` is an ordinary blockquote whose first paragraph
+starts with the literal text `[!note]+ Title`, because `+` is not a §1
+separator. This section records how that will change. The family
+overview is at docs/OBSIDIAN-EXTENSIONS.md.
+
+Obsidian documents foldable callouts (Obsidian Help, "Callouts §
+Foldable callouts"): a `+` or `-` "directly after the type identifier".
+`+` means expanded by default, and `-` means collapsed. knap 0.6.0's
+`callout` filter emits the same markers (KNAP-FIDELITY.md §2).
+
+- **Shape.**
+  - A single `+` or `-` immediately after the `]` of the `[!type]`
+    marker sets the fold.
+  - The §1 separator (a space, a tab, or end of line) is then required
+    after the fold character: `[!faq]- Title` and `[!faq]-` are folds.
+  - `[!faq]-x`, `[!faq]++`, and `[!faq]+-` stay literal.
+- **Flag.** This extends the existing `callouts` flag and adds no new
+  one. The fold marker bytes are consumed, never rendered.
+- **Model.** `BlockQuote` gains
+  `callout_fold: CalloutFold = .none`, where
+  `CalloutFold = enum { none, open, closed }`. It is `.none` for every
+  existing callout, and Textile never sets it.
+- **Rendering.** The callout wrapper gains one class:
+
+  ```html
+  <div class="callout callout-faq callout-fold-closed">
+  <div class="callout-title">Are callouts foldable?</div>
+  <p>Yes!</p>
+  </div>
+  ```
+
+  - `+` adds `callout-fold-open`, `-` adds `callout-fold-closed`, and
+    `.none` adds nothing, so existing callout output is byte-identical.
+  - A class rather than a `data-` attribute keeps the output identical in
+    HTML, XHTML, and HTML 4.01 Strict, which has no `data-*`.
+  - `<details>`/`<summary>` is deliberately not emitted. `details` does
+    not exist in HTML 4.01, and interactivity is a consumer concern. An
+    opt-in render flag is open question 2
+    (docs/OBSIDIAN-EXTENSIONS.md §11).
+- **Compatibility.** Under `callouts` only, `[!type]+` and `[!type]-`
+  stop being literal. This is an output change behind an opt-in flag. It
+  is pinned by a new `callout-fold` fixture, with `callout-literal`
+  gaining the `[!faq]-x` / `[!faq]++` controls, and it is recorded in
+  the release notes. Default output is unaffected.
+- **Fixtures (planned).** `callout-fold` covers `+` and `-` with and
+  without a title, nested folded callouts, and folds in lists. The
+  §6 fallback battery stays green.

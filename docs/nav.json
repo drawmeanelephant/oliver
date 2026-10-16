@@ -179,6 +179,36 @@
           "summary": "The opt-in GFM task list items: `[ ]`/`[x]`/`[X]` checkbox recognition at item content start, the `.task_checkbox` node, and the disabled-input rendering (shipped, issue #92, v1.1)."
         },
         {
+          "file": "OBSIDIAN-EXTENSIONS.md",
+          "title": "Obsidian-flavor extensions (planned)",
+          "audience": "dev",
+          "summary": "Planned opt-in highlights, math, comments, embeds, callout folds, and the obsidian preset: scope, surface, model impact, non-goals (issue #189)."
+        },
+        {
+          "file": "HIGHLIGHTS.md",
+          "title": "Highlights (planned)",
+          "audience": "dev",
+          "summary": "Planned `==text==` / `==🔴text==` highlight extension: delimiter rules, color markers, rendering per profile (issue #189)."
+        },
+        {
+          "file": "MATH.md",
+          "title": "Math (planned)",
+          "audience": "dev",
+          "summary": "Planned `$…$` / `$$…$$` math extension: Pandoc tex_math_dollars disambiguation, code-span precedence, passthrough rendering (issue #189)."
+        },
+        {
+          "file": "COMMENTS.md",
+          "title": "Comments (planned)",
+          "audience": "dev",
+          "summary": "Planned `%%…%%` comment extension: inline and block extent, removal semantics, the unclosed-comment diagnostic (issue #189)."
+        },
+        {
+          "file": "EMBEDS.md",
+          "title": "Embeds (planned)",
+          "audience": "dev",
+          "summary": "Planned parse-only `![[target]]` embed extension sharing the wikilink grammar, plus the embed resolver policy (issue #189)."
+        },
+        {
           "file": "IMAGES-MISSION.md",
           "title": "Images mission brief",
           "audience": "dev",
