@@ -733,3 +733,30 @@ filter, or CLI implementation source was consulted. The decision is
 that Knap is not an Oliver frontend (docs/KNAP.md): it emits Markdown
 which Oliver already parses; `{{ }}` / `{% %}` / `{# #}` stay
 CommonMark text (fixture `knap-literal`).
+
+Session 37 (Obsidian-flavor extensions spec, issue #189 — planned, not
+implemented) provenance record: user-facing documentation and
+published specifications only.
+
+- Obsidian Help, read as Markdown from the public `obsidianmd/obsidian-help`
+  documentation repository at commit `0540159c718c` (2026-10-08):
+  - "Obsidian Flavored Markdown" (the supported-extensions table);
+  - "Basic formatting syntax" (highlights, the six highlight colors,
+    comments);
+  - "Advanced formatting syntax" (math);
+  - "Callouts" (foldable callouts);
+  - "Embed files" (note, heading, block, and image embeds; image
+    sizing).
+- The Pandoc User's Guide, "Extension: `tex_math_dollars`"
+  (<https://pandoc.org/MANUAL.html>), for the `$` disambiguation rule.
+- k4o's `KNAP-FIDELITY.md`: a black-box record of knap 0.6.0 output,
+  with no knap source.
+- CommonMark 0.31.2 §4.5, §4.6, §6.1, §6.2, §6.5, §6.6, and GFM §6.5,
+  for the precedence and flanking families the extensions join.
+- Current behavior was observed with Oliver's own CLI on `main` @
+  8e4dacb.
+
+No Obsidian application, Obsidian Markdown parser, markdown-it plugin,
+Pandoc, or knap implementation source was consulted. The contracts are
+docs/OBSIDIAN-EXTENSIONS.md, docs/HIGHLIGHTS.md, docs/MATH.md,
+docs/COMMENTS.md, docs/EMBEDS.md, and docs/CALLOUTS.md §10.

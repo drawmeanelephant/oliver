@@ -1644,6 +1644,37 @@ land unchanged: current HEAD, specifications, tests, and discovered seams win.
 - **Integration:** after S2; workflow-only.
 - **State:** merged on main (PR #100).
 
+## E7 — Obsidian-flavor extensions (issue #189) — planned
+
+- **Objective:** parse the Obsidian constructs that knap 0.6.0 emits and
+  Obsidian vaults contain, which Oliver does not read yet. They are
+  highlights (`==x==` with color markers), math (`$…$`, `$$…$$`, `$$`
+  blocks), comments (`%%…%%`), embeds (`![[x]]`), and callout folds
+  (`[!type]±`). Also add an `obsidian` options preset.
+- **Normative source:** Obsidian Help (user-facing documentation), the
+  Pandoc User's Guide `tex_math_dollars` rule, and k4o's black-box
+  KNAP-FIDELITY record. All clean-room; provenance in docs/CLEANROOM.md
+  session 37.
+- **Contract:** docs/OBSIDIAN-EXTENSIONS.md (family, surface, preset,
+  model impact, non-goals) plus the per-feature docs/HIGHLIGHTS.md,
+  docs/MATH.md, docs/COMMENTS.md, docs/EMBEDS.md, and
+  docs/CALLOUTS.md §10.
+- **Design:** each construct joins an existing precedence family. Math
+  and inline comments join the code-span first-opener-wins family;
+  highlights join the delimiter runs; embeds share the wikilink scan;
+  `$$` blocks follow fenced-code rules; block comments follow HTML-block
+  condition-2 rules. The additions are four new tags plus
+  `callout_fold`, and comments produce no node.
+- **Tests:** per-feature fixture walls, `.strict.html` goldens where
+  HTML 4.01 Strict differs, the XHTML gate, determinism storms, and fuzz
+  seeds. Every PR re-verifies 652/652 with defaults.
+- **Parallelism:** one PR per construct after the spec merges. Embeds
+  and highlights are independent. Math and comments both touch the
+  first-opener-wins scan, so they land sequentially.
+- **Integration:** a minor version bump when the first new `Tag` lands
+  (exhaustive-switch consumers, docs/OBSIDIAN-EXTENSIONS.md §6).
+- **State:** spec under review; not implemented.
+
 ## Deferred architectural cards
 
 - **B1 HTML blocks (§4.6) types 1–5:** landed as M5 — comments, PIs,
