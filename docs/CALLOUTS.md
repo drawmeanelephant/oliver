@@ -173,13 +173,12 @@ titles, the no-space `>[!note]` form) and `cross-callout-edges`
 (`[!two words]`/`[!note!]`, the §1 lazy-continuation boundary). The
 XHTML well-formedness gate covers the div wrapper under both profiles.
 
-## 10. Folds (planned)
+## 10. Folds
 
-**Status:** planned — spec under review in issue #189; not implemented.
-Today `> [!note]+ Title` is an ordinary blockquote whose first paragraph
-starts with the literal text `[!note]+ Title`, because `+` is not a §1
-separator. This section records how that will change. The family
-overview is at docs/OBSIDIAN-EXTENSIONS.md.
+**Status:** implemented (issue #189). Before this landed,
+`> [!note]+ Title` was an ordinary blockquote whose first paragraph
+started with the literal text `[!note]+ Title`, because `+` was not a §1
+separator. The family overview is at docs/OBSIDIAN-EXTENSIONS.md.
 
 Obsidian documents foldable callouts (Obsidian Help, "Callouts §
 Foldable callouts"): a `+` or `-` "directly after the type identifier".
@@ -217,9 +216,9 @@ Foldable callouts"): a `+` or `-` "directly after the type identifier".
     (docs/OBSIDIAN-EXTENSIONS.md §11).
 - **Compatibility.** Under `callouts` only, `[!type]+` and `[!type]-`
   stop being literal. This is an output change behind an opt-in flag. It
-  is pinned by a new `callout-fold` fixture, with `callout-literal`
-  gaining the `[!faq]-x` / `[!faq]++` controls, and it is recorded in
-  the release notes. Default output is unaffected.
-- **Fixtures (planned).** `callout-fold` covers `+` and `-` with and
-  without a title, nested folded callouts, and folds in lists. The
-  §6 fallback battery stays green.
+  is pinned by the `callout-fold` fixture, with `callout-literal`
+  carrying the `[!faq]-x` / `[!faq]++` / `[!faq]+-` controls, and it is
+  recorded in the release notes. Default output is unaffected.
+- **Fixtures.** `callout-fold` covers `+` and `-` with and without a
+  title, a nested folded callout, and a fold in a list. The §6 fallback
+  battery stays green.

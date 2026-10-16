@@ -1590,6 +1590,11 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .expected = @embedFile("fixtures/markdown/callout-literal.html"),
     },
     .{
+        .name = "callout-fold",
+        .input = @embedFile("fixtures/markdown/callout-fold.md"),
+        .expected = @embedFile("fixtures/markdown/callout-fold.html"),
+    },
+    .{
         .name = "smartypants-basic",
         .input = @embedFile("fixtures/markdown/smartypants-basic.md"),
         .expected = @embedFile("fixtures/markdown/smartypants-basic.html"),
