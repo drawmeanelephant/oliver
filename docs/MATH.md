@@ -1,15 +1,15 @@
 ---
 published_at: 2026-10-16T00:00:00Z
-summary: "Planned opt-in TeX math extension ($…$, $$…$$, fenced $$ blocks) in the Markdown frontend: Pandoc's tex_math_dollars disambiguation, code-span precedence, model, and passthrough rendering (issue #189)."
+summary: "Opt-in TeX math extension ($…$, $$…$$, fenced $$ blocks) in the Markdown frontend: Pandoc's tex_math_dollars disambiguation, code-span precedence, model, and passthrough rendering (issue #189)."
 ---
 
-# Math (extension, planned)
+# Math (extension)
 
-**Status:** planned — spec under review in issue #189; not implemented.
+**Status:** implemented (issue #189).
 The family overview is at docs/OBSIDIAN-EXTENSIONS.md.  \
-**Modules (planned):** `src/markdown.zig` (parse), `src/document.zig`
+**Modules:** `src/markdown.zig` (parse), `src/document.zig`
 (model), `src/html.zig` (render)  \
-**Options (planned):** `markdown.Options.math: bool = false`; CLI
+**Options:** `markdown.Options.math: bool = false`; CLI
 `--math`; C ABI `OLIVER_MD_MATH = 1 << 9`
 
 Obsidian documents `$…$` inline math and `$$` display math (Obsidian
@@ -186,7 +186,7 @@ data.math = .{
   autolinks, raw HTML, HTML blocks, or comments.
 - **Callout titles** are inline-parsed, so inline math works in them.
 
-## 7. Fixtures (planned)
+## 7. Fixtures
 
 | fixture | covers |
 | --- | --- |
@@ -201,5 +201,5 @@ runs.
 
 ## 8. Conformance status
 
-Not implemented. When it lands it is off by default, and the CommonMark
-0.31.2 corpus must stay 652/652 under `--gate`.
+Extension, off by default: the CommonMark 0.31.2 corpus is untouched
+(re-verified at integration: 652/652 with the `--gate` harness).

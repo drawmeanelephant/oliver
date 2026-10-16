@@ -2,7 +2,7 @@
 
 **Status:** implemented — opt-in Markdown dialect extensions  \
 **Modules:** `src/markdown.zig` (parse), `src/html.zig` (render), `src/document.zig` (model)  \
-**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, `--task-lists`, `--highlights`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
+**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, `--task-lists`, `--highlights`, `--math`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
 
 The Markdown frontend is byte-exact CommonMark 0.31.2 by default (the
 652/652 conformance corpus is green with default options). The extensions
@@ -355,6 +355,28 @@ docs/HIGHLIGHTS.md:
 - Fixtures: `tests/fixtures/markdown/highlight-*.md`; unit tests in
   `src/markdown.zig` and `tests/xhtml_test.zig`.
 
+## 11. Math (`parse: math`)
+
+TeX math in Obsidian's two shapes plus Pandoc's disambiguation, per the
+contract in docs/MATH.md:
+
+- `$…$` inline and `$$…$$` display inside a paragraph, with Pandoc
+  `tex_math_dollars` disambiguation: an opening `$` needs a non-space
+  on its right; a closing `$` needs a non-space on its left and no
+  ASCII digit on its right (`$20,000 and $30,000` stays literal). A
+  `$$`-fenced block form (own lines only, blank lines are content)
+  mirrors fenced code; a `$$x$$` line is a paragraph, not a block.
+- Math joins the first-opener-wins family with code spans, autolinks,
+  and raw inline HTML: `` `$x$` `` is a code span, `` $`x`$ `` is math.
+  Escapes are inert inside math; emphasis/links cannot form inside it.
+- `.math_inline` (inline leaf) and `.math_block` (block leaf) carry
+  `data.math` — `tex` (borrow-or-copy, line endings kept as `\n`) and
+  `display`. Rendering is `<span class="math inline|display">` /
+  `<div class="math display">` with escaped TeX, identical in all three
+  profiles. Oliver never typesets.
+- Fixtures: `tests/fixtures/markdown/math-*.md`; unit tests in
+  `src/markdown.zig` and `tests/xhtml_test.zig`.
+
 ---
 
 ## Interaction and precedence
@@ -369,7 +391,7 @@ docs/HIGHLIGHTS.md:
   in the callout title or body is a normal inline; smartypants applies
   to plain text in every scope, with wikilink payloads exempt.
 - Fenced code, code spans, HTML blocks, and raw HTML are opaque to all
-  nine extensions (a `[^x]:` line inside a fence is code, not a
+  ten extensions (a `[^x]:` line inside a fence is code, not a
   definition; a `[!note]` line inside a fence is code, not a callout; a
   `~~` pair inside a code span or fence is literal; a `[[x]]` inside a
   code span or autolink is literal; quotes and dashes inside a code
@@ -377,7 +399,7 @@ docs/HIGHLIGHTS.md:
 - In GFM table cells an unescaped `|` is a cell separator (GFM §4.10), so
   a pipe-label wikilink inside a cell needs `\|` (docs/WIKILINKS.md §7).
 - Fixtures: `tests/fixtures/markdown/ext-*.md`, `wikilink-*.md`,
-  `callout-*.md`, `smartypants-*.md`, `highlight-*.md`, and the
-  cross-extension `cross-*.md` composition pairs (parsed with all
-  extensions enabled)
+  `callout-*.md`, `smartypants-*.md`, `highlight-*.md`, `math-*.md`,
+  and the cross-extension `cross-*.md` composition pairs (parsed with
+  all extensions enabled)
   plus unit tests in `src/markdown.zig` and `src/html.zig`.
