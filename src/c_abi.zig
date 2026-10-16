@@ -178,6 +178,7 @@ pub const MarkdownFlag = struct {
     pub const highlights: u32 = 1 << 8;
     pub const math: u32 = 1 << 9;
     pub const comments: u32 = 1 << 10;
+    pub const embeds: u32 = 1 << 11;
 };
 
 /// Renders `bytes` in the given dialect into an owned buffer.
@@ -288,6 +289,7 @@ fn renderImpl(
             .highlights = markdown_flags & MarkdownFlag.highlights != 0,
             .math = markdown_flags & MarkdownFlag.math != 0,
             .comments = markdown_flags & MarkdownFlag.comments != 0,
+            .embeds = markdown_flags & MarkdownFlag.embeds != 0,
         },
     });
     defer result.deinit();

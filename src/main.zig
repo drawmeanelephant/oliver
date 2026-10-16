@@ -86,6 +86,7 @@ pub const RunConfig = struct {
     highlights: bool = false,
     math: bool = false,
     comments: bool = false,
+    embeds: bool = false,
     /// Front matter mode (`render` with any frontend; null = default
     /// off). Shared by all three frontends (docs/FRONTMATTER.md §3).
     frontmatter: ?oliver.frontmatter.Option = null,
@@ -156,6 +157,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var highlights = false;
     var math = false;
     var comments = false;
+    var embeds = false;
     var frontmatter: ?oliver.frontmatter.Option = null;
     var raw_html: oliver.html.RawHtmlPolicy = .allowed;
     var diagnostics = false;
@@ -337,6 +339,8 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             math = true;
         } else if (std.mem.eql(u8, arg, "--comments")) {
             comments = true;
+        } else if (std.mem.eql(u8, arg, "--embeds")) {
+            embeds = true;
         } else if (std.mem.eql(u8, arg, "--frontmatter")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -493,7 +497,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     // option shared by every frontend.
     const ext_flags = footnotes or definition_lists or heading_attributes or
         strikethrough or wikilinks or callouts or smartypants or heading_ids or
-        task_lists or highlights or math or comments;
+        task_lists or highlights or math or comments or embeds;
     // The filesystem commands own closed flag sets; a wrap/plan/manifest
     // flag given to any other command is a usage error, the same as a
     // render flag on a filesystem command.
@@ -585,6 +589,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .highlights = highlights,
         .math = math,
         .comments = comments,
+        .embeds = embeds,
         .frontmatter = frontmatter,
         .raw_html = raw_html,
         .diagnostics = diagnostics,
@@ -913,6 +918,7 @@ fn markdownParseOptions(cfg: RunConfig) oliver.ParseOptions {
         .highlights = cfg.highlights,
         .math = cfg.math,
         .comments = cfg.comments,
+        .embeds = cfg.embeds,
     };
     if (cfg.frontmatter) |fm| opts.frontmatter = fm;
     return opts;
@@ -1315,6 +1321,7 @@ fn printUsage(output: Output) Output.Error!void {
         \\  --highlights  (Obsidian ==mark== highlights)
         \\  --math  (Obsidian $…$ and $$…$$ TeX math)
         \\  --comments  (Obsidian %%…%% comments)
+        \\  --embeds  (Obsidian ![[x]] embeds)
         \\  --heading-ids  (GFM-style auto ids on headings)
         \\  --task-lists  (GFM checkboxes on list items)
         \\Front matter (render with any frontend, off by default):

@@ -70,10 +70,9 @@ consume directly. The map below mirrors it.
   [Reference images](REFERENCE-IMAGES.html) · [Tables (GFM)](TABLES.html) ·
   [Wikilinks](WIKILINKS.html) · [Callouts](CALLOUTS.html) ·
   [Highlights](HIGHLIGHTS.html) · [Math](MATH.html) ·
-  [Comments](COMMENTS.html) ·
+  [Comments](COMMENTS.html) · [Embeds](EMBEDS.html) ·
   [Smart typography](SMARTY.html) · [Front matter](FRONTMATTER.html)
-- Planned: [Obsidian-flavor extensions](OBSIDIAN-EXTENSIONS.html) ·
-  [Embeds](EMBEDS.html)
+- Planned: [Obsidian-flavor extensions](OBSIDIAN-EXTENSIONS.html)
 
 ### Textile frontend
 

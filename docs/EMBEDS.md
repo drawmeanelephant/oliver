@@ -1,15 +1,15 @@
 ---
 published_at: 2026-10-16T00:00:00Z
-summary: "Planned opt-in Obsidian embed extension (![[target]] / ![[target|alias]]) in the Markdown frontend: parse-only typed node sharing the wikilink grammar, plus the embed resolver render policy (issue #189)."
+summary: "Opt-in Obsidian embed extension (![[target]] / ![[target|alias]]) in the Markdown frontend: parse-only typed node sharing the wikilink grammar, plus the embed resolver render policy (issue #189)."
 ---
 
-# Embeds (extension, planned)
+# Embeds (extension)
 
-**Status:** planned — spec under review in issue #189; not implemented.
+**Status:** implemented (issue #189).
 The family overview is at docs/OBSIDIAN-EXTENSIONS.md.  \
-**Modules (planned):** `src/markdown.zig` (parse), `src/document.zig`
+**Modules:** `src/markdown.zig` (parse), `src/document.zig`
 (model), `src/html.zig` (render)  \
-**Options (planned):** `markdown.Options.embeds: bool = false` (parse);
+**Options:** `markdown.Options.embeds: bool = false` (parse);
 `html.RenderOptions.embed_resolver` and `embed_resolver_ctx` (render);
 CLI `--embeds`; C ABI `OLIVER_MD_EMBEDS = 1 << 11`
 
@@ -167,7 +167,7 @@ const ResolvedEmbed = struct {
   `label orelse target`. Image alt can't contain embeds (§2, demotion).
 - **Front matter** is stripped before the body parses.
 
-## 7. Fixtures (planned)
+## 7. Fixtures
 
 | fixture | covers |
 | --- | --- |
@@ -183,5 +183,5 @@ storm. Fuzz seeds cover `![[` runs.
 
 ## 8. Conformance status
 
-Not implemented. When it lands it is off by default, and the CommonMark
-0.31.2 corpus must stay 652/652 under `--gate`.
+Extension, off by default: the CommonMark 0.31.2 corpus is untouched
+(re-verified at integration: 652/652 with the `--gate` harness).

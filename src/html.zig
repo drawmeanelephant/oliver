@@ -93,6 +93,35 @@ pub const ResolvedWikilink = struct {
 /// no closures). See `RenderOptions.wikilink_resolver`.
 pub const WikilinkResolver = *const fn (target: []const u8, label: ?[]const u8, ctx: ?*const anyopaque) ResolvedWikilink;
 
+/// A resolver's answer for an `.embed` (Markdown `![[x]]` extension,
+/// docs/EMBEDS.md §4): which output kind, the resolved URL and text, and
+/// image dimensions when the resolver applied Obsidian `|WxH` sizing.
+/// `href`/`src` goes through the standard href policy and all text is
+/// escaped, so a resolver can never inject raw markup. Memory returned
+/// from the resolver must outlive the render call; the renderer never
+/// frees it.
+pub const ResolvedEmbed = struct {
+    kind: enum { link, image, text },
+    /// `.link`: the `<a href>`; `.image`: the `<img src>`. Unused for
+    /// `.text`.
+    href: []const u8 = "",
+    /// `.link`: the link text; `.image`: the `alt`; `.text`: the span
+    /// text.
+    text: []const u8,
+    /// `.image` only: `width`/`height` attributes, emitted only when set
+    /// (Obsidian's `|100x145` / `|100` alias sizing after the resolver
+    /// interprets `label`).
+    width: ?u32 = null,
+    height: ?u32 = null,
+};
+
+/// An embed resolver: a pure function of (target, label, ctx) with no
+/// hidden state (the freestanding core has no closures). Resolution —
+/// vault lookup, image detection, `|WxH` sizing — is the consumer's
+/// job; Oliver never touches the filesystem (docs/EMBEDS.md §4). See
+/// `RenderOptions.embed_resolver`.
+pub const EmbedResolver = *const fn (target: []const u8, label: ?[]const u8, ctx: ?*const anyopaque) ResolvedEmbed;
+
 /// The renderer's raw-HTML policy (docs/RAW-HTML.md §3): how raw-content
 /// nodes — Markdown `.raw_html` inline tags and `.html_block` leaves, and
 /// Textile `pre.` verbatim code blocks — are emitted. `.allowed` passes
@@ -145,6 +174,14 @@ pub const RenderOptions = struct {
     wikilink_resolver: ?WikilinkResolver = null,
     /// The opaque context passed unchanged to `wikilink_resolver`.
     wikilink_resolver_ctx: ?*const anyopaque = null,
+    /// Optional consumer hook resolving `.embed` nodes' opaque target
+    /// strings to a `ResolvedEmbed` (Markdown extension; docs/EMBEDS.md
+    /// §4). Null (default): the deterministic
+    /// `<span class="embed" data-embed-target="…">` placeholder that
+    /// keeps the reference machine-readable.
+    embed_resolver: ?EmbedResolver = null,
+    /// The opaque context passed unchanged to `embed_resolver`.
+    embed_resolver_ctx: ?*const anyopaque = null,
 };
 
 /// A pre-order document walk in render order. Unlike
@@ -929,6 +966,58 @@ fn writeOpen(
             try writeEscaped(writer, resolved.text);
             try writer.writeAll("</a>");
         },
+        .embed => {
+            // Leaf tag (extension, docs/EMBEDS.md §4): resolution is a
+            // renderer policy. Without a resolver the output is the
+            // deterministic `<span class="embed">` placeholder — the
+            // target kept machine-readable in `data-embed-target`,
+            // which HTML 4.01 Strict omits like the footnote `data-*`
+            // attributes. A resolver picks `.link`, `.image` (with
+            // optional `|WxH` sizing), or `.text`; every byte is escaped
+            // so resolved output is always profile-safe.
+            const e = node.data.embed;
+            if (options.embed_resolver) |res| {
+                const resolved = res(e.target, e.label, options.embed_resolver_ctx);
+                switch (resolved.kind) {
+                    .link => {
+                        try writer.writeAll("<a class=\"embed\" href=\"");
+                        try writeEscapedHref(writer, resolved.href);
+                        try writer.writeAll("\">");
+                        try writeEscaped(writer, resolved.text);
+                        try writer.writeAll("</a>");
+                    },
+                    .image => {
+                        try writer.writeAll("<img class=\"embed\" src=\"");
+                        try writeEscapedHref(writer, resolved.href);
+                        try writer.writeAll("\" alt=\"");
+                        try writeEscaped(writer, resolved.text);
+                        try writer.writeByte('"');
+                        if (resolved.width) |w| {
+                            try writer.print(" width=\"{d}\"", .{w});
+                        }
+                        if (resolved.height) |h| {
+                            try writer.print(" height=\"{d}\"", .{h});
+                        }
+                        try writer.writeAll(if (voidSlash(options)) " />" else ">");
+                    },
+                    .text => {
+                        try writer.writeAll("<span class=\"embed\">");
+                        try writeEscaped(writer, resolved.text);
+                        try writer.writeAll("</span>");
+                    },
+                }
+            } else {
+                try writer.writeAll("<span class=\"embed\"");
+                if (options.profile != .html4_strict) {
+                    try writer.writeAll(" data-embed-target=\"");
+                    try writeEscaped(writer, e.target);
+                    try writer.writeByte('"');
+                }
+                try writer.writeByte('>');
+                try writeEscaped(writer, e.label orelse e.target);
+                try writer.writeAll("</span>");
+            }
+        },
         .task_checkbox => {
             // Leaf tag (extension, docs/TASK-LISTS.md §3): a disabled
             // checkbox input replacing the `[ ]`/`[x]`/`[X]` run at a
@@ -1079,7 +1168,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .wikilink, .task_checkbox, .math_inline, .math_block, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
+        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .wikilink, .embed, .task_checkbox, .math_inline, .math_block, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
     }
 }
 
@@ -1211,6 +1300,7 @@ fn collectHeadingText(gpa: std.mem.Allocator, node: *const document.Node, out: *
             .image => try out.appendSlice(gpa, n.data.image.alt),
             .autolink => try out.appendSlice(gpa, n.data.autolink.label),
             .wikilink => try out.appendSlice(gpa, n.data.wikilink.label orelse n.data.wikilink.target),
+            .embed => try out.appendSlice(gpa, n.data.embed.label orelse n.data.embed.target),
             .math_inline => try out.appendSlice(gpa, n.data.math.tex),
             .soft_break, .hard_break => try out.append(gpa, ' '),
             .raw_html => {},
