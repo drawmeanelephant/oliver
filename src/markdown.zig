@@ -1053,7 +1053,20 @@ fn tryTakeCallout(
         if (!((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '-')) return false;
     }
     if (close >= t.len or close == 2) return false; // `[!note` (no `]`) or `[!]`
-    if (close + 1 < t.len and t[close + 1] != ' ' and t[close + 1] != '\t') return false; // `[!note]x`
+
+    // Fold marker (docs/CALLOUTS.md §10): a single `+` or `-` immediately
+    // after the `]` marks the callout expanded or collapsed by default.
+    // The §1 separator is then required after the fold byte: `[!faq]-`
+    // and `[!faq]- Title` are folds, `[!faq]-x`, `[!faq]++`, and
+    // `[!faq]+-` stay literal.
+    var fold: document.CalloutFold = .none;
+    var after_marker: usize = close + 1;
+    if (after_marker < t.len and (t[after_marker] == '+' or t[after_marker] == '-')) {
+        fold = if (t[after_marker] == '+') .open else .closed;
+        after_marker += 1;
+    }
+    if (after_marker < t.len and t[after_marker] != ' ' and t[after_marker] != '\t') return false; // `[!note]x`
+    node.data.block_quote.callout_fold = fold;
 
     // Normalized lowercase type: an arena-owned copy.
     const raw_type = t[2..close];
@@ -1063,9 +1076,10 @@ fn tryTakeCallout(
     }
     node.data.block_quote.callout_type = ctype;
 
-    // The title: the trimmed remainder of the line after `]` and the
-    // separator. Only whitespace (or end of line) means no title.
-    var s: usize = close + 1;
+    // The title: the trimmed remainder of the line after `]`, the fold
+    // byte (if any), and the separator. Only whitespace (or end of line)
+    // means no title.
+    var s: usize = after_marker;
     while (s < t.len and (t[s] == ' ' or t[s] == '\t')) : (s += 1) {}
     var e = t.len;
     while (e > s and (t[e - 1] == ' ' or t[e - 1] == '\t')) : (e -= 1) {}
@@ -8115,6 +8129,43 @@ test "markdown: a titleless callout renders without the title div (extension)" {
         "<div class=\"callout callout-warning\">\n<p>Body.</p>\n</div>\n",
         out.items,
     );
+}
+
+test "markdown: callout fold markers set the fold payload (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "> [!note]+ Open\n\n> [!faq]- Closed\n\n> [!tip]+\n> no title\n",
+        .markdown,
+        ext_parse(.{ .callouts = true }),
+    );
+    defer result.deinit();
+    const open = result.document.root.children.items[0];
+    try testing.expectEqual(document.CalloutFold.open, open.data.block_quote.callout_fold);
+    try testing.expectEqualStrings("Open", open.data.block_quote.callout_title.?);
+    const closed = result.document.root.children.items[1];
+    try testing.expectEqual(document.CalloutFold.closed, closed.data.block_quote.callout_fold);
+    try testing.expectEqualStrings("Closed", closed.data.block_quote.callout_title.?);
+    // `[!tip]+` at end of line is a fold with no title.
+    const bare = result.document.root.children.items[2];
+    try testing.expectEqual(document.CalloutFold.open, bare.data.block_quote.callout_fold);
+    try testing.expectEqual(@as(?[]const u8, null), bare.data.block_quote.callout_title);
+}
+
+test "markdown: callout fold markers render fold classes (extension)" {
+    var out = try renderCalloutsHtml("> [!faq]- Are callouts foldable?\n> Yes!\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<div class=\"callout callout-faq callout-fold-closed\">\n<div class=\"callout-title\">Are callouts foldable?</div>\n<p>Yes!</p>\n</div>\n",
+        out.items,
+    );
+    var open = try renderCalloutsHtml("> [!note]+ Title\n> Body.\n");
+    defer open.deinit(testing.allocator);
+    try testing.expect(std.mem.indexOf(u8, open.items, "callout-fold-open") != null);
+    // No fold byte: output is byte-identical to a plain callout.
+    var plain = try renderCalloutsHtml("> [!note] Title\n> Body.\n");
+    defer plain.deinit(testing.allocator);
+    try testing.expect(std.mem.indexOf(u8, plain.items, "callout-fold") == null);
 }
 
 fn renderSmartypantsHtml(input: []const u8) !std.ArrayList(u8) {

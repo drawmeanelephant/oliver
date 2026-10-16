@@ -336,7 +336,16 @@ pub const BlockQuote = struct {
     /// the source; these are the parsed form, so emphasis/wikilinks work
     /// in titles). Empty for ordinary blockquotes and titleless callouts.
     callout_title_nodes: []*Node = &.{},
+    /// Callout fold marker (extension, docs/CALLOUTS.md §10): a single
+    /// `+` or `-` immediately after `[!type]` marks the callout expanded
+    /// or collapsed by default. `.none` for every other blockquote;
+    /// Textile never sets it.
+    callout_fold: CalloutFold = .none,
 };
+
+/// The fold state of a callout blockquote (docs/CALLOUTS.md §10): `+` is
+/// expanded by default, `-` collapsed.
+pub const CalloutFold = enum { none, open, closed };
 
 /// The payload of a `.heading` node: the level (1..6) and the Textile
 /// block attributes, plus the optional Markdown heading-attribute-list
