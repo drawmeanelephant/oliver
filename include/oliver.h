@@ -97,6 +97,7 @@ enum {
     OLIVER_MD_HIGHLIGHTS = 1 << 8,
     OLIVER_MD_MATH = 1 << 9,
     OLIVER_MD_COMMENTS = 1 << 10,
+    OLIVER_MD_EMBEDS = 1 << 11,
 };
 
 /* An owned render result. */

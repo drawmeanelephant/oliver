@@ -202,6 +202,7 @@ emit them in a fixed documented order.
 | `==text==` / `==🔴text==` (extension) | (Textile `==` is the notextile passthrough; unrelated) | `.highlight` inline container (`data.highlight.color`, consumed from a leading emoji marker — docs/HIGHLIGHTS.md §3) |
 | `$x$` / `$$x$$` inline and `$$` fenced blocks (extension) | (Textile has no math; literal) | `.math_inline` leaf / `.math_block` leaf block (`data.math` — `tex` borrow-or-copy, `display` — docs/MATH.md §3) |
 | `%%x%%` / `%%` block comments (extension) | (Textile has no `%%`; literal) | **no node** — removed at parse, privacy + dead-node rules (docs/COMMENTS.md §4) |
+| `![[x]]` / `![[x|y]]` embeds (extension) | (Textile has no `![[`; literal) | `.embed` leaf (`data.embed` — `target`, `label` — source slices; docs/EMBEDS.md §3) |
 | raw HTML tag (`<tag>`, comment, PI, declaration, CDATA) | literal text | `.raw_html` in Markdown; `.text` in Textile |
 | GFM pipe table (GFM §4.10) | Textile `|a|b|` tables (`|_. header|`, `table<mods>.`, colspan/rowspan, alignment propagation) | `.table` → `.table_row` → `.table_cell` (alignment on the table, header/colspan/rowspan/attrs on the cell). Deliberate render differences (docs/TEXTILE-PARITY.md §6): GFM emits `<thead>`/`<tbody>` sections and `align` attributes and trims cell whitespace; Textile emits flat rows with `style` attributes and preserves cell whitespace verbatim |
 | plain text | plain text | `.text` |

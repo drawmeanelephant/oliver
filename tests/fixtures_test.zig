@@ -1645,6 +1645,21 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .expected = @embedFile("fixtures/markdown/comments-unclosed.html"),
     },
     .{
+        .name = "embed-basic",
+        .input = @embedFile("fixtures/markdown/embed-basic.md"),
+        .expected = @embedFile("fixtures/markdown/embed-basic.html"),
+    },
+    .{
+        .name = "embed-literal",
+        .input = @embedFile("fixtures/markdown/embed-literal.md"),
+        .expected = @embedFile("fixtures/markdown/embed-literal.html"),
+    },
+    .{
+        .name = "embed-precedence",
+        .input = @embedFile("fixtures/markdown/embed-precedence.md"),
+        .expected = @embedFile("fixtures/markdown/embed-precedence.html"),
+    },
+    .{
         .name = "smartypants-basic",
         .input = @embedFile("fixtures/markdown/smartypants-basic.md"),
         .expected = @embedFile("fixtures/markdown/smartypants-basic.html"),
@@ -2696,6 +2711,7 @@ fn renderExtHtml(input: []const u8) !std.ArrayList(u8) {
             .highlights = true,
             .math = true,
             .comments = true,
+            .embeds = true,
         },
     });
     defer result.deinit();
