@@ -198,6 +198,25 @@ pub const Options = struct {
     embeds: bool = false,
 };
 
+/// The Obsidian preset (docs/OBSIDIAN-EXTENSIONS.md §4): the syntaxes
+/// in Obsidian Help's "Supported Markdown extensions" table plus LaTeX
+/// math — a constant, not a field. Consumers write
+/// `.markdown = markdown.obsidian` or modify a copy. `smartypants`,
+/// `definition_lists`, and `heading_attributes` are not Obsidian
+/// behavior and stay off; `frontmatter` lives on the top-level
+/// `ParseOptions`. Changing membership is a conformance change.
+pub const obsidian: Options = .{
+    .wikilinks = true,
+    .embeds = true,
+    .callouts = true,
+    .highlights = true,
+    .comments = true,
+    .math = true,
+    .strikethrough = true,
+    .task_lists = true,
+    .footnotes = true,
+};
+
 const tab_stop: u32 = 4;
 
 /// A line view during the block pass: the remaining `line` plus the
@@ -9466,6 +9485,45 @@ test "markdown: embeds are off by default (extension)" {
     var out = try renderCalloutsHtml("a ![[x]] b\n");
     defer out.deinit(testing.allocator);
     try testing.expectEqualStrings("<p>a ![[x]] b</p>\n", out.items);
+}
+
+test "markdown: the obsidian preset equals the individual flags (extension)" {
+    // docs/OBSIDIAN-EXTENSIONS.md §4: `markdown.obsidian` must render
+    // byte-identically to the nine flags set by hand — and it enables
+    // every member (the input exercises each).
+    const oliver = @import("oliver.zig");
+    const input = "==hl== $x$ %%gone%% [[w]] ![[e]] ~~del~~\n\n" ++
+        "> [!tip]+ t\n> b\n\n- [x] c\n\n[^f]: fn\n\nuse[^f]\n";
+    var preset = try oliver.parse(testing.allocator, input, .markdown, .{ .markdown = obsidian });
+    defer preset.deinit();
+    var manual = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{
+        .wikilinks = true,
+        .embeds = true,
+        .callouts = true,
+        .highlights = true,
+        .comments = true,
+        .math = true,
+        .strikethrough = true,
+        .task_lists = true,
+        .footnotes = true,
+    }));
+    defer manual.deinit();
+    var a = std.Io.Writer.Allocating.init(testing.allocator);
+    defer a.deinit();
+    try oliver.html.render(testing.allocator, &a.writer, &preset.document, .{});
+    var b = std.Io.Writer.Allocating.init(testing.allocator);
+    defer b.deinit();
+    try oliver.html.render(testing.allocator, &b.writer, &manual.document, .{});
+    const a_out = a.written();
+    try testing.expectEqualSlices(u8, b.written(), a_out);
+    // Membership pins: every preset construct is present.
+    try testing.expect(std.mem.indexOf(u8, a_out, "<mark>") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "math inline") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "%%") == null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "class=\"embed\"") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "<del>") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "callout-fold-open") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "checkbox") != null);
 }
 
 fn renderSmartypantsHtml(input: []const u8) !std.ArrayList(u8) {

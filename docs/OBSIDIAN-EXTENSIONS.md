@@ -1,14 +1,13 @@
 ---
 published_at: 2026-10-16T00:00:00Z
-summary: "Planned opt-in Obsidian-flavor Markdown extensions — highlights, math, comments, embeds, callout folds — plus the obsidian preset: scope, surface, model impact, and recorded non-goals (issue #189)."
+summary: "Opt-in Obsidian-flavor Markdown extensions — highlights, math, comments, embeds, callout folds — plus the obsidian preset: scope, surface, model impact, and recorded non-goals (issue #189)."
 ---
 
-# Obsidian-flavor extensions (planned)
+# Obsidian-flavor extensions
 
-**Status:** planned — spec under review in issue #189; **not
-implemented**. Nothing on this page or its feature pages changes current
-behavior. Each feature lands in its own PR, and that PR moves its page from
-planned to implemented.  \
+**Status:** implemented (issue #189). Each feature landed in its own PR;
+every option on this page is off by default and leaves the CommonMark
+corpus byte-exact.  \
 **Feature pages:** [Highlights](HIGHLIGHTS.html) ·
 [Math](MATH.html) · [Comments](COMMENTS.html) ·
 [Embeds](EMBEDS.html) · [Callouts §10 (folds)](CALLOUTS.html)  \
