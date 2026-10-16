@@ -1,15 +1,15 @@
 ---
 published_at: 2026-10-16T00:00:00Z
-summary: "Planned opt-in Obsidian comment extension (%%…%% inline and block) in the Markdown frontend: marker rules, block extent, removal semantics, and the unclosed-comment diagnostic (issue #189)."
+summary: "Opt-in Obsidian comment extension (%%…%% inline and block) in the Markdown frontend: marker rules, block extent, removal semantics, and the unclosed-comment diagnostic (issue #189)."
 ---
 
-# Comments (extension, planned)
+# Comments (extension)
 
-**Status:** planned — spec under review in issue #189; not implemented.
+**Status:** implemented (issue #189).
 The family overview is at docs/OBSIDIAN-EXTENSIONS.md.  \
-**Modules (planned):** `src/markdown.zig` (parse; no model or render
+**Modules:** `src/markdown.zig` (parse; no model or render
 change)  \
-**Options (planned):** `markdown.Options.comments: bool = false`; CLI
+**Options:** `markdown.Options.comments: bool = false`; CLI
 `--comments`; C ABI `OLIVER_MD_COMMENTS = 1 << 10`
 
 ## Source behavior
@@ -170,7 +170,7 @@ message:  "block comment is never closed; it hides the rest of its container"
 - **Front matter** is stripped before the body parses, so a `%%` in
   YAML is data.
 
-## 7. Fixtures (planned)
+## 7. Fixtures
 
 | fixture | covers |
 | --- | --- |
@@ -183,5 +183,5 @@ and a 10,000-marker determinism storm, and fuzz seeds cover `%` runs.
 
 ## 8. Conformance status
 
-Not implemented. When it lands it is off by default, and the CommonMark
-0.31.2 corpus must stay 652/652 under `--gate`.
+Extension, off by default: the CommonMark 0.31.2 corpus is untouched
+(re-verified at integration: 652/652 with the `--gate` harness).

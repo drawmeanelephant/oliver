@@ -2,7 +2,7 @@
 
 **Status:** implemented — opt-in Markdown dialect extensions  \
 **Modules:** `src/markdown.zig` (parse), `src/html.zig` (render), `src/document.zig` (model)  \
-**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, `--task-lists`, `--highlights`, `--math`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
+**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, `--task-lists`, `--highlights`, `--math`, `--comments`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
 
 The Markdown frontend is byte-exact CommonMark 0.31.2 by default (the
 652/652 conformance corpus is green with default options). The extensions
@@ -377,6 +377,30 @@ contract in docs/MATH.md:
 - Fixtures: `tests/fixtures/markdown/math-*.md`; unit tests in
   `src/markdown.zig` and `tests/xhtml_test.zig`.
 
+## 12. Comments (`parse: comments`)
+
+Obsidian `%%` comments are removed at parse time — no Document node and
+no output in any profile (privacy, per docs/COMMENTS.md §4):
+
+- `%%…%%` on one source line is an inline comment, removed before
+  delimiter matching (transparent to emphasis: `**a %%x%% b**` is
+  `<strong>a  b</strong>`). Markers are runs of exactly two `%`;
+  `\%%` escapes, `%%%`+ runs are literal, and a line-leading `%%` with
+  no same-line closer opens a block comment instead.
+- A block comment runs from its `%%` line through the next `%%` marker
+  — the HTML-block condition-2 shape, so it can interrupt a paragraph —
+  and the bytes after the closing marker reprocess as a new line of the
+  same container (`%% done` renders `done`). It owns lines like fenced
+  code, never lazily continues, and an unclosed one hides the rest of
+  its container with an `unclosed-comment` warning diagnostic — the
+  frontend's first diagnostic.
+- Comment-only paragraphs are not emitted; headings and list items keep
+  their CommonMark shapes (`# %%x%%` is `<h1></h1>`). Comments
+  contribute nothing to image-alt or slug flattening, and a `[^x]`
+  inside a comment is not a reference.
+- Fixtures: `tests/fixtures/markdown/comments-*.md`; unit tests in
+  `src/markdown.zig`.
+
 ---
 
 ## Interaction and precedence
@@ -391,7 +415,7 @@ contract in docs/MATH.md:
   in the callout title or body is a normal inline; smartypants applies
   to plain text in every scope, with wikilink payloads exempt.
 - Fenced code, code spans, HTML blocks, and raw HTML are opaque to all
-  ten extensions (a `[^x]:` line inside a fence is code, not a
+  eleven extensions (a `[^x]:` line inside a fence is code, not a
   definition; a `[!note]` line inside a fence is code, not a callout; a
   `~~` pair inside a code span or fence is literal; a `[[x]]` inside a
   code span or autolink is literal; quotes and dashes inside a code
@@ -399,7 +423,7 @@ contract in docs/MATH.md:
 - In GFM table cells an unescaped `|` is a cell separator (GFM §4.10), so
   a pipe-label wikilink inside a cell needs `\|` (docs/WIKILINKS.md §7).
 - Fixtures: `tests/fixtures/markdown/ext-*.md`, `wikilink-*.md`,
-  `callout-*.md`, `smartypants-*.md`, `highlight-*.md`, `math-*.md`,
+  `callout-*.md`, `smartypants-*.md`, `highlight-*.md`, `math-*.md`, `comments-*.md`,
   and the cross-extension `cross-*.md` composition pairs (parsed with
   all extensions enabled)
   plus unit tests in `src/markdown.zig` and `src/html.zig`.

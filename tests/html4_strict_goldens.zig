@@ -72,6 +72,7 @@ fn extParseOptions() oliver.ParseOptions {
         .task_lists = true,
         .highlights = true,
         .math = true,
+        .comments = true,
     } };
 }
 
@@ -109,7 +110,7 @@ fn render(input: []const u8, dir: []const u8, family: Class, mode: ?oliver.front
 }
 
 // ---------------------------------------------------------------------------
-// Generated classes (agree=282 divergent=110 fail=41).
+// Generated classes (agree=285 divergent=110 fail=41).
 // ---------------------------------------------------------------------------
 
 const agree_cases = [_]Agree{
@@ -339,6 +340,9 @@ const agree_cases = [_]Agree{
     .{ .name = "math-literal", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/math-literal.md"), .html = @embedFile("fixtures/markdown/math-literal.html") },
     .{ .name = "math-precedence", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/math-precedence.md"), .html = @embedFile("fixtures/markdown/math-precedence.html") },
     .{ .name = "math-block", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/math-block.md"), .html = @embedFile("fixtures/markdown/math-block.html") },
+    .{ .name = "comments-inline", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/comments-inline.md"), .html = @embedFile("fixtures/markdown/comments-inline.html") },
+    .{ .name = "comments-block", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/comments-block.md"), .html = @embedFile("fixtures/markdown/comments-block.html") },
+    .{ .name = "comments-unclosed", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/comments-unclosed.md"), .html = @embedFile("fixtures/markdown/comments-unclosed.html") },
     .{ .name = "smartypants-basic", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/smartypants-basic.md"), .html = @embedFile("fixtures/markdown/smartypants-basic.html") },
     .{ .name = "smartypants-scopes", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/smartypants-scopes.md"), .html = @embedFile("fixtures/markdown/smartypants-scopes.html") },
     .{ .name = "cross-callout-title", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/cross-callout-title.md"), .html = @embedFile("fixtures/markdown/cross-callout-title.html") },
@@ -558,7 +562,7 @@ test "html4 strict wall: class counts" {
     // The visible record of the generated classification. tools/gen-strict-
     // goldens.py owns these numbers; a fixture that changes class moves one
     // count to another (the totals must keep summing to the corpus size).
-    try std.testing.expectEqual(@as(usize, 282), agree_cases.len);
+    try std.testing.expectEqual(@as(usize, 285), agree_cases.len);
     try std.testing.expectEqual(@as(usize, 110), divergent_cases.len);
     try std.testing.expectEqual(@as(usize, 41), fail_cases.len);
 }
