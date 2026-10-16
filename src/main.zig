@@ -83,6 +83,7 @@ pub const RunConfig = struct {
     smartypants: bool = false,
     heading_ids: bool = false,
     task_lists: bool = false,
+    highlights: bool = false,
     /// Front matter mode (`render` with any frontend; null = default
     /// off). Shared by all three frontends (docs/FRONTMATTER.md §3).
     frontmatter: ?oliver.frontmatter.Option = null,
@@ -150,6 +151,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     var smartypants = false;
     var heading_ids = false;
     var task_lists = false;
+    var highlights = false;
     var frontmatter: ?oliver.frontmatter.Option = null;
     var raw_html: oliver.html.RawHtmlPolicy = .allowed;
     var diagnostics = false;
@@ -325,6 +327,8 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
             heading_ids = true;
         } else if (std.mem.eql(u8, arg, "--task-lists")) {
             task_lists = true;
+        } else if (std.mem.eql(u8, arg, "--highlights")) {
+            highlights = true;
         } else if (std.mem.eql(u8, arg, "--frontmatter")) {
             if (index + 1 >= args.len) return error.Usage;
             index += 1;
@@ -481,7 +485,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
     // option shared by every frontend.
     const ext_flags = footnotes or definition_lists or heading_attributes or
         strikethrough or wikilinks or callouts or smartypants or heading_ids or
-        task_lists;
+        task_lists or highlights;
     // The filesystem commands own closed flag sets; a wrap/plan/manifest
     // flag given to any other command is a usage error, the same as a
     // render flag on a filesystem command.
@@ -570,6 +574,7 @@ pub fn parseArgs(args: []const []const u8) error{ Usage, Help, Version }!RunConf
         .smartypants = smartypants,
         .heading_ids = heading_ids,
         .task_lists = task_lists,
+        .highlights = highlights,
         .frontmatter = frontmatter,
         .raw_html = raw_html,
         .diagnostics = diagnostics,
@@ -895,6 +900,7 @@ fn markdownParseOptions(cfg: RunConfig) oliver.ParseOptions {
         .callouts = cfg.callouts,
         .smartypants = cfg.smartypants,
         .task_lists = cfg.task_lists,
+        .highlights = cfg.highlights,
     };
     if (cfg.frontmatter) |fm| opts.frontmatter = fm;
     return opts;
@@ -1294,6 +1300,7 @@ fn printUsage(output: Output) Output.Error!void {
         \\Markdown extensions (render --from markdown, all off by default):
         \\  --wikilinks  --callouts  --smartypants  --footnotes
         \\  --definition-lists  --heading-attributes  --strikethrough
+        \\  --highlights  (Obsidian ==mark== highlights)
         \\  --heading-ids  (GFM-style auto ids on headings)
         \\  --task-lists  (GFM checkboxes on list items)
         \\Front matter (render with any frontend, off by default):

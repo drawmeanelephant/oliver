@@ -70,6 +70,7 @@ fn extParseOptions() oliver.ParseOptions {
         .callouts = true,
         .smartypants = true,
         .task_lists = true,
+        .highlights = true,
     } };
 }
 
@@ -107,7 +108,7 @@ fn render(input: []const u8, dir: []const u8, family: Class, mode: ?oliver.front
 }
 
 // ---------------------------------------------------------------------------
-// Generated classes (agree=279 divergent=106 fail=41).
+// Generated classes (agree=279 divergent=109 fail=41).
 // ---------------------------------------------------------------------------
 
 const agree_cases = [_]Agree{
@@ -438,6 +439,9 @@ const divergent_cases = [_]Divergent{
     .{ .name = "footnote-definition-ref", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/footnote-definition-ref.md"), .html = @embedFile("fixtures/markdown/footnote-definition-ref.html"), .strict = @embedFile("fixtures/markdown/footnote-definition-ref.strict.html") },
     .{ .name = "footnote-backref-order", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/footnote-backref-order.md"), .html = @embedFile("fixtures/markdown/footnote-backref-order.html"), .strict = @embedFile("fixtures/markdown/footnote-backref-order.strict.html") },
     .{ .name = "ext-task-lists", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/ext-task-lists.md"), .html = @embedFile("fixtures/markdown/ext-task-lists.html"), .strict = @embedFile("fixtures/markdown/ext-task-lists.strict.html") },
+    .{ .name = "highlight-basic", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/highlight-basic.md"), .html = @embedFile("fixtures/markdown/highlight-basic.html"), .strict = @embedFile("fixtures/markdown/highlight-basic.strict.html") },
+    .{ .name = "highlight-literal", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/highlight-literal.md"), .html = @embedFile("fixtures/markdown/highlight-literal.html"), .strict = @embedFile("fixtures/markdown/highlight-literal.strict.html") },
+    .{ .name = "highlight-color", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/highlight-color.md"), .html = @embedFile("fixtures/markdown/highlight-color.html"), .strict = @embedFile("fixtures/markdown/highlight-color.strict.html") },
     .{ .name = "cross-smartypants-scopes", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/cross-smartypants-scopes.md"), .html = @embedFile("fixtures/markdown/cross-smartypants-scopes.html"), .strict = @embedFile("fixtures/markdown/cross-smartypants-scopes.strict.html") },
     .{ .name = "frontmatter-unclosed", .dir = "markdown", .family = .fm, .mode = .yaml, .input = @embedFile("fixtures/markdown/frontmatter-unclosed.md"), .html = @embedFile("fixtures/markdown/frontmatter-unclosed.html"), .strict = @embedFile("fixtures/markdown/frontmatter-unclosed.strict.html") },
     .{ .name = "linebreak", .dir = "textile", .family = .plain, .input = @embedFile("fixtures/textile/linebreak.textile"), .html = @embedFile("fixtures/textile/linebreak.html"), .strict = @embedFile("fixtures/textile/linebreak.strict.html") },
@@ -550,7 +554,7 @@ test "html4 strict wall: class counts" {
     // goldens.py owns these numbers; a fixture that changes class moves one
     // count to another (the totals must keep summing to the corpus size).
     try std.testing.expectEqual(@as(usize, 279), agree_cases.len);
-    try std.testing.expectEqual(@as(usize, 106), divergent_cases.len);
+    try std.testing.expectEqual(@as(usize, 109), divergent_cases.len);
     try std.testing.expectEqual(@as(usize, 41), fail_cases.len);
 }
 

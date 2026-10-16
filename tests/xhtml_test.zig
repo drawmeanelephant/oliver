@@ -630,6 +630,32 @@ test "xhtml: callouts are well-formed under both profiles (extension)" {
     try wellformed.check(wrapped.items);
 }
 
+fn renderHighlightProfile(input: []const u8, profile: oliver.OutputProfile) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
+        .markdown = .{ .highlights = true },
+    });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{ .profile = profile });
+    return aw.toArrayList();
+}
+
+test "xhtml: highlights are well-formed under both profiles (extension)" {
+    // `<mark>` is valid XHTML; the colored form adds a class token
+    // (docs/HIGHLIGHTS.md §4).
+    const input = "A ==highlight== and ==\xF0\x9F\x94\xB4colored== with *em*.\n";
+    var html = try renderHighlightProfile(input, .html);
+    defer html.deinit(std.testing.allocator);
+    var xhtml = try renderHighlightProfile(input, .xhtml);
+    defer xhtml.deinit(std.testing.allocator);
+    try expectRender(xhtml.items, html.items, "highlights xhtml vs html");
+    var wrapped = std.ArrayList(u8).empty;
+    defer wrapped.deinit(std.testing.allocator);
+    try wrapFragment(xhtml.items, &wrapped);
+    try wellformed.check(wrapped.items);
+}
+
 fn renderSmartypantsProfile(input: []const u8, profile: oliver.OutputProfile) !std.ArrayList(u8) {
     var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
         .markdown = .{ .smartypants = true },

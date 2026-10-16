@@ -32,7 +32,7 @@ OUT_TEST = ROOT / "tests" / "html4_strict_goldens.zig"
 EXT_FLAGS = [
     "--footnotes", "--definition-lists", "--heading-attributes",
     "--strikethrough", "--wikilinks", "--callouts", "--smartypants",
-    "--task-lists", "--heading-ids",
+    "--task-lists", "--highlights", "--heading-ids",
 ]
 
 EXT_ZIG = """    return .{ .markdown = .{
@@ -44,6 +44,7 @@ EXT_ZIG = """    return .{ .markdown = .{
         .callouts = true,
         .smartypants = true,
         .task_lists = true,
+        .highlights = true,
     } };"""
 
 

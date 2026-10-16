@@ -839,6 +839,31 @@ fn writeOpen(
             try writer.writeByte('>');
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
+        .highlight => {
+            // Inline container (extension, docs/HIGHLIGHTS.md §4):
+            // `<mark>` with an optional `highlight-<color>` class.
+            // `<mark>` is not in HTML 4.01, so the Strict profile maps it
+            // to a `span` with a `mark` class — the footnote
+            // `section` → `div` precedent. The class names come from the
+            // `HighlightColor` tag names, never from source bytes.
+            if (options.profile == .html4_strict) {
+                try writer.writeAll("<span class=\"mark");
+                if (node.data.highlight.color) |color| {
+                    try writer.writeAll(" highlight-");
+                    try writer.writeAll(@tagName(color));
+                }
+                try writer.writeAll("\">");
+            } else {
+                try writer.writeAll("<mark");
+                if (node.data.highlight.color) |color| {
+                    try writer.writeAll(" class=\"highlight-");
+                    try writer.writeAll(@tagName(color));
+                    try writer.writeByte('"');
+                }
+                try writer.writeByte('>');
+            }
+            try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
+        },
         .code_span => {
             try writer.writeAll("<code>");
             // Leaf tag: the (normalized) content is escaped like text
@@ -1032,6 +1057,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .superscript => try writer.writeAll("</sup>"),
         .subscript => try writer.writeAll("</sub>"),
         .cite => try writer.writeAll("</cite>"),
+        .highlight => try writer.writeAll(if (options.profile == .html4_strict) "</span>" else "</mark>"),
         .span => try writer.writeAll("</span>"),
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
@@ -1171,7 +1197,7 @@ fn collectHeadingText(gpa: std.mem.Allocator, node: *const document.Node, out: *
             .soft_break, .hard_break => try out.append(gpa, ' '),
             .raw_html => {},
             .task_checkbox => {}, // a checkbox contributes no text to a slug
-            .link, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span => {
+            .link, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .superscript, .subscript, .span, .highlight => {
                 // Pushed in reverse so children pop in document order.
                 var i = n.children.items.len;
                 while (i > 0) {
