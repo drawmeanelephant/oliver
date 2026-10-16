@@ -83,8 +83,8 @@ is `OLIVER_ERR_INVALID_ARGUMENT`, as is a null allocator pair or null
 `bytes` with a non-zero `len`.
 
 `markdown_flags` is the parse-extension bitmask (`OLIVER_MD_FOOTNOTES`
-… `OLIVER_MD_MATH`, bit 0 = footnotes, bit 9 = math); all extensions
-are off by
+… `OLIVER_MD_COMMENTS`, bit 0 = footnotes, bit 10 = comments); all
+extensions are off by
 default, matching `markdown.Options`. `profile`, `raw_html`,
 `heading_ids`, and `footnotes` are the render options
 (`html.RenderOptions`). Note `footnotes` appears on **both** sides: the
