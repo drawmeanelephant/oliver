@@ -9,7 +9,7 @@ Tests are product contracts. `zig build test` runs seven suites.
 The XHTML, HTML 4.01 Strict, and fuzz suites are described in their own
 sections below:
 
-1. **Library module tests** — 335 tests inside `src/*.zig` covering
+1. **Library module tests** — 337 tests inside `src/*.zig` covering
    source lines/spans, the normalized document, diagnostics, both dialect
    frontends, the Cooklang frontend (parser + canonical serializer +
    pure scaling + the HTML policy + the `.menu` view), Unicode case
@@ -210,11 +210,11 @@ sections below:
    Eight CLI subprocess cases additionally check the stdin byte ceiling,
    including zero, exact-limit, and later-chunk overflow inputs.
 
-The current complete result is **510/510 tests passing** with Zig 0.16.0
+The current complete result is **512/512 tests passing** with Zig 0.16.0
 and 0.17.0 alike (CI runs the full gate on both; the CommonMark 652/652
 classified gate and the Cooklang 60/60 wall are also run under both
 toolchains).
-(335 library module tests — including 8 C-ABI tests over the exported
+(337 library module tests — including 8 C-ABI tests over the exported
 `oliver_render`/`oliver_free` surface — + 18 fixture/adversarial tests + 7
 conformance-harness tests + 123 CLI and helper tests + 19 XHTML
 profile tests + 7 HTML 4.01 Strict profile tests + 1 fuzz wall).
@@ -333,6 +333,12 @@ under `std.testing.allocator`:
 - a 20,000/40,000-deep `[[` wikilink opener storm under `--wikilinks`
   (issue #183: the `]]` closer search and the nested-`[[` content check
   are memoized against a monotone scan position);
+- 20,000-line paragraphs carrying one resolved construct per line
+  (issue #198, pinned in `src/markdown.zig`: `scanLine` and the per-line
+  terminator check share forward-only cursors over the sorted construct
+  list, so constructs are passed once per block — covers code spans, raw
+  HTML tags, and `%%…%%` comments under `--comments`, plus the
+  first-line-cluster isolation shape);
 - a 64-byte fence with 10,000 near closers and a 20,000-line unclosed literal
   block, each rendered twice.
 
