@@ -1595,6 +1595,21 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .expected = @embedFile("fixtures/markdown/callout-fold.html"),
     },
     .{
+        .name = "highlight-basic",
+        .input = @embedFile("fixtures/markdown/highlight-basic.md"),
+        .expected = @embedFile("fixtures/markdown/highlight-basic.html"),
+    },
+    .{
+        .name = "highlight-literal",
+        .input = @embedFile("fixtures/markdown/highlight-literal.md"),
+        .expected = @embedFile("fixtures/markdown/highlight-literal.html"),
+    },
+    .{
+        .name = "highlight-color",
+        .input = @embedFile("fixtures/markdown/highlight-color.md"),
+        .expected = @embedFile("fixtures/markdown/highlight-color.html"),
+    },
+    .{
         .name = "smartypants-basic",
         .input = @embedFile("fixtures/markdown/smartypants-basic.md"),
         .expected = @embedFile("fixtures/markdown/smartypants-basic.html"),
@@ -2643,6 +2658,7 @@ fn renderExtHtml(input: []const u8) !std.ArrayList(u8) {
             .callouts = true,
             .smartypants = true,
             .task_lists = true,
+            .highlights = true,
         },
     });
     defer result.deinit();

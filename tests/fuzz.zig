@@ -139,6 +139,15 @@ const seeds = [_][]const u8{
     // Front matter edge shapes.
     "---\ntitle: A & B\n---\nbody\n",
     "+++\nfoo = \"bar\"\n+++\ntext\n",
+    // Markdown: Obsidian `=` runs (highlights, colors, escapes, Setext
+    // interplay, malformed lengths).
+    "==hi== and ===a=== and =b= and ====\n" ++
+        "\n" ++
+        "==🔴colored== word==🔵x== \\==esc==\n" ++
+        "\n" ++
+        "foo\n==\n" ++
+        "\n" ++
+        "==a *b* c== ==x== ==y==z==\n",
 };
 
 /// The generated input cap (well under `source.max_input_len`, so span
@@ -178,6 +187,7 @@ fn exercise(input: []const u8, i: usize) !void {
                 .callouts = true,
                 .smartypants = true,
                 .task_lists = true,
+                .highlights = true,
             },
             .frontmatter = .yaml,
         });

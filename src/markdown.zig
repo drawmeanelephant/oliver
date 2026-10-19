@@ -165,6 +165,14 @@ pub const Options = struct {
     /// whitespace) stays literal. Off by default so the CommonMark
     /// corpus stays byte-exact.
     task_lists: bool = false,
+    /// Obsidian-style highlights: a run of exactly two `=` (`==text==`)
+    /// wraps inline-parsed content in a `.highlight` node rendered as
+    /// `<mark>` (docs/HIGHLIGHTS.md). Flanking follows the CommonMark
+    /// emphasis rules, like strikethrough; runs of one or three-plus
+    /// `=` stay literal, and a leading color emoji from the documented
+    /// six-color table is consumed into `data.highlight.color`. Off by
+    /// default so the CommonMark corpus stays byte-exact.
+    highlights: bool = false,
 };
 
 const tab_stop: u32 = 4;
@@ -4621,6 +4629,25 @@ fn scanLine(
             });
             i = e - 1; // loop increments past the run
             run_start = e;
+        } else if (b == '=' and options.highlights) {
+            if (isEscaped(bytes, i)) continue; // literal text, not a delimiter
+            // Obsidian highlight: only a run of exactly two `=` is a
+            // delimiter (docs/HIGHLIGHTS.md §1); runs of one or
+            // three-plus stay literal and are consumed whole so a `===`
+            // run never re-scans as `==` + `=`.
+            var e = i + 1;
+            while (e < raw.end and bytes[e] == '=' and !isEscaped(bytes, e)) : (e += 1) {}
+            if (e - i != 2) {
+                i = e - 1; // loop increments past the whole run
+                continue;
+            }
+            try appendTextItem(doc, items, .{ .start = run_start, .end = i }, emit);
+            const span = source.Span{ .start = @intCast(i), .end = @intCast(e) };
+            try items.append(doc.allocator(), .{
+                .delimiter = classifyRun(bytes, span, raw),
+            });
+            i = e - 1; // loop increments past the run
+            run_start = e;
         } else if (b == '<' and !isEscaped(bytes, i)) {
             // §6.8 autolink: `<scheme:...>` or `<user@host>`. The scan is
             // per-line and the content excludes line endings, so scanning
@@ -4713,7 +4740,7 @@ const Match = struct {
     opener_seg: source.Span,
     closer_seg: source.Span,
 
-    const Kind = enum { em, strong, strikethrough };
+    const Kind = enum { em, strong, strikethrough, highlight };
 };
 
 /// `openers_bottom` table: for each (delimiter character, closer length
@@ -4727,10 +4754,10 @@ const Match = struct {
 /// the reference behavior on inputs like `*****Hello*world****` (see
 /// docs/FEATURE-MATRIX.md, "emphasis" row) and every verified spec example.
 const Bottoms = struct {
-    inner: [3][3]usize = .{ .{ 0, 0, 0 }, .{ 0, 0, 0 }, .{ 0, 0, 0 } },
+    inner: [4][3]usize = .{ .{ 0, 0, 0 }, .{ 0, 0, 0 }, .{ 0, 0, 0 }, .{ 0, 0, 0 } },
 
     fn idx(ch: u8) usize {
-        return if (ch == '*') 0 else if (ch == '~') 2 else 1;
+        return if (ch == '*') 0 else if (ch == '~') 2 else if (ch == '=') 3 else 1;
     }
 
     fn get(self: *const Bottoms, ch: u8, m: usize) usize {
@@ -4745,9 +4772,9 @@ const Bottoms = struct {
     /// `keep` are gone; clamp every bottom so it never points past the
     /// stack.
     fn clampOnPop(self: *Bottoms, keep: usize) void {
-        for (0..2) |i| {
-            for (0..3) |j| {
-                self.inner[i][j] = @min(self.inner[i][j], keep);
+        for (&self.inner) |*row| {
+            for (row) |*v| {
+                v.* = @min(v.*, keep);
             }
         }
     }
@@ -4783,14 +4810,14 @@ fn processDelimiter(
             const o_idx = stack.items[j];
             const o = &items[o_idx].delimiter;
             if (o.ch != c.ch) continue;
-            if (!o.can_open or (o.ch != '~' and !mod3Allowed(o, c))) continue;
+            if (!o.can_open or (o.ch != '~' and o.ch != '=' and !mod3Allowed(o, c))) continue;
 
             // Consume from the opener's back and the closer's front (the
             // ends adjacent to the matched content). Strong pairs take two
-            // delimiters from each side; GFM strikethrough pairs take the
-            // whole two-tilde run from each side.
-            const kind: Match.Kind = if (o.ch == '~') .strikethrough else if (o.len() >= 2 and c.len() >= 2) .strong else .em;
-            const take: u32 = if (kind == .strikethrough) 2 else if (kind == .strong) 2 else 1;
+            // delimiters from each side; GFM strikethrough and Obsidian
+            // highlights pair the whole two-byte run from each side.
+            const kind: Match.Kind = if (o.ch == '~') .strikethrough else if (o.ch == '=') .highlight else if (o.len() >= 2 and c.len() >= 2) .strong else .em;
+            const take: u32 = if (kind == .strikethrough or kind == .highlight) 2 else if (kind == .strong) 2 else 1;
             const o_seg = source.Span{
                 .start = o.span.end - o.back_used - take,
                 .end = o.span.end - o.back_used,
@@ -4860,6 +4887,32 @@ fn matchItems(doc: *document.Document, items: []const InlineItem) ParseError![]c
 /// document nodes under `block`.
 fn matchInlines(doc: *document.Document, block: *document.Node, items: []const InlineItem, options: Options) ParseError!void {
     try emitInlines(doc, block, @constCast(items), try matchItems(doc, items), options);
+}
+
+/// docs/HIGHLIGHTS.md §2: the six color emoji recognized as the first
+/// bytes of a matched highlight's content. Returns the color and the
+/// marker's byte length (4 for the emoji, plus 3 when a U+FE0F variation
+/// selector follows) at `pos`, or null.
+fn highlightMarkerAt(bytes: []const u8, pos: usize) ?struct { color: document.HighlightColor, len: u32 } {
+    if (pos + 4 > bytes.len or bytes[pos] != 0xF0 or bytes[pos + 1] != 0x9F) return null;
+    const color: document.HighlightColor = switch (bytes[pos + 2]) {
+        0x94 => switch (bytes[pos + 3]) {
+            0xB4 => .red,
+            0xB5 => .blue,
+            else => return null,
+        },
+        0x9F => switch (bytes[pos + 3]) {
+            0xA0 => .orange,
+            0xA1 => .yellow,
+            0xA2 => .green,
+            0xA3 => .purple,
+            else => return null,
+        },
+        else => return null,
+    };
+    var len: u32 = 4;
+    if (pos + 7 <= bytes.len and bytes[pos + 4] == 0xEF and bytes[pos + 5] == 0xB8 and bytes[pos + 6] == 0x8F) len = 7;
+    return .{ .color = color, .len = len };
 }
 
 // ---------------------------------------------------------------------------
@@ -5085,11 +5138,35 @@ fn emitInlines(
                     std.mem.sort(usize, obucket, matches, openerLess);
                     for (obucket) |k| {
                         const m = matches[k];
-                        const node = try doc.createNode(
+                        const node = if (m.kind == .highlight) blk: {
+                            // Color marker (docs/HIGHLIGHTS.md §2): a
+                            // table emoji as the first bytes of the
+                            // matched content sets `color` and is covered
+                            // by no child node, like the delimiter bytes
+                            // — the first child text item is shrunk past
+                            // it here. Delimiter matching already ran, so
+                            // `==🔴==` is an empty `.red` highlight.
+                            const marker = highlightMarkerAt(doc.src.bytes, m.opener_seg.end);
+                            if (marker) |mk| {
+                                const next = m.opener_item + 1;
+                                if (next < items.len and items[next] == .text and
+                                    items[next].text.start == m.opener_seg.end)
+                                {
+                                    @constCast(&items[next]).text.start += mk.len;
+                                }
+                            }
+                            break :blk try doc.createNode(.highlight, .{
+                                .start = m.opener_seg.start,
+                                .end = m.closer_seg.end,
+                            }, .{
+                                .highlight = .{ .color = if (marker) |mk| mk.color else null },
+                            });
+                        } else try doc.createNode(
                             switch (m.kind) {
                                 .em => .emphasis,
                                 .strong => .strong,
                                 .strikethrough => .deleted,
+                                .highlight => unreachable,
                             },
                             .{ .start = m.opener_seg.start, .end = m.closer_seg.end },
                             .none,
@@ -5328,6 +5405,11 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
     var buf = std.ArrayList(u8).empty;
     var work = std.ArrayList(FlattenScope).empty;
     defer work.deinit(doc.allocator());
+    // A `==` run fully consumed as an opener means the next item is the
+    // highlight's first content; a color marker there is consumed into
+    // the color and contributes nothing to the flattened text
+    // (docs/HIGHLIGHTS.md §6).
+    var highlight_marker_pending = false;
 
     _ = try matchItems(doc, items); // consumed delimiters are known to the walk
     try work.append(doc.allocator(), .{ .items = items, .i = 0 });
@@ -5340,11 +5422,22 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
         }
         const item = f.items[f.i];
         f.i += 1;
+        const check_marker = highlight_marker_pending;
+        highlight_marker_pending = false;
         switch (item) {
-            .text => |span| try buf.appendSlice(doc.allocator(), try resolveEscapes(doc, span)),
+            .text => |span| {
+                var s = span;
+                if (check_marker) {
+                    if (highlightMarkerAt(doc.src.bytes, s.start)) |mk| s.start += mk.len;
+                }
+                try buf.appendSlice(doc.allocator(), try resolveEscapes(doc, s));
+            },
             .code_span => |cs| try buf.appendSlice(doc.allocator(), try normalizeCodeSpan(doc, cs.content)),
             .brk => try buf.append(doc.allocator(), '\n'),
-            .delimiter => |run| try buf.appendSlice(doc.allocator(), doc.src.bytes[run.span.start + run.front_used .. run.span.end - run.back_used]),
+            .delimiter => |run| {
+                try buf.appendSlice(doc.allocator(), doc.src.bytes[run.span.start + run.front_used .. run.span.end - run.back_used]);
+                if (run.ch == '=' and run.back_used == 2) highlight_marker_pending = true;
+            },
             .bracket => |br| try buf.appendSlice(doc.allocator(), doc.src.bytes[br.span.start..br.span.end]),
             .link => |lk| {
                 _ = try matchItems(doc, lk.children.items);
@@ -7804,6 +7897,19 @@ test "markdown: strikethrough is literal text when disabled" {
     try testing.expectEqualStrings("~~Hi~~", p.children.items[0].data.text);
 }
 
+test "markdown: a popped `~` openers_bottom is clamped (extension)" {
+    // The `*` match pops the stack below the `~` row's bottom; an
+    // unclamped `~` bottom stayed stale past the stack and hid the
+    // later `~~` opener, leaving `~~`~~` literal.
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "*~~* ~~`~~", .markdown, ext_parse(.{ .strikethrough = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    try testing.expectEqualStrings("<p><em>~~</em> <del>`</del></p>\n", aw.written());
+}
+
 test "markdown: wikilinks parse into a .wikilink node with target and label (extension)" {
     const oliver = @import("oliver.zig");
     var result = try oliver.parse(
@@ -8166,6 +8272,116 @@ test "markdown: callout fold markers render fold classes (extension)" {
     var plain = try renderCalloutsHtml("> [!note] Title\n> Body.\n");
     defer plain.deinit(testing.allocator);
     try testing.expect(std.mem.indexOf(u8, plain.items, "callout-fold") == null);
+}
+
+fn renderHighlightsHtml(input: []const u8) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{ .highlights = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "markdown: highlight parses into a container with a color payload (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "a ==highlight== b ==\xF0\x9F\x94\xB4colored==\n",
+        .markdown,
+        ext_parse(.{ .highlights = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    const plain = p.children.items[1];
+    try testing.expectEqual(document.Tag.highlight, plain.tag);
+    try testing.expectEqual(@as(?document.HighlightColor, null), plain.data.highlight.color);
+    try testing.expectEqualStrings("highlight", plain.children.items[0].data.text);
+    // The node span covers both delimiter pairs.
+    try testing.expectEqualStrings("==highlight==", result.document.src.bytes[plain.span.start..plain.span.end]);
+    const colored = p.children.items[3];
+    try testing.expectEqual(document.Tag.highlight, colored.tag);
+    try testing.expectEqual(document.HighlightColor.red, colored.data.highlight.color.?);
+    // The marker emoji is consumed: no child covers its bytes.
+    try testing.expectEqualStrings("colored", colored.children.items[0].data.text);
+    try testing.expectEqualStrings("==\xF0\x9F\x94\xB4colored==", result.document.src.bytes[colored.span.start..colored.span.end]);
+}
+
+test "markdown: highlight delimiter rules (extension)" {
+    // Runs of one or three-plus `=` stay literal; `== x ==` fails
+    // flanking; the `==x` opener matches the first run of `a==b==c`,
+    // leaving the second unmatched and literal.
+    var out = try renderHighlightsHtml("=x= and ===x=== and == x == and ==x and a==b==c\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>=x= and ===x=== and == x == and <mark>x and a</mark>b==c</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: highlights are off by default (extension)" {
+    var out = try renderCalloutsHtml("==x==\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>==x==</p>\n", out.items);
+}
+
+test "markdown: highlight color markers (extension)" {
+    // Every table entry, VS16 consumption, a non-table emoji as content,
+    // and a bare marker forming an empty colored highlight.
+    var out = try renderHighlightsHtml(
+        "==\xF0\x9F\x94\xB4r== ==\xF0\x9F\x9F\xA0o== ==\xF0\x9F\x9F\xA1y== ==\xF0\x9F\x9F\xA2g== ==\xF0\x9F\x94\xB5b== ==\xF0\x9F\x9F\xA3p==\n\n" ++
+            "==\xF0\x9F\x94\xB4\xEF\xB8\x8Fvs== ==\xE2\xAD\x90star== ==\xF0\x9F\x94\xB4==\n",
+    );
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p><mark class=\"highlight-red\">r</mark> <mark class=\"highlight-orange\">o</mark> <mark class=\"highlight-yellow\">y</mark> <mark class=\"highlight-green\">g</mark> <mark class=\"highlight-blue\">b</mark> <mark class=\"highlight-purple\">p</mark></p>\n" ++
+            "<p><mark class=\"highlight-red\">vs</mark> <mark>\xE2\xAD\x90star</mark> <mark class=\"highlight-red\"></mark></p>\n",
+        out.items,
+    );
+}
+
+test "markdown: highlight flanking consequence keeps intraword markers literal (extension)" {
+    // docs/HIGHLIGHTS.md §2: the marker emoji are punctuation, so an
+    // opener directly followed by one is not left-flanking intraword.
+    var out = try renderHighlightsHtml("see ==\xF0\x9F\x94\xB4x== and word==\xF0\x9F\x94\xB5y==\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>see <mark class=\"highlight-red\">x</mark> and word==\xF0\x9F\x94\xB5y==</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: highlight nests inlines and flattens without the marker (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "==*em* [[wl]]== and ![==\xF0\x9F\x94\xB4alt==](u)\n",
+        .markdown,
+        ext_parse(.{ .highlights = true, .wikilinks = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    const hl = p.children.items[0];
+    try testing.expectEqual(document.Tag.emphasis, hl.children.items[0].tag);
+    try testing.expectEqual(document.Tag.wikilink, hl.children.items[2].tag);
+    const img = p.children.items[2];
+    // Alt flattening uses the children's text; the marker contributes
+    // nothing (docs/HIGHLIGHTS.md §6).
+    try testing.expectEqualStrings("alt", img.data.image.alt);
+}
+
+test "markdown: 10,000-highlight determinism storm (extension)" {
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var k: usize = 0;
+    while (k < 10_000) : (k += 1) try input.appendSlice(testing.allocator, "==x== ");
+    var a = try renderHighlightsHtml(input.items);
+    defer a.deinit(testing.allocator);
+    var b = try renderHighlightsHtml(input.items);
+    defer b.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, a.items, b.items);
+    try testing.expectEqual(@as(usize, 10_000), std.mem.count(u8, a.items, "<mark>"));
 }
 
 fn renderSmartypantsHtml(input: []const u8) !std.ArrayList(u8) {

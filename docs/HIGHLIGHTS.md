@@ -1,15 +1,15 @@
 ---
 published_at: 2026-10-16T00:00:00Z
-summary: "Planned opt-in Obsidian highlight extension (==text==, colored ==🔴text==) in the Markdown frontend: delimiter rules, color markers, model, rendering per profile (issue #189)."
+summary: "Opt-in Obsidian highlight extension (==text==, colored ==🔴text==) in the Markdown frontend: delimiter rules, color markers, model, rendering per profile (issue #189)."
 ---
 
-# Highlights (extension, planned)
+# Highlights (extension)
 
-**Status:** planned — spec under review in issue #189; not implemented.
+**Status:** implemented (issue #189).
 The family overview is at docs/OBSIDIAN-EXTENSIONS.md.  \
-**Modules (planned):** `src/markdown.zig` (parse), `src/document.zig`
+**Modules:** `src/markdown.zig` (parse), `src/document.zig`
 (model), `src/html.zig` (render)  \
-**Options (planned):** `markdown.Options.highlights: bool = false`; CLI
+**Options:** `markdown.Options.highlights: bool = false`; CLI
 `--highlights`; C ABI `OLIVER_MD_HIGHLIGHTS = 1 << 8`
 
 Obsidian's published syntax (Obsidian Help, "Basic formatting syntax §
@@ -133,7 +133,7 @@ pub const HighlightColor = enum { red, orange, yellow, green, blue, purple };
 - **Code.** Code spans and code blocks stay opaque: `` `==x==` `` is
   code.
 
-## 7. Fixtures (planned)
+## 7. Fixtures
 
 | fixture | covers |
 | --- | --- |
@@ -147,5 +147,5 @@ with the flag disabled, and a 10,000-highlight determinism storm.
 
 ## 8. Conformance status
 
-Not implemented. When it lands it is off by default, and the CommonMark
-0.31.2 corpus must stay 652/652 under `--gate`.
+Extension, off by default: the CommonMark 0.31.2 corpus is untouched
+(re-verified at integration: 652/652 with the `--gate` harness).
