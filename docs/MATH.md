@@ -41,6 +41,10 @@ followed immediately by a digit."
 - Any `$` that fails those tests is content.
 - If no closer exists in the inline scope, the opener is literal text
   and scanning resumes after it.
+- Discovery is linear. Closer validity never depends on the opener, so
+  once one opener finds no closer, every later single `$` in the scope
+  is literal without rescanning. Prose full of prices such as
+  `$5 and $6 and …` would otherwise cost O(n²).
 
 ### `$$…$$` inside a paragraph
 
@@ -196,7 +200,8 @@ data.math = .{
 | `math-block` | fences, indentation stripping, blank lines, paragraph interruption, end-of-container and end-of-document close, and one-line `$$x$$` |
 
 Unit tests cover node shapes, `display`, spans, behavior with the flag
-disabled, and a 10,000-span determinism storm. Fuzz seeds cover `$`
+disabled, a 10,000-span determinism storm, and a 100,000-opener
+unclosed-`$` storm that pins linear discovery. Fuzz seeds cover `$`
 runs.
 
 ## 8. Conformance status
