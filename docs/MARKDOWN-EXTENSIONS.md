@@ -2,7 +2,7 @@
 
 **Status:** implemented — opt-in Markdown dialect extensions  \
 **Modules:** `src/markdown.zig` (parse), `src/html.zig` (render), `src/document.zig` (model)  \
-**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, `--task-lists`, `--highlights`, `--math`, `--comments`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
+**Options:** `oliver.ParseOptions.markdown` (parse) and `oliver.html.RenderOptions` (render); the `oliver render --from markdown` CLI exposes each as a flag (`--footnotes`, `--definition-lists`, `--heading-attributes`, `--strikethrough`, `--wikilinks`, `--callouts`, `--smartypants`, `--task-lists`, `--highlights`, `--math`, `--comments`, `--embeds`, and the render-side `--heading-ids`), all off by default, plus `--frontmatter yaml|toml` on any render frontend
 
 The Markdown frontend is byte-exact CommonMark 0.31.2 by default (the
 652/652 conformance corpus is green with default options). The extensions
@@ -406,6 +406,32 @@ no output in any profile (privacy, per docs/COMMENTS.md §4):
 - Fixtures: `tests/fixtures/markdown/comments-*.md`; unit tests in
   `src/markdown.zig`.
 
+## 13. Embeds (`parse: embeds`)
+
+Obsidian `![[target]]` / `![[target|alias]]` embeds, per docs/EMBEDS.md:
+
+- The `![[` shape — a `!`-bracket followed by a `[`-bracket — is
+  recognized ahead of image matching and shares the wikilink body
+  grammar and memos (same trim, `|` split, `]]` greedy closer,
+  malformed battery, `[[`-in-target rejection, atomic fallback:
+  `![[x]](u)` is the embed plus literal `(u)`).
+- `embeds` and `wikilinks` are independent flags: `[[x]]` stays literal
+  without `wikilinks`, `![[x]]` stays literal without `embeds`.
+- The `.embed` leaf carries `data.embed { target, label }` — trimmed
+  source slices, opaque bytes (`#Heading`, `^block`, `#frag`, and the
+  `|100x145` image-size convention all ride along verbatim). Target
+  resolution is the consumer's job — Oliver never touches the
+  filesystem.
+- Default render is the deterministic
+  `<span class="embed" data-embed-target="…">` placeholder (Strict
+  omits the `data-*`, like footnotes); `html.RenderOptions.`
+  `embed_resolver` overrides with `.link`, `.image` (optional
+  width/height), or `.text` outputs, all escaped under the standard
+  policies.
+- Embeds demote to literal inside link text and image descriptions.
+- Fixtures: `tests/fixtures/markdown/embed-*.md`; unit tests in
+  `src/markdown.zig` and `tests/xhtml_test.zig`.
+
 ---
 
 ## Interaction and precedence
@@ -420,7 +446,7 @@ no output in any profile (privacy, per docs/COMMENTS.md §4):
   in the callout title or body is a normal inline; smartypants applies
   to plain text in every scope, with wikilink payloads exempt.
 - Fenced code, code spans, HTML blocks, and raw HTML are opaque to all
-  eleven extensions (a `[^x]:` line inside a fence is code, not a
+  twelve extensions (a `[^x]:` line inside a fence is code, not a
   definition; a `[!note]` line inside a fence is code, not a callout; a
   `~~` pair inside a code span or fence is literal; a `[[x]]` inside a
   code span or autolink is literal; quotes and dashes inside a code
@@ -428,7 +454,7 @@ no output in any profile (privacy, per docs/COMMENTS.md §4):
 - In GFM table cells an unescaped `|` is a cell separator (GFM §4.10), so
   a pipe-label wikilink inside a cell needs `\|` (docs/WIKILINKS.md §7).
 - Fixtures: `tests/fixtures/markdown/ext-*.md`, `wikilink-*.md`,
-  `callout-*.md`, `smartypants-*.md`, `highlight-*.md`, `math-*.md`, `comments-*.md`,
+  `callout-*.md`, `smartypants-*.md`, `highlight-*.md`, `math-*.md`, `comments-*.md`, `embed-*.md`,
   and the cross-extension `cross-*.md` composition pairs (parsed with
   all extensions enabled)
   plus unit tests in `src/markdown.zig` and `src/html.zig`.

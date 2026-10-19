@@ -67,11 +67,10 @@ Knap fails that test on every axis:
   callouts, and strikethrough — syntax Oliver already implements
   (several as opt-in, Obsidian-adjacent extensions). Supporting Knap
   inside Oliver would be reimplementing the generator of documents
-  Oliver already reads. The exception is the `embed` filter. It
-  emits Obsidian syntax that Oliver does not parse yet, planned as an
-  ordinary opt-in Markdown extension
-  ([Obsidian-flavor extensions](OBSIDIAN-EXTENSIONS.html), issue #189),
-  not as Knap support.
+  Oliver already reads. The `embed` filter emits Obsidian
+  `![[target]]` / `![[target\|alias]]` — parsed by the opt-in `embeds`
+  extension (docs/EMBEDS.md, issue #189), an ordinary Markdown
+  extension, not Knap support.
 
 Cooklang is the contrast that matters. Cooklang is a source language
 whose typed Recipe cannot be deformed through the Document IR.

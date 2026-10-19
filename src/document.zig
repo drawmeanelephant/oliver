@@ -143,6 +143,12 @@ pub const Tag = enum {
     /// renderer policy: the default percent-encodes the target as the
     /// href with `label orelse target` as the text.
     wikilink,
+    /// An inline embed (Markdown `![[target]]` / `![[target|alias]]`
+    /// extension, docs/EMBEDS.md). Leaf: no children. `data.embed`
+    /// holds the trimmed target and optional label — both source
+    /// slices. Resolution is a renderer policy: the default is a
+    /// `<span class="embed">` placeholder carrying the target.
+    embed,
     /// A GFM task list checkbox (Markdown `[ ]` / `[x]` / `[X]` extension,
     /// docs/TASK-LISTS.md). Leaf: no children. `data.task_checkbox` holds
     /// whether the box is checked; the node span covers the three
@@ -197,13 +203,13 @@ pub const Tag = enum {
     pub fn isBlock(self: Tag) bool {
         return switch (self) {
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote, .math_block => true,
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .highlight, .math_inline, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .embed, .task_checkbox, .highlight, .math_inline, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => false,
         };
     }
 
     pub fn isInline(self: Tag) bool {
         return switch (self) {
-            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .task_checkbox, .highlight, .math_inline, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
+            .text, .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite, .span, .code_span, .link, .image, .autolink, .wikilink, .embed, .task_checkbox, .highlight, .math_inline, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => true,
             .document, .paragraph, .heading, .thematic_break, .code_block, .html_block, .block_quote, .list, .list_item, .table, .table_row, .table_cell, .definition_list, .definition_term, .definition_body, .footnote, .math_block => false,
         };
     }
@@ -266,6 +272,11 @@ pub const Data = union(enum) {
     /// `[[target]]` / `[[target|label]]` wikilink (Markdown extension),
     /// both source slices (trimming narrows the span; no copy).
     wikilink: Wikilink,
+    /// `.embed`: the trimmed target and optional label of a
+    /// `![[target]]` / `![[target|alias]]` embed (Markdown extension,
+    /// docs/EMBEDS.md §3) — both source slices, same payload shape as
+    /// `.wikilink`.
+    embed: Embed,
     /// `.task_checkbox`: whether a GFM task list checkbox is checked
     /// (Markdown extension, docs/TASK-LISTS.md).
     task_checkbox: TaskCheckbox,
@@ -463,6 +474,16 @@ pub const Autolink = struct {
 /// `|label` form is absent, not an empty string. The node span covers
 /// the whole `[[…]]` construct.
 pub const Wikilink = struct {
+    target: []const u8,
+    label: ?[]const u8 = null,
+};
+
+/// `.embed` payload: the trimmed target and the optional trimmed label
+/// of a `![[target]]` / `![[target|alias]]` embed (Markdown extension,
+/// docs/EMBEDS.md §3). Both are source slices — trimming narrowed the
+/// span, so nothing is copied. The alias position is opaque to Oliver:
+/// Obsidian's `|100x145` image sizing arrives as `label` verbatim.
+pub const Embed = struct {
     target: []const u8,
     label: ?[]const u8 = null,
 };

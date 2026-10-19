@@ -167,6 +167,12 @@ const seeds = [_][]const u8{
         "%%\n" ++
         "\n" ++
         "%% trailing\n",
+    // Markdown: Obsidian `![[` runs (embeds, malformed bodies,
+    // demotion, bracket storms).
+    "![[x]] ![[y|z]] ![]]] ![[a|b|c]]\n" ++
+        "\\![[x]] !\\[[y]] ![[[[]]]]\n" ++
+        "\n" ++
+        "[l ![[m]]](u) ![d ![[n]]](v) ![[x]](u)\n",
 };
 
 /// The generated input cap (well under `source.max_input_len`, so span
@@ -209,6 +215,7 @@ fn exercise(input: []const u8, i: usize) !void {
                 .highlights = true,
                 .math = true,
                 .comments = true,
+                .embeds = true,
             },
             .frontmatter = .yaml,
         });

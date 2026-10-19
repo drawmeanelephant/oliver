@@ -667,6 +667,32 @@ fn renderMathProfile(input: []const u8, profile: oliver.OutputProfile) !std.Arra
     return aw.toArrayList();
 }
 
+fn renderEmbedProfile(input: []const u8, profile: oliver.OutputProfile) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
+        .markdown = .{ .embeds = true },
+    });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{ .profile = profile });
+    return aw.toArrayList();
+}
+
+test "xhtml: embeds are well-formed under both profiles (extension)" {
+    // The default placeholder is `span`/`data-*` — both profiles
+    // well-formed (docs/EMBEDS.md §4).
+    const input = "A ![[note.md]] and ![[pic.png|100x145]].\n";
+    var html = try renderEmbedProfile(input, .html);
+    defer html.deinit(std.testing.allocator);
+    var xhtml = try renderEmbedProfile(input, .xhtml);
+    defer xhtml.deinit(std.testing.allocator);
+    try expectRender(xhtml.items, html.items, "embeds xhtml vs html");
+    var wrapped = std.ArrayList(u8).empty;
+    defer wrapped.deinit(std.testing.allocator);
+    try wrapFragment(xhtml.items, &wrapped);
+    try wellformed.check(wrapped.items);
+}
+
 test "xhtml: math is well-formed under both profiles (extension)" {
     // `span`/`div`/`class` are valid in every profile, so the profiles
     // agree byte-for-byte (docs/MATH.md §4).

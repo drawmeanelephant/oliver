@@ -188,6 +188,33 @@ pub const Options = struct {
     /// `unclosed-comment` warning diagnostic. Off by default so the
     /// CommonMark corpus stays byte-exact.
     comments: bool = false,
+    /// Obsidian-style embeds (docs/EMBEDS.md): `![[target]]` and
+    /// `![[target|alias]]` parse into a typed `.embed` leaf sharing the
+    /// wikilink body grammar, recognized ahead of image matching.
+    /// Resolution is a renderer policy (`html.RenderOptions.`
+    /// `embed_resolver`); Oliver never touches the filesystem. `embeds`
+    /// and `wikilinks` enable independently. Off by default so the
+    /// CommonMark corpus stays byte-exact.
+    embeds: bool = false,
+};
+
+/// The Obsidian preset (docs/OBSIDIAN-EXTENSIONS.md §4): the syntaxes
+/// in Obsidian Help's "Supported Markdown extensions" table plus LaTeX
+/// math — a constant, not a field. Consumers write
+/// `.markdown = markdown.obsidian` or modify a copy. `smartypants`,
+/// `definition_lists`, and `heading_attributes` are not Obsidian
+/// behavior and stay off; `frontmatter` lives on the top-level
+/// `ParseOptions`. Changing membership is a conformance change.
+pub const obsidian: Options = .{
+    .wikilinks = true,
+    .embeds = true,
+    .callouts = true,
+    .highlights = true,
+    .comments = true,
+    .math = true,
+    .strikethrough = true,
+    .task_lists = true,
+    .footnotes = true,
 };
 
 const tab_stop: u32 = 4;
@@ -3541,6 +3568,14 @@ const InlineItem = union(enum) {
     /// emit time. Leaf item: opaque to the delimiter stack and link
     /// discovery (docs/WIKILINKS.md §2).
     wikilink: WikilinkItem,
+    /// A recognized embed (`![[target]]` / `![[target|alias]]`,
+    /// extension): the `![[` shape — a `!`-bracket followed by a
+    /// `[`-bracket — sharing the wikilink body grammar and memos
+    /// (docs/EMBEDS.md §1–§2). `span` covers the whole `![[…]]`,
+    /// `content` the raw bytes between the delimiters. Leaf item:
+    /// opaque to the delimiter stack and link discovery; demoted to
+    /// literal text inside link text and image descriptions.
+    embed: WikilinkItem,
     /// A GFM task list checkbox (`[ ]` / `[x]` / `[X]`, extension):
     /// `span` covers the three checkbox bytes. Only ever the first item
     /// of a list item's first paragraph; emitted by the caller ahead of
@@ -3626,6 +3661,7 @@ fn itemSpan(item: InlineItem) source.Span {
         .raw_html => |h| h.span,
         .footnote => |fn_| fn_.span,
         .wikilink => |wk| wk.span,
+        .embed => |e| e.span,
         .task_checkbox => |tc| tc.span,
         .math => |m| m.span,
     };
@@ -4478,12 +4514,15 @@ fn nextDoubleOpenBracket(bytes: []const u8, from: usize) ?usize {
 /// image description) is demoted to literal text: wikilinks are opaque
 /// inside link text (docs/WIKILINKS.md §2), so `[a [[b]] c](/url)` keeps
 /// `[[b]]` literal — a nested `<a>` inside `<a>` would be invalid HTML.
+/// The same demotion covers `.embed` items (docs/EMBEDS.md §2), which
+/// would otherwise nest anchors or recurse into alt text.
 /// Runs on the copied children list; `out` in the caller is unaffected.
 fn demoteWikilinks(children: *std.ArrayList(InlineItem)) void {
     for (children.items) |*c| {
-        if (c.* == .wikilink) {
-            const span = c.wikilink.span;
-            c.* = .{ .text = span };
+        switch (c.*) {
+            .wikilink => |wk| c.* = .{ .text = wk.span },
+            .embed => |e| c.* = .{ .text = e.span },
+            else => {},
         }
     }
 }
@@ -4517,6 +4556,72 @@ fn discoverLinksAndImages(
     var i: usize = 0;
     while (i < old.len) : (i += 1) {
         const item = old[i];
+        // Embed extension: `![[` is recognized ahead of image matching
+        // (docs/EMBEDS.md §2). A `!`-bracket followed by a `[`-bracket
+        // starts an embed attempt: scan items for the first `]]` pair
+        // (the shared greedy-closer memo), apply the same target/label
+        // validation as wikilinks, and emit an `.embed` item consuming
+        // the whole construct. On any failure both bracket bytes emit
+        // as literal text and the machinery never re-visits them
+        // (atomic fallback: `![[x]](u)` is `![[x]]` + literal `(u)`).
+        if (options.embeds and item == .bracket and item.bracket.ch == '!' and
+            i + 1 < old.len and old[i + 1] == .bracket and old[i + 1].bracket.ch == '[')
+        {
+            const start = i + 2;
+            var close: ?usize = wikilink_close_at;
+            if (close != null and start > close.?) close = null;
+            if (close == null and !wikilink_close_done) {
+                var j = start;
+                while (j + 1 < old.len) : (j += 1) {
+                    if (old[j] == .bracket and old[j].bracket.ch == ']' and
+                        old[j + 1] == .bracket and old[j + 1].bracket.ch == ']')
+                    {
+                        close = j;
+                        break;
+                    }
+                }
+                if (close) |c| {
+                    wikilink_close_at = c;
+                } else {
+                    wikilink_close_done = true;
+                }
+            }
+            var matched = false;
+            if (close) |c| {
+                const content = source.Span{
+                    .start = old[i + 1].bracket.span.end,
+                    .end = old[c].bracket.span.start,
+                };
+                while (!wikilink_dbl_done) {
+                    const d = wikilink_dbl_at orelse {
+                        wikilink_dbl_at = nextDoubleOpenBracket(bytes, content.start);
+                        if (wikilink_dbl_at == null) wikilink_dbl_done = true;
+                        continue;
+                    };
+                    if (d >= content.start) break;
+                    wikilink_dbl_at = nextDoubleOpenBracket(bytes, d + 1);
+                    if (wikilink_dbl_at == null) wikilink_dbl_done = true;
+                }
+                const no_nested = wikilink_dbl_at == null or wikilink_dbl_at.? + 1 >= content.end;
+                if (no_nested and splitWikilinkContent(bytes, content) != null) {
+                    matched = true;
+                    try out.append(doc.allocator(), .{
+                        .embed = .{
+                            .span = .{ .start = item.bracket.span.start, .end = old[c + 1].bracket.span.end },
+                            .content = content,
+                        },
+                    });
+                    i = c + 1;
+                }
+            }
+            if (!matched) {
+                // Atomic fallback: the `![` and `[` as literal text.
+                try out.append(doc.allocator(), .{ .text = item.bracket.span });
+                try out.append(doc.allocator(), .{ .text = old[i + 1].bracket.span });
+                i += 1;
+            }
+            continue;
+        }
         // Wikilink extension: `[[` is recognized ahead of link brackets
         // (docs/WIKILINKS.md §2). Two consecutive unescaped `[` bracket
         // items start a wikilink attempt: scan items for the first pair of
@@ -5625,6 +5730,20 @@ fn emitInlines(
                 });
                 try doc.appendChild(current, node);
             },
+            .embed => |e| {
+                // Leaf node (extension, docs/EMBEDS.md §3): the trimmed
+                // target/label, re-derived from the validated content
+                // span — source slices, no copy. The node span covers
+                // the whole `![[…]]`.
+                const parts = splitWikilinkContent(doc.src.bytes, e.content).?;
+                const node = try doc.createNode(.embed, e.span, .{
+                    .embed = .{
+                        .target = doc.text(parts.target),
+                        .label = if (parts.label) |ls| doc.text(ls) else null,
+                    },
+                });
+                try doc.appendChild(current, node);
+            },
             .task_checkbox => |tc| {
                 // Leaf node (extension, docs/TASK-LISTS.md §1): the first
                 // inline of a task list item's first paragraph. Rendered
@@ -6030,6 +6149,9 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
             // text when a link/image forms); the case is exhaustive and
             // contributes the raw bytes defensively.
             .wikilink => |wk| try buf.appendSlice(doc.allocator(), doc.src.bytes[wk.content.start..wk.content.end]),
+            // An embed never reaches a description either (same
+            // demotion); raw bytes defensively.
+            .embed => |e| try buf.appendSlice(doc.allocator(), doc.src.bytes[e.content.start..e.content.end]),
             // A task checkbox never reaches a description (recognized only
             // at a list item's content start); contributes nothing
             // defensively.
@@ -9260,6 +9382,197 @@ test "markdown: 10,000-comment determinism storm (extension)" {
     defer b.deinit(testing.allocator);
     try testing.expectEqualSlices(u8, a.items, b.items);
     try testing.expectEqual(@as(usize, 0), std.mem.count(u8, a.items, "%%"));
+}
+
+fn renderEmbedsHtml(input: []const u8) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{ .embeds = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "markdown: embeds parse into leaf nodes with target and label (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "a ![[note]] b ![[pic.png|100x145]] c\n",
+        .markdown,
+        ext_parse(.{ .embeds = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    const e1 = p.children.items[1];
+    try testing.expectEqual(document.Tag.embed, e1.tag);
+    try testing.expectEqualStrings("note", e1.data.embed.target);
+    try testing.expectEqual(@as(?[]const u8, null), e1.data.embed.label);
+    try testing.expectEqualStrings("![[note]]", result.document.src.bytes[e1.span.start..e1.span.end]);
+    const e2 = p.children.items[3];
+    try testing.expectEqualStrings("pic.png", e2.data.embed.target);
+    try testing.expectEqualStrings("100x145", e2.data.embed.label.?);
+    // Opaque shapes — headings, blocks, fragments — are target bytes.
+    var r2 = try oliver.parse(
+        testing.allocator,
+        "![[Internal links#^b15695]] ![[Engelbart.jpg#outline]]\n",
+        .markdown,
+        ext_parse(.{ .embeds = true }),
+    );
+    defer r2.deinit();
+    const p2 = r2.document.root.children.items[0];
+    try testing.expectEqualStrings("Internal links#^b15695", p2.children.items[0].data.embed.target);
+    try testing.expectEqualStrings("Engelbart.jpg#outline", p2.children.items[2].data.embed.target);
+}
+
+test "markdown: embed placeholder and flag matrix (extension)" {
+    // §4 default placeholder, and §2: `embeds` and `wikilinks` enable
+    // independently — `![[x]]` is literal with wikilinks only.
+    var out = try renderEmbedsHtml("![[x]] and ![[y|alias]]\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p><span class=\"embed\" data-embed-target=\"x\">x</span> and <span class=\"embed\" data-embed-target=\"y\">alias</span></p>\n",
+        out.items,
+    );
+    const oliver = @import("oliver.zig");
+    var w = try oliver.parse(testing.allocator, "![[x]] and [[x]]\n", .markdown, ext_parse(.{ .wikilinks = true }));
+    defer w.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &w.document, .{});
+    try testing.expectEqualStrings("<p>![[x]] and <a href=\"x\">x</a></p>\n", aw.written());
+}
+
+test "markdown: embed malformed battery and escapes stay literal (extension)" {
+    // §1/§5: the wikilink malformed battery with a leading `!`, plus the
+    // escape pins (`\!` leaves a wikilink; `!\[` is never an embed).
+    var out = try renderEmbedsHtml(
+        "![]]] ![[x|]] ![[|x]] ![[ ]] ![[a|b|c]] and ![[unclosed\n\n" ++
+            "\\![[x]] and !\\[[x]]\n",
+    );
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>![]]] ![[x|]] ![[|x]] ![[ ]] ![[a|b|c]] and ![[unclosed</p>\n" ++
+            "<p>![[x]] and ![[x]]</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: embed precedence — atomic fallback and demotion (extension)" {
+    // §2: `![[x]](u)` is the embed plus literal `(u)`; an embed inside
+    // link text or an image description is demoted to literal text.
+    var out = try renderEmbedsHtml(
+        "![[x]](u) and [link ![[y]]](u) and ![desc ![[z]]](v)\n",
+    );
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p><span class=\"embed\" data-embed-target=\"x\">x</span>(u) and " ++
+            "<a href=\"u\">link ![[y]]</a> and " ++
+            "<img src=\"v\" alt=\"desc ![[z]]\" /></p>\n",
+        out.items,
+    );
+}
+
+fn testResolveEmbed(
+    target: []const u8,
+    label: ?[]const u8,
+    ctx: ?*const anyopaque,
+) @import("oliver.zig").html.ResolvedEmbed {
+    const kind: u32 = if (ctx) |c| @as(*const u32, @ptrCast(@alignCast(c))).* else 0;
+    const text = label orelse target;
+    return switch (kind) {
+        0 => .{ .kind = .link, .href = "/notes/x.md", .text = text },
+        1 => .{ .kind = .image, .href = "pic.png", .text = text, .width = 100, .height = 145 },
+        else => .{ .kind = .text, .text = text },
+    };
+}
+
+fn renderEmbedsOpts(input: []const u8, opts: @import("oliver.zig").html.RenderOptions) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{ .embeds = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, opts);
+    return aw.toArrayList();
+}
+
+test "markdown: embed resolver kinds and ctx (extension)" {
+    // One resolver, three contexts — each `ResolvedEmbed.kind`
+    // exercised, with ctx passed through unchanged and every byte
+    // escaped by the standard policies (docs/EMBEDS.md §4).
+    const cases = [_]struct { kind: u32, want: []const u8 }{
+        .{ .kind = 0, .want = "<p><a class=\"embed\" href=\"/notes/x.md\">x</a></p>\n" },
+        .{ .kind = 1, .want = "<p><img class=\"embed\" src=\"pic.png\" alt=\"x\" width=\"100\" height=\"145\" /></p>\n" },
+        .{ .kind = 2, .want = "<p><span class=\"embed\">x</span></p>\n" },
+    };
+    for (cases) |c| {
+        const ctx: u32 = c.kind;
+        var out = try renderEmbedsOpts("![[x]]\n", .{
+            .embed_resolver = &testResolveEmbed,
+            .embed_resolver_ctx = &ctx,
+        });
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings(c.want, out.items);
+    }
+}
+
+test "markdown: 10,000-embed determinism storm (extension)" {
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var k: usize = 0;
+    while (k < 10_000) : (k += 1) try input.appendSlice(testing.allocator, "![[x]] ");
+    var a = try renderEmbedsHtml(input.items);
+    defer a.deinit(testing.allocator);
+    var b = try renderEmbedsHtml(input.items);
+    defer b.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, a.items, b.items);
+    try testing.expectEqual(@as(usize, 10_000), std.mem.count(u8, a.items, "class=\"embed\""));
+}
+
+test "markdown: embeds are off by default (extension)" {
+    var out = try renderCalloutsHtml("a ![[x]] b\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>a ![[x]] b</p>\n", out.items);
+}
+
+test "markdown: the obsidian preset equals the individual flags (extension)" {
+    // docs/OBSIDIAN-EXTENSIONS.md §4: `markdown.obsidian` must render
+    // byte-identically to the nine flags set by hand — and it enables
+    // every member (the input exercises each).
+    const oliver = @import("oliver.zig");
+    const input = "==hl== $x$ %%gone%% [[w]] ![[e]] ~~del~~\n\n" ++
+        "> [!tip]+ t\n> b\n\n- [x] c\n\n[^f]: fn\n\nuse[^f]\n";
+    var preset = try oliver.parse(testing.allocator, input, .markdown, .{ .markdown = obsidian });
+    defer preset.deinit();
+    var manual = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{
+        .wikilinks = true,
+        .embeds = true,
+        .callouts = true,
+        .highlights = true,
+        .comments = true,
+        .math = true,
+        .strikethrough = true,
+        .task_lists = true,
+        .footnotes = true,
+    }));
+    defer manual.deinit();
+    var a = std.Io.Writer.Allocating.init(testing.allocator);
+    defer a.deinit();
+    try oliver.html.render(testing.allocator, &a.writer, &preset.document, .{});
+    var b = std.Io.Writer.Allocating.init(testing.allocator);
+    defer b.deinit();
+    try oliver.html.render(testing.allocator, &b.writer, &manual.document, .{});
+    const a_out = a.written();
+    try testing.expectEqualSlices(u8, b.written(), a_out);
+    // Membership pins: every preset construct is present.
+    try testing.expect(std.mem.indexOf(u8, a_out, "<mark>") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "math inline") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "%%") == null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "class=\"embed\"") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "<del>") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "callout-fold-open") != null);
+    try testing.expect(std.mem.indexOf(u8, a_out, "checkbox") != null);
 }
 
 test "markdown: an unclosed `$` opener storm stays linear (extension)" {
