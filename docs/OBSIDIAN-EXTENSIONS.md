@@ -114,7 +114,9 @@ pub const obsidian: markdown.Options = .{
     Obsidian behavior.
   - `frontmatter` lives on the top-level `ParseOptions`, not on
     `markdown.Options`. Obsidian properties are YAML front matter, so
-    consumers set `.frontmatter = .yaml` alongside the preset.
+    consumers set `.frontmatter = .yaml` alongside the preset. On the
+    CLI that is `--obsidian --frontmatter yaml`, the pairing for full
+    Knap output, whose `yaml` filter emits a front-matter block.
   - Block identifiers (`^id`) are in Obsidian's table but are not
     proposed here (§8).
 - **Footnotes need the render side too.** The preset turns on
