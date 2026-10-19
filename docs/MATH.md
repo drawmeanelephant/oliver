@@ -45,6 +45,10 @@ followed immediately by a digit."
   once one opener finds no closer, every later single `$` in the scope
   is literal without rescanning. Prose full of prices such as
   `$5 and $6 and …` would otherwise cost O(n²).
+- Content materialization is linear too: accepted spans are resolved in
+  source order, so the merge carries a forward-only cursor over the
+  paragraph's per-line content spans and each touched-line walk is
+  amortized instead of restarting per span (issue #199).
 
 ### `$$…$$` inside a paragraph
 
@@ -200,9 +204,11 @@ data.math = .{
 | `math-block` | fences, indentation stripping, blank lines, paragraph interruption, end-of-container and end-of-document close, and one-line `$$x$$` |
 
 Unit tests cover node shapes, `display`, spans, behavior with the flag
-disabled, a 10,000-span determinism storm, and a 100,000-opener
-unclosed-`$` storm that pins linear discovery. Fuzz seeds cover `$`
-runs.
+disabled, a 10,000-span determinism storm, a 100,000-opener
+unclosed-`$` storm that pins linear discovery, and a 20,000-span
+content-materialization storm (spans clustered on the last line of a
+long paragraph and spread one per line) that pins the §1 linear-content
+walk (issue #199). Fuzz seeds cover `$` runs.
 
 ## 8. Conformance status
 
