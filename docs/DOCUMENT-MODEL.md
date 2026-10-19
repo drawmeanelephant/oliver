@@ -200,6 +200,8 @@ emit them in a fixed documented order.
 | `[[target]]` / `[[target|label]]` (extension) | (Textile has no wikilinks; literal) | `.wikilink` (source-slice target/label; resolution is a renderer policy — docs/WIKILINKS.md §5) |
 | `> [!note] Title` (extension) | (Textile has no callouts; literal `[!note]` text) | `.block_quote` + callout payload (`callout_type` normalized lowercase, `callout_title` source slice, `callout_title_nodes` inline-parsed, `callout_fold` for `+`/`-` markers — docs/CALLOUTS.md §4, §10) |
 | `==text==` / `==🔴text==` (extension) | (Textile `==` is the notextile passthrough; unrelated) | `.highlight` inline container (`data.highlight.color`, consumed from a leading emoji marker — docs/HIGHLIGHTS.md §3) |
+| `$x$` / `$$x$$` inline and `$$` fenced blocks (extension) | (Textile has no math; literal) | `.math_inline` leaf / `.math_block` leaf block (`data.math` — `tex` borrow-or-copy, `display` — docs/MATH.md §3) |
+| `%%x%%` / `%%` block comments (extension) | (Textile has no `%%`; literal) | **no node** — removed at parse, privacy + dead-node rules (docs/COMMENTS.md §4) |
 | raw HTML tag (`<tag>`, comment, PI, declaration, CDATA) | literal text | `.raw_html` in Markdown; `.text` in Textile |
 | GFM pipe table (GFM §4.10) | Textile `|a|b|` tables (`|_. header|`, `table<mods>.`, colspan/rowspan, alignment propagation) | `.table` → `.table_row` → `.table_cell` (alignment on the table, header/colspan/rowspan/attrs on the cell). Deliberate render differences (docs/TEXTILE-PARITY.md §6): GFM emits `<thead>`/`<tbody>` sections and `align` attributes and trims cell whitespace; Textile emits flat rows with `style` attributes and preserves cell whitespace verbatim |
 | plain text | plain text | `.text` |

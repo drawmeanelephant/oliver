@@ -1610,6 +1610,41 @@ const markdown_ext_fixtures = [_]MarkdownExtFixture{
         .expected = @embedFile("fixtures/markdown/highlight-color.html"),
     },
     .{
+        .name = "math-inline",
+        .input = @embedFile("fixtures/markdown/math-inline.md"),
+        .expected = @embedFile("fixtures/markdown/math-inline.html"),
+    },
+    .{
+        .name = "math-literal",
+        .input = @embedFile("fixtures/markdown/math-literal.md"),
+        .expected = @embedFile("fixtures/markdown/math-literal.html"),
+    },
+    .{
+        .name = "math-precedence",
+        .input = @embedFile("fixtures/markdown/math-precedence.md"),
+        .expected = @embedFile("fixtures/markdown/math-precedence.html"),
+    },
+    .{
+        .name = "math-block",
+        .input = @embedFile("fixtures/markdown/math-block.md"),
+        .expected = @embedFile("fixtures/markdown/math-block.html"),
+    },
+    .{
+        .name = "comments-inline",
+        .input = @embedFile("fixtures/markdown/comments-inline.md"),
+        .expected = @embedFile("fixtures/markdown/comments-inline.html"),
+    },
+    .{
+        .name = "comments-block",
+        .input = @embedFile("fixtures/markdown/comments-block.md"),
+        .expected = @embedFile("fixtures/markdown/comments-block.html"),
+    },
+    .{
+        .name = "comments-unclosed",
+        .input = @embedFile("fixtures/markdown/comments-unclosed.md"),
+        .expected = @embedFile("fixtures/markdown/comments-unclosed.html"),
+    },
+    .{
         .name = "smartypants-basic",
         .input = @embedFile("fixtures/markdown/smartypants-basic.md"),
         .expected = @embedFile("fixtures/markdown/smartypants-basic.html"),
@@ -2659,6 +2694,8 @@ fn renderExtHtml(input: []const u8) !std.ArrayList(u8) {
             .smartypants = true,
             .task_lists = true,
             .highlights = true,
+            .math = true,
+            .comments = true,
         },
     });
     defer result.deinit();

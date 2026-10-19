@@ -774,6 +774,23 @@ fn writeOpen(
             try writeRawContent(writer, options, content);
             if (content.len == 0 or content[content.len - 1] != '\n') try writer.writeByte('\n');
         },
+        .math_block => {
+            // Leaf block (extension, docs/MATH.md §4): `<div
+            // class="math display">` with the TeX escaped like text —
+            // KaTeX/MathJax read the text content, so they see the
+            // original bytes. `span`, `div`, and `class` are valid in
+            // all three profiles.
+            try writer.writeAll("<div class=\"math display\">");
+            try writeEscaped(writer, node.data.math.tex);
+            try writer.writeAll("</div>\n");
+        },
+        .math_inline => {
+            // Leaf inline (extension, docs/MATH.md §4): `<span
+            // class="math inline|display">` with escaped TeX.
+            try writer.writeAll(if (node.data.math.display) "<span class=\"math display\">" else "<span class=\"math inline\">");
+            try writeEscaped(writer, node.data.math.tex);
+            try writer.writeAll("</span>");
+        },
         .emphasis, .strong, .bold, .italic, .deleted, .inserted, .big, .small, .superscript, .subscript, .cite => {
             // Textile phrase tags. The attribute-bearing forms
             // (`*{style}x*`, `_(class)x_`, Hobix "Phrase Attributes") write
@@ -1062,7 +1079,7 @@ fn writeClose(writer: anytype, node: *const document.Node, suppress_p: bool, opt
         .code_span => try writer.writeAll("</code>"),
         .link => try writer.writeAll("</a>"),
         // These tags never push exit frames.
-        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .wikilink, .task_checkbox, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
+        .thematic_break, .code_block, .html_block, .text, .image, .autolink, .wikilink, .task_checkbox, .math_inline, .math_block, .raw_html, .soft_break, .hard_break, .footnote_ref, .acronym => unreachable,
     }
 }
 
@@ -1194,6 +1211,7 @@ fn collectHeadingText(gpa: std.mem.Allocator, node: *const document.Node, out: *
             .image => try out.appendSlice(gpa, n.data.image.alt),
             .autolink => try out.appendSlice(gpa, n.data.autolink.label),
             .wikilink => try out.appendSlice(gpa, n.data.wikilink.label orelse n.data.wikilink.target),
+            .math_inline => try out.appendSlice(gpa, n.data.math.tex),
             .soft_break, .hard_break => try out.append(gpa, ' '),
             .raw_html => {},
             .task_checkbox => {}, // a checkbox contributes no text to a slug

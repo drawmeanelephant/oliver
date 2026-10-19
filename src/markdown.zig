@@ -173,6 +173,21 @@ pub const Options = struct {
     /// six-color table is consumed into `data.highlight.color`. Off by
     /// default so the CommonMark corpus stays byte-exact.
     highlights: bool = false,
+    /// TeX math (docs/MATH.md): `$…$` inline, `$$…$$` display inside a
+    /// paragraph (Pandoc `tex_math_dollars` disambiguation), and
+    /// `$$`-fenced display blocks. Math joins the first-opener-wins
+    /// construct family (code spans, autolinks, raw HTML); the TeX is
+    /// passed through verbatim — Oliver never typesets it. Off by
+    /// default so the CommonMark corpus stays byte-exact.
+    math: bool = false,
+    /// Obsidian-style comments (docs/COMMENTS.md): `%%…%%` on one line
+    /// is removed before delimiter matching, and a `%%`-opening line
+    /// hides the block through the next marker. Comments produce no
+    /// Document node — privacy and dead-node rules (COMMENTS §4). An
+    /// unclosed block comment hides the rest of its container with an
+    /// `unclosed-comment` warning diagnostic. Off by default so the
+    /// CommonMark corpus stays byte-exact.
+    comments: bool = false,
 };
 
 const tab_stop: u32 = 4;
@@ -398,7 +413,8 @@ fn removeTrailingBlankLines(out: *std.ArrayList(u8)) void {
 /// The caller (`oliver.parse`) guarantees
 /// `doc.src.bytes.len <= source.max_input_len`, so all offsets fit in `u32`.
 pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnostic), options: Options) ParseError!void {
-    _ = diags;
+    // diags carries the block comment's unclosed-comment warning
+    // (docs/COMMENTS.md §5) — the only diagnostic the frontend emits.
 
     // Two-phase parse (spec appendix "A parsing strategy"): phase 1 builds
     // the block structure and collects link reference definitions (§4.7)
@@ -421,6 +437,8 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     defer containers.deinit(doc.allocator());
     var paragraph: ?Paragraph = null;
     var fenced: ?FencedCode = null;
+    var math_block: ?MathBlock = null;
+    var comment_block: ?CommentBlock = null;
     var indented: ?IndentedCode = null;
     var html: ?HtmlBlock = null;
     var table: ?TableBlock = null;
@@ -512,6 +530,27 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             finishFencedCode(&fenced);
         }
 
+        // An open math-block leaf owns every line while its containing
+        // containers still match — the same ownership rule as fenced
+        // code (docs/MATH.md §2). No close line exists inside container
+        // markers that failed; the block just ends there.
+        if (math_block) |*active| {
+            if (matched == active.container_depth) {
+                if (mathFenceLine(view) != null) {
+                    active.node.span.end = @intCast(view.line.content_end);
+                    finishMathBlock(&math_block);
+                    noteCoveredEnd(&span_end, view.line);
+                    continue;
+                }
+                try appendCodeContentLine(doc, &active.content, view, active.indent);
+                active.node.span.end = @intCast(view.line.content_end);
+                noteCoveredEnd(&span_end, view.line);
+                continue;
+            }
+            std.debug.assert(matched < active.container_depth);
+            finishMathBlock(&math_block);
+        }
+
         // An open indented-code leaf owns every line while its containing
         // containers still match: blank lines are chunk separators (§4.4),
         // and a nonblank line continues the block only while it is indented
@@ -574,8 +613,47 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // The same physical line can be re-examined at many nested list
         // depths. Summarize its thematic-break suffixes once so precedence
         // checks stay O(1) per consumed container marker. Literal fenced-code
-        // content bypasses this work above.
-        const thematic_facts = ThematicLineFacts.init(line);
+        // content bypasses this work above. `var` because a block comment's
+        // close line resumes mid-line (docs/COMMENTS.md §3).
+        var thematic_facts = ThematicLineFacts.init(line);
+
+        // An open block comment owns every line while its containing
+        // containers still match (docs/COMMENTS.md §3): the first `%%`
+        // marker on a later line closes it, and the bytes after the
+        // marker are reprocessed as a new line of the same container
+        // (the `View.after` resume). A line that does not continue the
+        // container ends the comment with it — unclosed — and the line
+        // reprocesses normally outside.
+        if (comment_block) |*active| {
+            if (matched == active.container_depth) {
+                if (commentCloseMarker(doc.src.bytes, view)) |close| {
+                    comment_block = null;
+                    const rest = view.after(close.i + 2, close.col + 2);
+                    if (isBlank(rest.line.text)) {
+                        // An empty or whitespace-only remainder is not
+                        // "a new line" — the whole line was comment.
+                        // Letting it reach the blank-line path would
+                        // mark `blank_seen` and could flip a tight list
+                        // to loose: the comment must stay invisible
+                        // (docs/COMMENTS.md §4).
+                        noteCoveredEnd(&span_end, view.line);
+                        continue;
+                    }
+                    view = rest;
+                    thematic_facts = ThematicLineFacts.init(view.line);
+                    // Fall through: the remainder is a new line.
+                } else {
+                    noteCoveredEnd(&span_end, view.line);
+                    continue;
+                }
+            } else {
+                std.debug.assert(matched < active.container_depth);
+                try emitCommentDiagnostic(doc, diags, active.marker);
+                comment_block = null;
+                // Fall through: the line reprocesses outside the
+                // container, like an HTML block ending.
+            }
+        }
 
         // An open table leaf (GFM §4.10 extension) owns every line while
         // its containing containers still match. A blank line or the start
@@ -586,7 +664,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         // paragraph).
         if (table) |*active| {
             if (matched == active.container_depth) {
-                if (isBlank(view.line.text) or !isParagraphContinuationText(doc, view, &thematic_facts)) {
+                if (isBlank(view.line.text) or !isParagraphContinuationText(doc, view, &thematic_facts, options)) {
                     finishTable(&table);
                 } else {
                     const cells = try splitRowCells(doc, view.line.contentSpan());
@@ -696,7 +774,7 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         if (matched < containers.items.len) {
             const list_sibling = startsListSibling(&containers, matched, view, &thematic_facts);
             resolveListBlankPending(&containers, matched, view, &thematic_facts, &blank_seen);
-            if (paragraph != null and !list_sibling and isParagraphContinuationText(doc, view, &thematic_facts)) {
+            if (paragraph != null and !list_sibling and isParagraphContinuationText(doc, view, &thematic_facts, options)) {
                 try appendParagraphLine(doc, &paragraph, view);
                 noteCoveredEnd(&span_end, view.line);
                 continue;
@@ -816,6 +894,46 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
             noteCoveredEnd(&span_end, view.line);
             continue;
         }
+        // Obsidian `$$` math block (docs/MATH.md §2): like a fenced code
+        // block it may interrupt a paragraph; the opener is `$$` then
+        // only whitespace — a `$$x$$` line is a paragraph with inline
+        // display math, never a block.
+        if (options.math) {
+            if (mathFenceLine(view)) |indent| {
+                try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+                def_list = null;
+                def_body = null;
+                const node = try doc.createNode(.math_block, view.line.contentSpan(), .{
+                    .math = .{ .tex = &.{}, .display = true },
+                });
+                try doc.appendChild(leafParent(doc, &containers), node);
+                math_block = .{
+                    .node = node,
+                    .indent = indent,
+                    .container_depth = containers.items.len,
+                };
+                noteCoveredEnd(&span_end, view.line);
+                continue;
+            }
+        }
+        // Obsidian `%%` block comment (docs/COMMENTS.md §3): a line that
+        // begins with a marker and has no other marker on it opens a
+        // comment hiding lines through the next marker. It can interrupt
+        // a paragraph (HTML-block start-condition shape). The comment
+        // produces no node; nothing is emitted at open.
+        if (options.comments) {
+            if (commentBlockStart(doc.src.bytes, view)) |marker| {
+                try closeParagraph(doc, &paragraph, leafParent(doc, &containers), &defs, &pending, options);
+                def_list = null;
+                def_body = null;
+                comment_block = .{
+                    .marker = marker,
+                    .container_depth = containers.items.len,
+                };
+                noteCoveredEnd(&span_end, view.line);
+                continue;
+            }
+        }
         if (trySetextUnderline(view)) |underline| {
             if (try emitSetextHeading(
                 doc,
@@ -921,6 +1039,8 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         noteCoveredEnd(&span_end, view.line);
     }
     finishFencedCode(&fenced);
+    finishMathBlock(&math_block);
+    if (comment_block) |active| try emitCommentDiagnostic(doc, diags, active.marker);
     try finishIndentedCode(doc, &indented);
     finishHtmlBlock(&html);
     finishTable(&table);
@@ -936,7 +1056,19 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
     // Phase 2: inline pass, with the full definitions map available.
     for (pending.items) |job| {
         switch (job) {
-            .paragraph => |pp| try parseParagraphInlines(doc, pp.node, pp.lines, pp.task_checkbox, &defs, options),
+            .paragraph => |pp| {
+                try parseParagraphInlines(doc, pp.node, pp.lines, pp.task_checkbox, &defs, options);
+                // A paragraph whose inlines are empty or only whitespace
+                // once comments are removed is not emitted
+                // (docs/COMMENTS.md §2) — other
+                // block shapes (headings, list items, definition terms)
+                // keep their CommonMark containers.
+                if (options.comments and pp.node.tag == .paragraph and
+                    pp.parent.tag != .footnote and isBlankInlines(pp.node))
+                {
+                    removeChild(pp.parent, pp.node);
+                }
+            },
             .heading => |hh| try parseHeadingInlines(doc, hh.node, hh.span, &defs, options),
             .setext_heading => |hh| try parseSetextHeadingInlines(doc, hh.node, hh.lines, &defs, options),
             .table_cell => |tc| try parseTableCellInlines(doc, tc.node, tc.span, &defs, options),
@@ -1394,10 +1526,13 @@ fn isParagraphContinuationText(
     doc: *document.Document,
     view: View,
     thematic_facts: *const ThematicLineFacts,
+    options: Options,
 ) bool {
     if (tryStripBlockQuoteMarker(view) != null) return false;
     if (tryAtxHeading(view) != null) return false;
     if (tryFenceOpen(view) != null) return false;
+    if (options.math and mathFenceLine(view) != null) return false;
+    if (options.comments and commentBlockStart(doc.src.bytes, view) != null) return false;
     if (isThematicBreak(view, thematic_facts)) return false;
     if (tryListMarker(view)) |m| return !m.can_interrupt;
     // Types 1-6 may interrupt a paragraph; a type-7 start may not (so it is
@@ -1421,6 +1556,9 @@ const TaskCheckboxInfo = struct {
 const PendingInline = union(enum) {
     paragraph: struct {
         node: *document.Node,
+        /// Where the paragraph sits — needed to detach it again when
+        /// comment removal leaves it empty (docs/COMMENTS.md §2).
+        parent: *document.Node,
         lines: []const Paragraph.LineRef,
         task_checkbox: ?TaskCheckboxInfo = null,
     },
@@ -1733,6 +1871,151 @@ const FencedCode = struct {
     container_depth: usize,
     content: std.ArrayList(u8) = .empty,
 };
+
+/// The one open `$$` math-block leaf (docs/MATH.md §2). Content
+/// accumulates verbatim (blank lines included) with up to `indent`
+/// columns stripped per line, like fenced code; the block ends at the
+/// first `$$` close line or its container, with no diagnostic.
+const MathBlock = struct {
+    node: *document.Node,
+    indent: u8,
+    container_depth: usize,
+    content: std.ArrayList(u8) = .empty,
+};
+
+/// A `$$` math-block fence line (docs/MATH.md §2): up to 3 columns of
+/// indentation, exactly `$$`, then only spaces and tabs. Returns the
+/// opener's indent for content stripping, or null. The same shape opens
+/// and closes the block; a `$$x$$` line fails (content after the fence).
+fn mathFenceLine(view: View) ?u8 {
+    const text = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return null;
+    var i = skipped.i;
+    if (i + 2 > text.len or text[i] != '$' or text[i + 1] != '$') return null;
+    i += 2;
+    if (i < text.len and text[i] == '$') return null; // a 3+ run is literal
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
+    if (i != text.len) return null;
+    return @intCast(skipped.cols);
+}
+
+/// Publishes the arena-backed verbatim payload (fenced-code behavior:
+/// unclosed blocks keep their accumulated content, no diagnostic).
+fn finishMathBlock(math_block: *?MathBlock) void {
+    const active = math_block.* orelse return;
+    active.node.data = .{ .math = .{ .tex = active.content.items, .display = true } };
+    math_block.* = null;
+}
+
+/// The one open `%%` block comment (docs/COMMENTS.md §3). The comment
+/// produces no node — only the opening marker's span is kept, for the
+/// `unclosed-comment` diagnostic (§5).
+const CommentBlock = struct {
+    marker: source.Span,
+    container_depth: usize,
+};
+
+/// A `%%` line opens a block comment when — after up to 3 columns of
+/// indentation — it begins with a marker (a run of exactly two
+/// unescaped `%`) and has no other marker later on the same line
+/// (docs/COMMENTS.md §3). Returns the marker's source span, or null —
+/// `%%a%%` is ordinary content (the §2 inline comment) and `%%%`-plus
+/// runs are not markers.
+fn commentBlockStart(bytes: []const u8, view: View) ?source.Span {
+    const text = view.line.text;
+    const skipped = skipIndent(view, 3) orelse return null;
+    const i = skipped.i;
+    if (i + 2 > text.len or text[i] != '%' or text[i + 1] != '%' or
+        (i + 2 < text.len and text[i + 2] == '%')) return null;
+    var j: usize = i + 2;
+    while (j < text.len) : (j += 1) {
+        if (text[j] != '%' or isEscaped(bytes, view.line.start + j) or
+            text[j - 1] == '%') continue;
+        var e = j + 1;
+        while (e < text.len and text[e] == '%') : (e += 1) {}
+        if (e - j == 2) return null;
+        j = e - 1;
+    }
+    return .{ .start = @intCast(view.line.start + i), .end = @intCast(view.line.start + i + 2) };
+}
+
+/// The next `%%` marker (a run of exactly two unescaped `%`) anywhere
+/// on the view's remaining line closes an open block comment —
+/// "bytes before the closing marker on its line are comment content"
+/// (docs/COMMENTS.md §3). Returns its text index and column so the
+/// caller can resume the line after it.
+fn commentCloseMarker(bytes: []const u8, view: View) ?struct { i: usize, col: u32 } {
+    const text = view.line.text;
+    var i: usize = 0;
+    var col = view.col;
+    while (i < text.len) {
+        if (text[i] == '%' and !isEscaped(bytes, view.line.start + i) and
+            (i == 0 or text[i - 1] != '%') and
+            i + 1 < text.len and text[i + 1] == '%' and
+            (i + 2 >= text.len or text[i + 2] != '%'))
+        {
+            return .{ .i = i, .col = col };
+        }
+        if (text[i] == '\t') {
+            col += tab_stop - (col % tab_stop);
+        } else {
+            col += 1;
+        }
+        i += 1;
+    }
+    return null;
+}
+
+/// True when a block's inlines are "empty or only whitespace"
+/// (docs/COMMENTS.md §2): no children, or only space/tab text and line
+/// breaks — what `%%a%% %%b%%` or a hard break between two comments
+/// leaves behind. Any other inline is content.
+fn isBlankInlines(node: *const document.Node) bool {
+    for (node.children.items) |c| {
+        switch (c.tag) {
+            .soft_break, .hard_break => {},
+            .text => for (c.data.text) |b| {
+                if (b != ' ' and b != '\t') return false;
+            },
+            else => return false,
+        }
+    }
+    return true;
+}
+
+/// Detaches a child node from its parent — used to suppress a
+/// comment-only paragraph once inline removal leaves it empty
+/// (docs/COMMENTS.md §2). The node is nearly always the last child (it
+/// was appended at paragraph close); fall back to an ordered remove.
+fn removeChild(parent: *document.Node, node: *document.Node) void {
+    const items = parent.children.items;
+    if (items.len > 0 and items[items.len - 1] == node) {
+        _ = parent.children.pop();
+        return;
+    }
+    for (items, 0..) |child, idx| {
+        if (child == node) {
+            _ = parent.children.orderedRemove(idx);
+            return;
+        }
+    }
+}
+
+/// The §5 `unclosed-comment` warning: a block comment reached the end of
+/// its container or the document with no closing marker, so it hid the
+/// rest of the container.
+fn emitCommentDiagnostic(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnostic), marker: source.Span) ParseError!void {
+    const lc = doc.src.lineCol(marker.start);
+    try diags.append(doc.allocator(), .{
+        .severity = .warning,
+        .code = "unclosed-comment",
+        .offset = marker.start + 1,
+        .line = lc.line,
+        .column = lc.column,
+        .span = marker,
+        .message = "block comment is never closed; it hides the rest of its container",
+    });
+}
 
 /// The one open indented-code leaf (§4.4). Content accumulates literally
 /// (chunk separator blank lines included); trailing blank lines are dropped
@@ -2648,7 +2931,7 @@ fn closeParagraphAs(
         break :blk null;
     };
     try pending.append(doc.allocator(), .{
-        .paragraph = .{ .node = node, .lines = remaining, .task_checkbox = task_checkbox },
+        .paragraph = .{ .node = node, .parent = parent, .lines = remaining, .task_checkbox = task_checkbox },
     });
 }
 
@@ -2742,7 +3025,7 @@ fn registerFootnoteDefinition(
     const refs = try alloc.alloc(Paragraph.LineRef, n);
     refs[0] = .{ .content = fd.content, .terminator = lines[0].terminator };
     for (1..n) |t| refs[t] = lines[t];
-    try pending.append(alloc, .{ .paragraph = .{ .node = pnode, .lines = refs } });
+    try pending.append(alloc, .{ .paragraph = .{ .node = pnode, .parent = fnode, .lines = refs } });
     try doc.footnotes.append(alloc, .{
         .label = doc.src.bytes[fd.label.start..fd.label.end],
         .node = fnode,
@@ -2810,9 +3093,15 @@ fn parseMultilineBlockInlines(
     var tags = std.ArrayList(HtmlTag).empty;
     defer tags.deinit(doc.allocator());
     try discoverHtmlTags(doc, contents, &tags);
+    var maths = std.ArrayList(MathSpan).empty;
+    defer maths.deinit(doc.allocator());
+    if (options.math) try discoverMath(doc, contents, &maths);
+    var comments = std.ArrayList(CommentSpan).empty;
+    defer comments.deinit(doc.allocator());
+    if (options.comments) try discoverComments(doc, contents, &comments);
     var constructs = std.ArrayList(Construct).empty;
     defer constructs.deinit(doc.allocator());
-    try mergeConstructs(doc, spans.items, tags.items, &constructs);
+    try mergeConstructs(doc, contents, spans.items, tags.items, maths.items, comments.items, &constructs);
 
     // A construct consumed by an autolink (first-come at the `<`) is dead
     // for the whole paragraph, including lines scanned later; `exclude` is
@@ -3032,9 +3321,15 @@ fn parseTableCellInlines(
     var tags = std.ArrayList(HtmlTag).empty;
     defer tags.deinit(doc.allocator());
     try discoverHtmlTags(doc, &[_]source.Span{content}, &tags);
+    var maths = std.ArrayList(MathSpan).empty;
+    defer maths.deinit(doc.allocator());
+    if (options.math) try discoverMath(doc, &[_]source.Span{content}, &maths);
+    var comments = std.ArrayList(CommentSpan).empty;
+    defer comments.deinit(doc.allocator());
+    if (options.comments) try discoverComments(doc, &[_]source.Span{content}, &comments);
     var constructs = std.ArrayList(Construct).empty;
     defer constructs.deinit(doc.allocator());
-    try mergeConstructs(doc, spans.items, tags.items, &constructs);
+    try mergeConstructs(doc, &[_]source.Span{content}, spans.items, tags.items, maths.items, comments.items, &constructs);
     var exclude: u32 = 0;
     try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
@@ -3105,9 +3400,15 @@ fn parseHeadingInlines(
     var tags = std.ArrayList(HtmlTag).empty;
     defer tags.deinit(doc.allocator());
     try discoverHtmlTags(doc, &[_]source.Span{content}, &tags);
+    var maths = std.ArrayList(MathSpan).empty;
+    defer maths.deinit(doc.allocator());
+    if (options.math) try discoverMath(doc, &[_]source.Span{content}, &maths);
+    var comments = std.ArrayList(CommentSpan).empty;
+    defer comments.deinit(doc.allocator());
+    if (options.comments) try discoverComments(doc, &[_]source.Span{content}, &comments);
     var constructs = std.ArrayList(Construct).empty;
     defer constructs.deinit(doc.allocator());
-    try mergeConstructs(doc, spans.items, tags.items, &constructs);
+    try mergeConstructs(doc, &[_]source.Span{content}, spans.items, tags.items, maths.items, comments.items, &constructs);
     var exclude: u32 = 0;
     try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
@@ -3246,6 +3547,13 @@ const InlineItem = union(enum) {
     /// the scan (docs/TASK-LISTS.md §1). Leaf item: opaque to the
     /// delimiter stack and link discovery.
     task_checkbox: TaskCheckboxItem,
+    /// A recognized math span (`$…$` / `$$…$$`, extension): `span`
+    /// covers the whole construct; `tex` is the materialized TeX source
+    /// (source slice for single-line spans, arena-owned for multi-line,
+    /// per docs/MATH.md §1 "Content"); `display` is true for `$$…$$`.
+    /// Leaf item: opaque to the delimiter stack, link discovery, and
+    /// break processing — first-opener-wins with the other constructs.
+    math: MathItem,
 };
 
 /// A recognized GFM task list checkbox item (extension). See
@@ -3269,6 +3577,16 @@ const WikilinkItem = struct {
     span: source.Span,
     /// The raw bytes between `[[` and `]]` (before trimming/splitting).
     content: source.Span,
+};
+
+/// A recognized math span item (extension). See `InlineItem.math`.
+const MathItem = struct {
+    /// The whole `$…$` / `$$…$$` construct.
+    span: source.Span,
+    /// The materialized TeX source (borrow-or-copy).
+    tex: []const u8,
+    /// True for `$$…$$` display math.
+    display: bool,
 };
 
 /// A raw HTML tag item (§6.6): the whole construct span. The tag's bytes
@@ -3309,6 +3627,7 @@ fn itemSpan(item: InlineItem) source.Span {
         .footnote => |fn_| fn_.span,
         .wikilink => |wk| wk.span,
         .task_checkbox => |tc| tc.span,
+        .math => |m| m.span,
     };
 }
 
@@ -3330,18 +3649,43 @@ const HtmlTag = struct {
     span: source.Span,
 };
 
-/// A paragraph-level opaque inline construct: a code span or a raw HTML
-/// tag, resolved for first-come precedence. `mergeConstructs` drops any
-/// construct that starts inside an already-accepted one, so the list is
-/// disjoint and sorted by `span.start`. The scan consumes constructs in
-/// order; everything inside them is opaque to the delimiter stack, link
-/// discovery, and break processing.
+/// A math span discovered by `discoverMath` (docs/MATH.md §1). Spans are
+/// disjoint and sorted by `span.start`.
+const MathSpan = struct {
+    /// Opening delimiter .. closing delimiter.
+    span: source.Span,
+    /// The raw bytes between the delimiters (may span line endings).
+    content: source.Span,
+    /// True for `$$…$$` display math.
+    display: bool,
+};
+
+/// A `%%…%%` inline comment discovered by `discoverComments`
+/// (docs/COMMENTS.md §2): both markers on the same line. Spans are
+/// disjoint and sorted by `span.start`; the whole construct is removed
+/// at scan — no item is ever produced for it.
+const CommentSpan = struct {
+    /// Opening marker .. closing marker.
+    span: source.Span,
+};
+
+/// A paragraph-level opaque inline construct: a code span, a raw HTML
+/// tag, or a math span, resolved for first-come precedence.
+/// `mergeConstructs` drops any construct that starts inside an
+/// already-accepted one, so the list is disjoint and sorted by
+/// `span.start`. The scan consumes constructs in order; everything
+/// inside them is opaque to the delimiter stack, link discovery, and
+/// break processing.
 const Construct = struct {
-    kind: enum { code_span, html_tag },
+    kind: enum { code_span, html_tag, math, comment },
     span: source.Span,
     /// Code spans: the raw content bounds (see `CodeSpan.content`).
-    /// Unused for HTML tags.
+    /// Unused for HTML tags and math.
     content: source.Span,
+    /// Math spans: the materialized TeX source (borrow-or-copy, see
+    /// `mathContent`) and whether it is display math. Unused elsewhere.
+    tex: []const u8 = &.{},
+    display: bool = false,
 };
 
 /// Discovers code spans (§6.1) over the concatenated raw content of the
@@ -3418,38 +3762,218 @@ fn terminatorInsideConstruct(term: source.Span, constructs: []const Construct) b
     return false;
 }
 
-/// Merges the discovered code spans and HTML tags into one resolved,
-/// overlap-free list ordered by start. First-come wins: a construct whose
-/// start lies inside an already-accepted construct's span is dropped (the
-/// earlier construct's opener precedes it, so per §6.1 the earlier
-/// construct is parsed and the later one never starts). Both input lists
-/// are sorted and internally disjoint, so a linear walk suffices
-/// (docs/RAW-HTML.md §2).
+/// Discovers math spans (docs/MATH.md §1) over the concatenated raw
+/// content of the given spans (one entry per line of the block). A run
+/// of exactly one unescaped `$` opens `$…$` inline math under the
+/// Pandoc `tex_math_dollars` rules; exactly two opens `$$…$$` display
+/// math; runs of three or more stay literal and are consumed whole. An
+/// escaped `\$` is never a delimiter, and escapes inside the content are
+/// inert. Like `discoverCodeSpans`, precedence is resolved by
+/// `mergeConstructs`.
+fn discoverMath(doc: *document.Document, contents: []const source.Span, maths: *std.ArrayList(MathSpan)) ParseError!void {
+    const bytes = doc.src.bytes;
+    const para_start = contents[0].start;
+    const para_end = contents[contents.len - 1].end;
+
+    // Whether a `$` can close depends only on its own neighborhood, never
+    // on the opener, so once a closer search reaches the paragraph end
+    // empty-handed no later opener can close either. Every search then
+    // ends inside its own match span or happens once, keeping discovery
+    // linear; without the flag each unclosed opener rescanned to the
+    // paragraph end — `$5 and $6 and …` was O(n²).
+    var closers_done = false;
+
+    var i = para_start;
+    outer: while (i < para_end) {
+        const at_run_start = bytes[i] == '$' and
+            !isEscaped(bytes, i) and
+            (i == para_start or bytes[i - 1] != '$');
+        if (!at_run_start) {
+            i += 1;
+            continue;
+        }
+        var e = i + 1;
+        while (e < para_end and bytes[e] == '$') : (e += 1) {}
+        const run_len = e - i;
+        if (run_len == 1) {
+            // `$…$`: the opener needs a non-space immediately right.
+            if (e >= para_end or isMathSpace(bytes[e])) {
+                i = e;
+                continue;
+            }
+            // First later single-`$` run that is unescaped, preceded by
+            // a non-space, and not followed by an ASCII digit closes.
+            var j = e;
+            while (!closers_done and j < para_end) : (j += 1) {
+                if (bytes[j] != '$' or isEscaped(bytes, j) or bytes[j - 1] == '$') continue;
+                var k = j + 1;
+                while (k < para_end and bytes[k] == '$') : (k += 1) {}
+                if (k - j == 1 and !isMathSpace(bytes[j - 1]) and
+                    (j + 1 >= para_end or !std.ascii.isDigit(bytes[j + 1])))
+                {
+                    try maths.append(doc.allocator(), .{
+                        .span = .{ .start = @intCast(i), .end = @intCast(j + 1) },
+                        .content = .{ .start = @intCast(e), .end = @intCast(j) },
+                        .display = false,
+                    });
+                    i = j + 1;
+                    continue :outer;
+                }
+                j = k - 1; // not a closer (or not a single-`$` run): content
+            }
+            closers_done = true;
+            i = e; // unclosed: literal `$`, resume after it
+            continue;
+        }
+        if (run_len == 2) {
+            // `$$…$$`: closes at the next unescaped run of exactly two.
+            // The space rules do not apply, but empty or
+            // whitespace-only content is literal.
+            var j = e;
+            while (j < para_end) : (j += 1) {
+                if (bytes[j] != '$' or isEscaped(bytes, j) or bytes[j - 1] == '$') continue;
+                var k = j + 1;
+                while (k < para_end and bytes[k] == '$') : (k += 1) {}
+                if (k - j == 2) {
+                    if (!allMathSpace(bytes[e..j])) {
+                        try maths.append(doc.allocator(), .{
+                            .span = .{ .start = @intCast(i), .end = @intCast(k) },
+                            .content = .{ .start = @intCast(e), .end = @intCast(j) },
+                            .display = true,
+                        });
+                    }
+                    // Matched or not, the pair consumes itself: empty or
+                    // whitespace-only content makes "the whole thing
+                    // literal" — the closing `$$` never re-opens.
+                    i = k;
+                    continue :outer;
+                }
+                j = k - 1;
+            }
+        }
+        i = e; // unmatched or 3+ run: literal, resume after the run
+    }
+}
+
+/// Whitespace for the math span rules (docs/MATH.md §1): ASCII space,
+/// tab, and line endings — the same set that flanking treats as Unicode
+/// whitespace at this byte width.
+fn isMathSpace(b: u8) bool {
+    return b == ' ' or b == '\t' or b == '\n' or b == '\r';
+}
+
+/// True when every byte of `s` is math whitespace (the `$$…$$`
+/// empty-content check).
+fn allMathSpace(s: []const u8) bool {
+    for (s) |b| {
+        if (!isMathSpace(b)) return false;
+    }
+    return true;
+}
+
+/// Materializes a math span's TeX content from the paragraph's per-line
+/// content spans: container prefixes never appear (the gap between line
+/// spans is skipped, not copied), each continuation line drops its
+/// leading whitespace, and line endings join as `\n` — never spaces, so
+/// a TeX `%` comment cannot swallow the rest of the formula
+/// (docs/MATH.md §1 "Content"). A single-line span borrows the source.
+fn mathContent(doc: *document.Document, contents: []const source.Span, content: source.Span) ParseError![]const u8 {
+    const bytes = doc.src.bytes;
+    var lines_touched: usize = 0;
+    for (contents) |l| {
+        if (l.end > content.start and l.start < content.end) lines_touched += 1;
+    }
+    if (lines_touched <= 1) return bytes[content.start..content.end];
+
+    var buf = std.ArrayList(u8).empty;
+    var seen: usize = 0;
+    for (contents) |l| {
+        if (l.end <= content.start or l.start >= content.end) continue;
+        var s: u32 = @max(l.start, content.start);
+        const e: u32 = @min(l.end, content.end);
+        if (seen > 0) {
+            try buf.append(doc.allocator(), '\n');
+            while (s < e and (bytes[s] == ' ' or bytes[s] == '\t')) : (s += 1) {}
+        }
+        try buf.appendSlice(doc.allocator(), bytes[s..e]);
+        seen += 1;
+    }
+    return buf.items;
+}
+
+/// Discovers inline comments (docs/COMMENTS.md §2) per line: a marker
+/// is a run of exactly two unescaped `%`; `%%…%%` pairs on one line are
+/// removed. Runs of one or three-plus are not markers and are consumed
+/// whole; an escaped `\%` never opens. The per-line scan is deliberate:
+/// inline comments may not span lines (§2 "on the same source line").
+fn discoverComments(doc: *document.Document, contents: []const source.Span, comments: *std.ArrayList(CommentSpan)) ParseError!void {
+    const bytes = doc.src.bytes;
+    for (contents) |line| {
+        var i = line.start;
+        outer: while (i < line.end) {
+            const at_run_start = bytes[i] == '%' and
+                !isEscaped(bytes, i) and
+                (i == line.start or bytes[i - 1] != '%');
+            if (!at_run_start) {
+                i += 1;
+                continue;
+            }
+            var e = i + 1;
+            while (e < line.end and bytes[e] == '%') : (e += 1) {}
+            if (e - i != 2) {
+                i = e;
+                continue;
+            }
+            // The closer is the next exactly-two marker on this line.
+            var j = e;
+            while (j < line.end) : (j += 1) {
+                if (bytes[j] != '%' or isEscaped(bytes, j) or bytes[j - 1] == '%') continue;
+                var k = j + 1;
+                while (k < line.end and bytes[k] == '%') : (k += 1) {}
+                if (k - j == 2) {
+                    try comments.append(doc.allocator(), .{
+                        .span = .{ .start = @intCast(i), .end = @intCast(k) },
+                    });
+                    i = k;
+                    continue :outer;
+                }
+                j = k - 1;
+            }
+            i = e; // unclosed inline marker: literal, resume after it
+        }
+    }
+}
+
+/// Merges the discovered code spans, HTML tags, math spans, and comments
+/// into one resolved, overlap-free list ordered by start. First-come
+/// wins: a construct whose start lies inside an already-accepted
+/// construct's span is dropped (the earlier construct's opener precedes
+/// it, so the earlier construct is parsed and the later one never
+/// starts). The input lists are sorted and internally disjoint, so a
+/// linear walk suffices (docs/RAW-HTML.md §2).
 fn mergeConstructs(
     doc: *document.Document,
+    contents: []const source.Span,
     spans: []const CodeSpan,
     tags: []const HtmlTag,
+    maths: []const MathSpan,
+    comments: []const CommentSpan,
     out: *std.ArrayList(Construct),
 ) ParseError!void {
     var si: usize = 0;
     var ti: usize = 0;
+    var mi: usize = 0;
+    var ci: usize = 0;
     var last_end: u32 = 0;
-    while (si < spans.len or ti < tags.len) {
-        const span_next = si < spans.len;
-        const tag_next = ti < tags.len;
-        const from_tag = if (!span_next) true else if (!tag_next) false else tags[ti].span.start < spans[si].span.start;
-        if (from_tag) {
-            if (tags[ti].span.start >= last_end) {
-                try out.append(doc.allocator(), .{
-                    .kind = .html_tag,
-                    .span = tags[ti].span,
-                    .content = .{ .start = 0, .end = 0 },
-                });
-                last_end = tags[ti].span.end;
-            }
-            ti += 1;
-        } else {
-            if (spans[si].span.start >= last_end) {
+    while (si < spans.len or ti < tags.len or mi < maths.len or ci < comments.len) {
+        // The earliest unaccepted construct starts next.
+        var start: u32 = std.math.maxInt(u32);
+        if (si < spans.len) start = @min(start, spans[si].span.start);
+        if (ti < tags.len) start = @min(start, tags[ti].span.start);
+        if (mi < maths.len) start = @min(start, maths[mi].span.start);
+        if (ci < comments.len) start = @min(start, comments[ci].span.start);
+        if (si < spans.len and spans[si].span.start == start) {
+            if (start >= last_end) {
                 try out.append(doc.allocator(), .{
                     .kind = .code_span,
                     .span = spans[si].span,
@@ -3458,6 +3982,38 @@ fn mergeConstructs(
                 last_end = spans[si].span.end;
             }
             si += 1;
+        } else if (ti < tags.len and tags[ti].span.start == start) {
+            if (start >= last_end) {
+                try out.append(doc.allocator(), .{
+                    .kind = .html_tag,
+                    .span = tags[ti].span,
+                    .content = .{ .start = 0, .end = 0 },
+                });
+                last_end = tags[ti].span.end;
+            }
+            ti += 1;
+        } else if (mi < maths.len and maths[mi].span.start == start) {
+            if (start >= last_end) {
+                try out.append(doc.allocator(), .{
+                    .kind = .math,
+                    .span = maths[mi].span,
+                    .content = .{ .start = 0, .end = 0 },
+                    .tex = try mathContent(doc, contents, maths[mi].content),
+                    .display = maths[mi].display,
+                });
+                last_end = maths[mi].span.end;
+            }
+            mi += 1;
+        } else {
+            if (start >= last_end) {
+                try out.append(doc.allocator(), .{
+                    .kind = .comment,
+                    .span = comments[ci].span,
+                    .content = .{ .start = 0, .end = 0 },
+                });
+                last_end = comments[ci].span.end;
+            }
+            ci += 1;
         }
     }
 }
@@ -4571,6 +5127,16 @@ fn scanLine(
                 .html_tag => try items.append(doc.allocator(), .{
                     .raw_html = .{ .span = constructs[ci].span },
                 }),
+                .math => try items.append(doc.allocator(), .{
+                    .math = .{
+                        .span = constructs[ci].span,
+                        .tex = constructs[ci].tex,
+                        .display = constructs[ci].display,
+                    },
+                }),
+                // Inline comment (docs/COMMENTS.md §2): removed
+                // entirely — no item is ever produced.
+                .comment => {},
             }
             i = constructs[ci].span.end - 1;
             run_start = constructs[ci].span.end;
@@ -5068,6 +5634,15 @@ fn emitInlines(
                 });
                 try doc.appendChild(current, node);
             },
+            .math => |m| {
+                // Leaf node (extension, docs/MATH.md §3): the TeX was
+                // materialized at discovery (borrow-or-copy); the node
+                // span covers both delimiters.
+                const node = try doc.createNode(.math_inline, m.span, .{
+                    .math = .{ .tex = m.tex, .display = m.display },
+                });
+                try doc.appendChild(current, node);
+            },
             .autolink => |al| {
                 // Leaf node: the content between `<` and `>` becomes both
                 // the label and the href (with `mailto:` prepended for
@@ -5433,6 +6008,7 @@ fn flattenAlt(doc: *document.Document, items: []const InlineItem) ParseError![]c
                 try buf.appendSlice(doc.allocator(), try resolveEscapes(doc, s));
             },
             .code_span => |cs| try buf.appendSlice(doc.allocator(), try normalizeCodeSpan(doc, cs.content)),
+            .math => |m| try buf.appendSlice(doc.allocator(), m.tex),
             .brk => try buf.append(doc.allocator(), '\n'),
             .delimiter => |run| {
                 try buf.appendSlice(doc.allocator(), doc.src.bytes[run.span.start + run.front_used .. run.span.end - run.back_used]);
@@ -8382,6 +8958,327 @@ test "markdown: 10,000-highlight determinism storm (extension)" {
     defer b.deinit(testing.allocator);
     try testing.expectEqualSlices(u8, a.items, b.items);
     try testing.expectEqual(@as(usize, 10_000), std.mem.count(u8, a.items, "<mark>"));
+}
+
+fn renderMathHtml(input: []const u8) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{ .math = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "markdown: math parses into leaf nodes with tex and display (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "a $x$ b $$y$$ c\n",
+        .markdown,
+        ext_parse(.{ .math = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    const inl = p.children.items[1];
+    try testing.expectEqual(document.Tag.math_inline, inl.tag);
+    try testing.expectEqualStrings("x", inl.data.math.tex);
+    try testing.expect(!inl.data.math.display);
+    try testing.expectEqualStrings("$x$", result.document.src.bytes[inl.span.start..inl.span.end]);
+    const disp = p.children.items[3];
+    try testing.expectEqual(document.Tag.math_inline, disp.tag);
+    try testing.expectEqualStrings("y", disp.data.math.tex);
+    try testing.expect(disp.data.math.display);
+    try testing.expectEqualStrings("$$y$$", result.document.src.bytes[disp.span.start..disp.span.end]);
+}
+
+test "markdown: tex_math_dollars disambiguation (extension)" {
+    // The §1 worked-case table: space rules, the digit rule, middle
+    // dollars as content, escaped delimiters — kept on separate lines so
+    // a later valid closer cannot reach back across an example.
+    const cases = [_]struct { in: []const u8, out: []const u8 }{
+        .{ .in = "$x$\n", .out = "<p><span class=\"math inline\">x</span></p>\n" },
+        .{ .in = "$20,000 and $30,000\n", .out = "<p>$20,000 and $30,000</p>\n" },
+        .{ .in = "$x$5\n", .out = "<p>$x$5</p>\n" },
+        .{ .in = "$ x $\n", .out = "<p>$ x $</p>\n" },
+        .{ .in = "$a $b$\n", .out = "<p><span class=\"math inline\">a $b</span></p>\n" },
+        .{ .in = "$\\$5$\n", .out = "<p><span class=\"math inline\">\\$5</span></p>\n" },
+        .{ .in = "\\$x$\n", .out = "<p>$x$</p>\n" },
+    };
+    for (cases) |c| {
+        var out = try renderMathHtml(c.in);
+        defer out.deinit(testing.allocator);
+        try testing.expectEqualStrings(c.out, out.items);
+    }
+}
+
+test "markdown: math run lengths and unclosed spans stay literal (extension)" {
+    var out = try renderMathHtml("$$$x$$$ and $$ $$ and $unclosed and $$unclosed\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>$$$x$$$ and $$ $$ and $unclosed and $$unclosed</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: math is opaque inside and cannot be entered (extension)" {
+    // Code spans win over math and math is opaque to emphasis/links.
+    var out = try renderMathHtml("`$x$` and $`x`$ and $a_1 + b_1$ and $*x*$\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p><code>$x$</code> and <span class=\"math inline\">`x`</span> and <span class=\"math inline\">a_1 + b_1</span> and <span class=\"math inline\">*x*</span></p>\n",
+        out.items,
+    );
+}
+
+test "markdown: math blocks fence, strip indentation, and interrupt (extension)" {
+    var out = try renderMathHtml("para\n$$\na & b\n$$\n\n  $$\n  ind\n  $$\n\n$$x$$\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>para</p>\n" ++
+            "<div class=\"math display\">a &amp; b\n</div>\n" ++
+            "<div class=\"math display\">ind\n</div>\n" ++
+            "<p><span class=\"math display\">x</span></p>\n",
+        out.items,
+    );
+}
+
+test "markdown: math blocks close at container end, unclosed keeps content (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "> $$\n> inside\n\n$$\nunclosed\n",
+        .markdown,
+        ext_parse(.{ .math = true }),
+    );
+    defer result.deinit();
+    const q = result.document.root.children.items[0];
+    const mb = q.children.items[0];
+    try testing.expectEqual(document.Tag.math_block, mb.tag);
+    try testing.expect(mb.data.math.display);
+    try testing.expectEqualStrings("inside\n", mb.data.math.tex);
+    const tail = result.document.root.children.items[1];
+    try testing.expectEqual(document.Tag.math_block, tail.tag);
+    try testing.expectEqualStrings("unclosed\n", tail.data.math.tex);
+}
+
+test "markdown: math is off by default (extension)" {
+    var out = try renderCalloutsHtml("$x$ and $$y$$\n\n$$\nz\n$$\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>$x$ and $$y$$</p>\n<p>$$\nz\n$$</p>\n", out.items);
+}
+
+test "markdown: multi-line math preserves line endings and strips prefixes (extension)" {
+    const oliver = @import("oliver.zig");
+    // A TeX `%` comment runs to end of line, so endings stay `\n`
+    // (never spaces), and the continuation line's leading whitespace —
+    // container prefix included — is stripped.
+    var result = try oliver.parse(
+        testing.allocator,
+        "$a % comment\n   b$\n\n> $c\n> d$\n",
+        .markdown,
+        ext_parse(.{ .math = true }),
+    );
+    defer result.deinit();
+    const p = result.document.root.children.items[0];
+    const m = p.children.items[0];
+    try testing.expectEqualStrings("a % comment\nb", m.data.math.tex);
+    const q = result.document.root.children.items[1];
+    const mq = q.children.items[0].children.items[0];
+    try testing.expectEqualStrings("c\nd", mq.data.math.tex);
+}
+
+test "markdown: 10,000-math determinism storm (extension)" {
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var k: usize = 0;
+    while (k < 10_000) : (k += 1) try input.appendSlice(testing.allocator, "$x$ ");
+    var a = try renderMathHtml(input.items);
+    defer a.deinit(testing.allocator);
+    var b = try renderMathHtml(input.items);
+    defer b.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, a.items, b.items);
+    try testing.expectEqual(@as(usize, 10_000), std.mem.count(u8, a.items, "<span class=\"math inline\">"));
+}
+
+fn renderCommentsHtml(input: []const u8) !std.ArrayList(u8) {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, input, .markdown, ext_parse(.{ .comments = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    return aw.toArrayList();
+}
+
+test "markdown: inline comments are removed verbatim (extension)" {
+    // §2 pins: two-space gap, leading-space remainder, transparency to
+    // emphasis, single-line extent, literal unclosed markers. `%%%%` is
+    // one run of four — not two adjacent markers — so it stays literal.
+    var out = try renderCommentsHtml(
+        "a %%x%% b and %%x%% _em_ and **a %%x%% b**\n\n" ++
+            "cross %%line\nno close%% end\n\n" ++
+            "%%%% and %% x%% and x %%x\n",
+    );
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>a  b and  <em>em</em> and <strong>a  b</strong></p>\n" ++
+            "<p>cross %%line\nno close%% end</p>\n" ++
+            "<p>%%%% and  and x %%x</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: comment marker lengths and escapes stay literal (extension)" {
+    var out = try renderCommentsHtml("% and %%% x and \\%% y and %%a%%% b\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>% and %%% x and %% y and %%a%%% b</p>\n", out.items);
+}
+
+test "markdown: comment precedence inside and outside constructs (extension)" {
+    // §2: code spans win over comments and comments win over inner code.
+    var out = try renderCommentsHtml("`%%x%%` and %%`x`%% and %%*a%%*\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p><code>%%x%%</code> and  and *</p>\n", out.items);
+}
+
+test "markdown: comment-only paragraphs and headings (extension)" {
+    // §2: a comment-only paragraph emits nothing; a comment-only heading
+    // keeps its `<h1></h1>` shape.
+    var out = try renderCommentsHtml("keep\n\n%%gone%%\n\n# %%gone%%\n\n- %%gone%%\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>keep</p>\n<h1></h1>\n<ul>\n<li></li>\n</ul>\n",
+        out.items,
+    );
+    // "Empty or only whitespace": the space between two comments, and a
+    // hard break between comment lines, leave no paragraph behind.
+    var ws = try renderCommentsHtml("keep\n\n%%a%% %%b%%\n\n%%a%%  \n%%b%%\n\n%%a%%\\\n%%b%%\n\n> %%a%%\t%%b%%\n");
+    defer ws.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>keep</p>\n<blockquote>\n</blockquote>\n", ws.items);
+    // Any real inline keeps the paragraph.
+    var kept = try renderCommentsHtml("%%a%% x\n\n%%a%% `c`\n");
+    defer kept.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p> x</p>\n<p> <code>c</code></p>\n", kept.items);
+}
+
+test "markdown: block comments hide through the close and resume (extension)" {
+    // §3: the Obsidian example, the mid-line close resume, blank lines
+    // and Markdown as content, and the indented-code exclusion.
+    var out = try renderCommentsHtml(
+        "before\n\n%%\nThis is a block comment.\n\nBlock comments can span multiple lines.\n%%\nafter\n\n" ++
+            "%%\nhidden\n%% visible *text*\n\n" ++
+            "para\n%%\ninterrupts\n%%\n\n" ++
+            "    %%\n    indented code\n",
+    );
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>before</p>\n<p>after</p>\n" ++
+            "<p>visible <em>text</em></p>\n" ++
+            "<p>para</p>\n" ++
+            "<pre><code>%%\nindented code\n</code></pre>\n",
+        out.items,
+    );
+}
+
+test "markdown: block comments in containers and the unclosed diagnostic (extension)" {
+    // §3 containers: `> %%` closes within the quote; an unclosed comment
+    // warns and hides the rest of its container.
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "> %%\n> hidden\n> %%\n> shown\n\n%%\nhid rest\n",
+        .markdown,
+        ext_parse(.{ .comments = true }),
+    );
+    defer result.deinit();
+    try testing.expectEqual(@as(usize, 1), result.diagnostics.len);
+    const d = result.diagnostics[0];
+    try testing.expectEqual(diagnostic.Severity.warning, d.severity);
+    try testing.expectEqualStrings("unclosed-comment", d.code);
+    // The second `%%` opener sits on the last-but-one line.
+    const marker = result.document.src.bytes[d.span.start..d.span.end];
+    try testing.expectEqualStrings("%%", marker);
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    try testing.expectEqualStrings(
+        "<blockquote>\n<p>shown</p>\n</blockquote>\n",
+        aw.written(),
+    );
+}
+
+test "markdown: an end-of-line close stays invisible to list tightness (extension)" {
+    // §3/§4: the bytes after a closing `%%` resume as a new line, but a
+    // *blank* remainder is no line at all — the comment must not set
+    // `blank_seen` and loosen the list (review finding on PR #194).
+    var out = try renderCommentsHtml("- a\n- %%\n  hidden\n  %%\n- b\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<ul>\n<li>a</li>\n<li></li>\n<li>b</li>\n</ul>\n",
+        out.items,
+    );
+}
+
+test "markdown: comments are off by default (extension)" {
+    var out = try renderCalloutsHtml("a %%x%% b\n\n%%\nblock\n%%\n");
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualStrings(
+        "<p>a %%x%% b</p>\n<p>%%\nblock\n%%</p>\n",
+        out.items,
+    );
+}
+
+test "markdown: comments contribute nothing to alt flattening and slugs (extension)" {
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(
+        testing.allocator,
+        "# Heading %%x%% {#h}\n\n![alt %%x%% text](u)\n",
+        .markdown,
+        ext_parse(.{ .comments = true, .heading_attributes = true }),
+    );
+    defer result.deinit();
+    const h = result.document.root.children.items[0];
+    try testing.expectEqualStrings("h", h.data.heading.id.?);
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    try testing.expectEqualStrings(
+        "<h1 id=\"h\">Heading </h1>\n<p><img src=\"u\" alt=\"alt  text\" /></p>\n",
+        aw.written(),
+    );
+}
+
+test "markdown: 10,000-comment determinism storm (extension)" {
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var k: usize = 0;
+    while (k < 10_000) : (k += 1) try input.appendSlice(testing.allocator, "a %%x%% b ");
+    var a = try renderCommentsHtml(input.items);
+    defer a.deinit(testing.allocator);
+    var b = try renderCommentsHtml(input.items);
+    defer b.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, a.items, b.items);
+    try testing.expectEqual(@as(usize, 0), std.mem.count(u8, a.items, "%%"));
+}
+
+test "markdown: an unclosed `$` opener storm stays linear (extension)" {
+    // Every `$5` opens (non-space right) but no `$` closes (each is
+    // preceded by a space). Each opener used to rescan to the paragraph
+    // end — O(n²); 100,000 openers took minutes. Completion is the bound.
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var k: usize = 0;
+    while (k < 100_000) : (k += 1) try input.appendSlice(testing.allocator, "$5 ");
+    var out = try renderMathHtml(input.items);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), std.mem.count(u8, out.items, "<span class=\"math"));
+    try testing.expectEqual(@as(usize, 100_000), std.mem.count(u8, out.items, "$5"));
+
+    // An exhausted single-`$` search never blocks `$$…$$` later on.
+    var mixed = try renderMathHtml("$5 $6 $$x$$ and $7\n");
+    defer mixed.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>$5 $6 <span class=\"math display\">x</span> and $7</p>\n", mixed.items);
 }
 
 fn renderSmartypantsHtml(input: []const u8) !std.ArrayList(u8) {

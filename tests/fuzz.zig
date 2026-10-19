@@ -148,6 +148,25 @@ const seeds = [_][]const u8{
         "foo\n==\n" ++
         "\n" ++
         "==a *b* c== ==x== ==y==z==\n",
+    // Markdown: Obsidian `$` runs (inline/display math, disambiguation,
+    // escapes, block fences, malformed lengths).
+    "$x$ and $$y$$ and $$$z$$$ and $run\n" ++
+        "\n" ++
+        "$20 and $30 \\$esc$ $a $b$ $$\n" ++
+        "content\n" ++
+        "$$\n" ++
+        "\n" ++
+        "$`code`$ `$x$`\n",
+    // Markdown: Obsidian `%` runs (inline/block comments, escapes,
+    // unclosed markers, comment-only lines).
+    "a %%x%% b %%unclosed \\%% esc\n" ++
+        "%%% %%%% %%one%% two\n" ++
+        "\n" ++
+        "%%\n" ++
+        "block\n" ++
+        "%%\n" ++
+        "\n" ++
+        "%% trailing\n",
 };
 
 /// The generated input cap (well under `source.max_input_len`, so span
@@ -188,6 +207,8 @@ fn exercise(input: []const u8, i: usize) !void {
                 .smartypants = true,
                 .task_lists = true,
                 .highlights = true,
+                .math = true,
+                .comments = true,
             },
             .frontmatter = .yaml,
         });

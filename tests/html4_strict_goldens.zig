@@ -71,6 +71,8 @@ fn extParseOptions() oliver.ParseOptions {
         .smartypants = true,
         .task_lists = true,
         .highlights = true,
+        .math = true,
+        .comments = true,
     } };
 }
 
@@ -108,7 +110,7 @@ fn render(input: []const u8, dir: []const u8, family: Class, mode: ?oliver.front
 }
 
 // ---------------------------------------------------------------------------
-// Generated classes (agree=279 divergent=109 fail=41).
+// Generated classes (agree=285 divergent=110 fail=41).
 // ---------------------------------------------------------------------------
 
 const agree_cases = [_]Agree{
@@ -335,6 +337,12 @@ const agree_cases = [_]Agree{
     .{ .name = "callout-body", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/callout-body.md"), .html = @embedFile("fixtures/markdown/callout-body.html") },
     .{ .name = "callout-literal", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/callout-literal.md"), .html = @embedFile("fixtures/markdown/callout-literal.html") },
     .{ .name = "callout-fold", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/callout-fold.md"), .html = @embedFile("fixtures/markdown/callout-fold.html") },
+    .{ .name = "math-literal", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/math-literal.md"), .html = @embedFile("fixtures/markdown/math-literal.html") },
+    .{ .name = "math-precedence", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/math-precedence.md"), .html = @embedFile("fixtures/markdown/math-precedence.html") },
+    .{ .name = "math-block", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/math-block.md"), .html = @embedFile("fixtures/markdown/math-block.html") },
+    .{ .name = "comments-inline", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/comments-inline.md"), .html = @embedFile("fixtures/markdown/comments-inline.html") },
+    .{ .name = "comments-block", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/comments-block.md"), .html = @embedFile("fixtures/markdown/comments-block.html") },
+    .{ .name = "comments-unclosed", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/comments-unclosed.md"), .html = @embedFile("fixtures/markdown/comments-unclosed.html") },
     .{ .name = "smartypants-basic", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/smartypants-basic.md"), .html = @embedFile("fixtures/markdown/smartypants-basic.html") },
     .{ .name = "smartypants-scopes", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/smartypants-scopes.md"), .html = @embedFile("fixtures/markdown/smartypants-scopes.html") },
     .{ .name = "cross-callout-title", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/cross-callout-title.md"), .html = @embedFile("fixtures/markdown/cross-callout-title.html") },
@@ -442,6 +450,7 @@ const divergent_cases = [_]Divergent{
     .{ .name = "highlight-basic", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/highlight-basic.md"), .html = @embedFile("fixtures/markdown/highlight-basic.html"), .strict = @embedFile("fixtures/markdown/highlight-basic.strict.html") },
     .{ .name = "highlight-literal", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/highlight-literal.md"), .html = @embedFile("fixtures/markdown/highlight-literal.html"), .strict = @embedFile("fixtures/markdown/highlight-literal.strict.html") },
     .{ .name = "highlight-color", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/highlight-color.md"), .html = @embedFile("fixtures/markdown/highlight-color.html"), .strict = @embedFile("fixtures/markdown/highlight-color.strict.html") },
+    .{ .name = "math-inline", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/math-inline.md"), .html = @embedFile("fixtures/markdown/math-inline.html"), .strict = @embedFile("fixtures/markdown/math-inline.strict.html") },
     .{ .name = "cross-smartypants-scopes", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/cross-smartypants-scopes.md"), .html = @embedFile("fixtures/markdown/cross-smartypants-scopes.html"), .strict = @embedFile("fixtures/markdown/cross-smartypants-scopes.strict.html") },
     .{ .name = "frontmatter-unclosed", .dir = "markdown", .family = .fm, .mode = .yaml, .input = @embedFile("fixtures/markdown/frontmatter-unclosed.md"), .html = @embedFile("fixtures/markdown/frontmatter-unclosed.html"), .strict = @embedFile("fixtures/markdown/frontmatter-unclosed.strict.html") },
     .{ .name = "linebreak", .dir = "textile", .family = .plain, .input = @embedFile("fixtures/textile/linebreak.textile"), .html = @embedFile("fixtures/textile/linebreak.html"), .strict = @embedFile("fixtures/textile/linebreak.strict.html") },
@@ -553,8 +562,8 @@ test "html4 strict wall: class counts" {
     // The visible record of the generated classification. tools/gen-strict-
     // goldens.py owns these numbers; a fixture that changes class moves one
     // count to another (the totals must keep summing to the corpus size).
-    try std.testing.expectEqual(@as(usize, 279), agree_cases.len);
-    try std.testing.expectEqual(@as(usize, 109), divergent_cases.len);
+    try std.testing.expectEqual(@as(usize, 285), agree_cases.len);
+    try std.testing.expectEqual(@as(usize, 110), divergent_cases.len);
     try std.testing.expectEqual(@as(usize, 41), fail_cases.len);
 }
 

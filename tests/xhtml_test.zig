@@ -656,6 +656,32 @@ test "xhtml: highlights are well-formed under both profiles (extension)" {
     try wellformed.check(wrapped.items);
 }
 
+fn renderMathProfile(input: []const u8, profile: oliver.OutputProfile) !std.ArrayList(u8) {
+    var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
+        .markdown = .{ .math = true },
+    });
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(std.testing.allocator, &aw.writer, &result.document, .{ .profile = profile });
+    return aw.toArrayList();
+}
+
+test "xhtml: math is well-formed under both profiles (extension)" {
+    // `span`/`div`/`class` are valid in every profile, so the profiles
+    // agree byte-for-byte (docs/MATH.md §4).
+    const input = "A $x$ and $$y$$.\n\n$$\na & b\n$$\n";
+    var html = try renderMathProfile(input, .html);
+    defer html.deinit(std.testing.allocator);
+    var xhtml = try renderMathProfile(input, .xhtml);
+    defer xhtml.deinit(std.testing.allocator);
+    try expectRender(xhtml.items, html.items, "math xhtml vs html");
+    var wrapped = std.ArrayList(u8).empty;
+    defer wrapped.deinit(std.testing.allocator);
+    try wrapFragment(xhtml.items, &wrapped);
+    try wellformed.check(wrapped.items);
+}
+
 fn renderSmartypantsProfile(input: []const u8, profile: oliver.OutputProfile) !std.ArrayList(u8) {
     var result = try oliver.parse(std.testing.allocator, input, .markdown, .{
         .markdown = .{ .smartypants = true },

@@ -69,11 +69,11 @@ consume directly. The map below mirrors it.
   [Raw HTML](RAW-HTML.html) · [Images](IMAGES-PARSING.html) ·
   [Reference images](REFERENCE-IMAGES.html) · [Tables (GFM)](TABLES.html) ·
   [Wikilinks](WIKILINKS.html) · [Callouts](CALLOUTS.html) ·
-  [Highlights](HIGHLIGHTS.html) ·
+  [Highlights](HIGHLIGHTS.html) · [Math](MATH.html) ·
+  [Comments](COMMENTS.html) ·
   [Smart typography](SMARTY.html) · [Front matter](FRONTMATTER.html)
 - Planned: [Obsidian-flavor extensions](OBSIDIAN-EXTENSIONS.html) ·
-  [Math](MATH.html) ·
-  [Comments](COMMENTS.html) · [Embeds](EMBEDS.html)
+  [Embeds](EMBEDS.html)
 
 ### Textile frontend
 
