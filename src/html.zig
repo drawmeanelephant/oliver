@@ -558,6 +558,15 @@ fn writeOpen(
                 // the body children (`pushChildren`).
                 try writer.writeAll("<div class=\"callout callout-");
                 try writeEscaped(writer, ctype);
+                // Fold marker (docs/CALLOUTS.md §10): a class token, not a
+                // `data-*` attribute, so the output is identical in HTML,
+                // XHTML, and HTML 4.01 Strict. `.none` adds nothing, so
+                // existing callout output is byte-identical.
+                switch (bq.callout_fold) {
+                    .none => {},
+                    .open => try writer.writeAll(" callout-fold-open"),
+                    .closed => try writer.writeAll(" callout-fold-closed"),
+                }
                 try writer.writeAll("\">\n");
                 if (bq.callout_title_nodes.len > 0) {
                     try writer.writeAll("<div class=\"callout-title\">");

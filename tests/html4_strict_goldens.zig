@@ -107,7 +107,7 @@ fn render(input: []const u8, dir: []const u8, family: Class, mode: ?oliver.front
 }
 
 // ---------------------------------------------------------------------------
-// Generated classes (agree=278 divergent=106 fail=41).
+// Generated classes (agree=279 divergent=106 fail=41).
 // ---------------------------------------------------------------------------
 
 const agree_cases = [_]Agree{
@@ -333,6 +333,7 @@ const agree_cases = [_]Agree{
     .{ .name = "callout-types", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/callout-types.md"), .html = @embedFile("fixtures/markdown/callout-types.html") },
     .{ .name = "callout-body", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/callout-body.md"), .html = @embedFile("fixtures/markdown/callout-body.html") },
     .{ .name = "callout-literal", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/callout-literal.md"), .html = @embedFile("fixtures/markdown/callout-literal.html") },
+    .{ .name = "callout-fold", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/callout-fold.md"), .html = @embedFile("fixtures/markdown/callout-fold.html") },
     .{ .name = "smartypants-basic", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/smartypants-basic.md"), .html = @embedFile("fixtures/markdown/smartypants-basic.html") },
     .{ .name = "smartypants-scopes", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/smartypants-scopes.md"), .html = @embedFile("fixtures/markdown/smartypants-scopes.html") },
     .{ .name = "cross-callout-title", .dir = "markdown", .family = .ext, .input = @embedFile("fixtures/markdown/cross-callout-title.md"), .html = @embedFile("fixtures/markdown/cross-callout-title.html") },
@@ -548,7 +549,7 @@ test "html4 strict wall: class counts" {
     // The visible record of the generated classification. tools/gen-strict-
     // goldens.py owns these numbers; a fixture that changes class moves one
     // count to another (the totals must keep summing to the corpus size).
-    try std.testing.expectEqual(@as(usize, 278), agree_cases.len);
+    try std.testing.expectEqual(@as(usize, 279), agree_cases.len);
     try std.testing.expectEqual(@as(usize, 106), divergent_cases.len);
     try std.testing.expectEqual(@as(usize, 41), fail_cases.len);
 }
