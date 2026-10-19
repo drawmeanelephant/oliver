@@ -3757,6 +3757,14 @@ fn discoverMath(doc: *document.Document, contents: []const source.Span, maths: *
     const para_start = contents[0].start;
     const para_end = contents[contents.len - 1].end;
 
+    // Whether a `$` can close depends only on its own neighborhood, never
+    // on the opener, so once a closer search reaches the paragraph end
+    // empty-handed no later opener can close either. Every search then
+    // ends inside its own match span or happens once, keeping discovery
+    // linear; without the flag each unclosed opener rescanned to the
+    // paragraph end — `$5 and $6 and …` was O(n²).
+    var closers_done = false;
+
     var i = para_start;
     outer: while (i < para_end) {
         const at_run_start = bytes[i] == '$' and
@@ -3778,7 +3786,7 @@ fn discoverMath(doc: *document.Document, contents: []const source.Span, maths: *
             // First later single-`$` run that is unescaped, preceded by
             // a non-space, and not followed by an ASCII digit closes.
             var j = e;
-            while (j < para_end) : (j += 1) {
+            while (!closers_done and j < para_end) : (j += 1) {
                 if (bytes[j] != '$' or isEscaped(bytes, j) or bytes[j - 1] == '$') continue;
                 var k = j + 1;
                 while (k < para_end and bytes[k] == '$') : (k += 1) {}
@@ -3795,6 +3803,7 @@ fn discoverMath(doc: *document.Document, contents: []const source.Span, maths: *
                 }
                 j = k - 1; // not a closer (or not a single-`$` run): content
             }
+            closers_done = true;
             i = e; // unclosed: literal `$`, resume after it
             continue;
         }
@@ -8446,6 +8455,19 @@ test "markdown: strikethrough is literal text when disabled" {
     try testing.expectEqualStrings("~~Hi~~", p.children.items[0].data.text);
 }
 
+test "markdown: a popped `~` openers_bottom is clamped (extension)" {
+    // The `*` match pops the stack below the `~` row's bottom; an
+    // unclamped `~` bottom stayed stale past the stack and hid the
+    // later `~~` opener, leaving `~~`~~` literal.
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "*~~* ~~`~~", .markdown, ext_parse(.{ .strikethrough = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    try testing.expectEqualStrings("<p><em>~~</em> <del>`</del></p>\n", aw.written());
+}
+
 test "markdown: wikilinks parse into a .wikilink node with target and label (extension)" {
     const oliver = @import("oliver.zig");
     var result = try oliver.parse(
@@ -9211,6 +9233,25 @@ test "markdown: 10,000-comment determinism storm (extension)" {
     defer b.deinit(testing.allocator);
     try testing.expectEqualSlices(u8, a.items, b.items);
     try testing.expectEqual(@as(usize, 0), std.mem.count(u8, a.items, "%%"));
+}
+
+test "markdown: an unclosed `$` opener storm stays linear (extension)" {
+    // Every `$5` opens (non-space right) but no `$` closes (each is
+    // preceded by a space). Each opener used to rescan to the paragraph
+    // end — O(n²); 100,000 openers took minutes. Completion is the bound.
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var k: usize = 0;
+    while (k < 100_000) : (k += 1) try input.appendSlice(testing.allocator, "$5 ");
+    var out = try renderMathHtml(input.items);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), std.mem.count(u8, out.items, "<span class=\"math"));
+    try testing.expectEqual(@as(usize, 100_000), std.mem.count(u8, out.items, "$5"));
+
+    // An exhausted single-`$` search never blocks `$$…$$` later on.
+    var mixed = try renderMathHtml("$5 $6 $$x$$ and $7\n");
+    defer mixed.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>$5 $6 <span class=\"math display\">x</span> and $7</p>\n", mixed.items);
 }
 
 fn renderSmartypantsHtml(input: []const u8) !std.ArrayList(u8) {
