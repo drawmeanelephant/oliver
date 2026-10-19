@@ -3927,18 +3927,26 @@ fn allMathSpace(s: []const u8) bool {
 /// leading whitespace, and line endings join as `\n` — never spaces, so
 /// a TeX `%` comment cannot swallow the rest of the formula
 /// (docs/MATH.md §1 "Content"). A single-line span borrows the source.
-fn mathContent(doc: *document.Document, contents: []const source.Span, content: source.Span) ParseError![]const u8 {
+///
+/// `li` is the caller's cursor into `contents`: math spans are
+/// materialized in source order, so the first line that can touch a span
+/// never moves backward and each line is passed once per paragraph
+/// (issue #199). Lines before `li.*` end at or before the content start,
+/// so every line at or past it with `start < content.end` touches the
+/// span.
+fn mathContent(doc: *document.Document, contents: []const source.Span, content: source.Span, li: *usize) ParseError![]const u8 {
     const bytes = doc.src.bytes;
+    while (li.* < contents.len and contents[li.*].end <= content.start) li.* += 1;
     var lines_touched: usize = 0;
-    for (contents) |l| {
-        if (l.end > content.start and l.start < content.end) lines_touched += 1;
-    }
+    var j = li.*;
+    while (j < contents.len and contents[j].start < content.end) : (j += 1) lines_touched += 1;
     if (lines_touched <= 1) return bytes[content.start..content.end];
 
     var buf = std.ArrayList(u8).empty;
     var seen: usize = 0;
-    for (contents) |l| {
-        if (l.end <= content.start or l.start >= content.end) continue;
+    j = li.*;
+    while (j < contents.len and contents[j].start < content.end) : (j += 1) {
+        const l = contents[j];
         var s: u32 = @max(l.start, content.start);
         const e: u32 = @min(l.end, content.end);
         if (seen > 0) {
@@ -4014,6 +4022,9 @@ fn mergeConstructs(
     var ti: usize = 0;
     var mi: usize = 0;
     var ci: usize = 0;
+    // Line cursor for `mathContent`: math spans arrive in source order,
+    // so the touched-line walk never restarts (issue #199).
+    var li: usize = 0;
     var last_end: u32 = 0;
     while (si < spans.len or ti < tags.len or mi < maths.len or ci < comments.len) {
         // The earliest unaccepted construct starts next.
@@ -4048,7 +4059,7 @@ fn mergeConstructs(
                     .kind = .math,
                     .span = maths[mi].span,
                     .content = .{ .start = 0, .end = 0 },
-                    .tex = try mathContent(doc, contents, maths[mi].content),
+                    .tex = try mathContent(doc, contents, maths[mi].content, &li),
                     .display = maths[mi].display,
                 });
                 last_end = maths[mi].span.end;
@@ -9691,6 +9702,59 @@ test "markdown: an unclosed `$` opener storm stays linear (extension)" {
     var mixed = try renderMathHtml("$5 $6 $$x$$ and $7\n");
     defer mixed.deinit(testing.allocator);
     try testing.expectEqualStrings("<p>$5 $6 <span class=\"math display\">x</span> and $7</p>\n", mixed.items);
+}
+
+test "markdown: math content materialization stays linear across a paragraph (extension, issue #199)" {
+    // Every accepted math span used to re-walk the whole per-line content
+    // list to count touched lines — O(M·L) for M spans over L lines. A
+    // line cursor shared across the merge keeps it linear; completion is
+    // the bound and the bytes are pinned.
+    const n = 20_000;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var expected = std.ArrayList(u8).empty;
+    defer expected.deinit(testing.allocator);
+    // The isolation shape from the issue: n−1 plain lines, then all n
+    // spans on the last line. The scan is already linear here; only the
+    // mathContent line walk was quadratic.
+    var k: usize = 0;
+    while (k < n - 1) : (k += 1) try input.appendSlice(testing.allocator, "b\n");
+    try expected.appendSlice(testing.allocator, "<p>");
+    k = 0;
+    while (k < n - 1) : (k += 1) try expected.appendSlice(testing.allocator, "b\n");
+    k = 0;
+    while (k < n) : (k += 1) {
+        if (k > 0) {
+            try input.append(testing.allocator, ' ');
+            try expected.append(testing.allocator, ' ');
+        }
+        try input.appendSlice(testing.allocator, "$a$");
+        try expected.appendSlice(testing.allocator, "<span class=\"math inline\">a</span>");
+    }
+    try input.append(testing.allocator, '\n');
+    try expected.appendSlice(testing.allocator, "</p>\n");
+    var cluster = try renderMathHtml(input.items);
+    defer cluster.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, expected.items, cluster.items);
+
+    // One span per line: the same construct list the per-line scan walks.
+    input.clearRetainingCapacity();
+    expected.clearRetainingCapacity();
+    try expected.appendSlice(testing.allocator, "<p>");
+    k = 0;
+    while (k < n) : (k += 1) {
+        if (k > 0) {
+            try input.append(testing.allocator, '\n');
+            try expected.append(testing.allocator, '\n');
+        }
+        try input.appendSlice(testing.allocator, "$a$");
+        try expected.appendSlice(testing.allocator, "<span class=\"math inline\">a</span>");
+    }
+    try input.append(testing.allocator, '\n');
+    try expected.appendSlice(testing.allocator, "</p>\n");
+    var perline = try renderMathHtml(input.items);
+    defer perline.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, expected.items, perline.items);
 }
 
 fn renderSmartypantsHtml(input: []const u8) !std.ArrayList(u8) {
