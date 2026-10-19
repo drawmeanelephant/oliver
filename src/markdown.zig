@@ -3132,8 +3132,14 @@ fn parseMultilineBlockInlines(
 
     // A construct consumed by an autolink (first-come at the `<`) is dead
     // for the whole paragraph, including lines scanned later; `exclude` is
-    // the shared floor for the per-line scans.
+    // the shared floor for the per-line scans. `ci` is the shared
+    // construct cursor: the lines are scanned in order over a sorted,
+    // disjoint list, so the skip walk is amortized across the paragraph
+    // instead of restarting per line (issue #198). `ti` is the same kind
+    // of cursor for the per-line terminator checks.
     var exclude: u32 = 0;
+    var ci: usize = 0;
+    var ti: usize = 0;
     for (lines, 0..) |ref, i| {
         const has_following_content_line = i + 1 < lines.len;
         const end = analyzeLineEnd(doc.src.bytes, ref.content, has_following_content_line);
@@ -3146,13 +3152,13 @@ fn parseMultilineBlockInlines(
         else
             ref.content;
         const start = skipLeadingWhitespace(doc.src.bytes, raw);
-        try scanLine(doc, &items, raw, .{ .start = start, .end = end.content_end }, constructs.items, &exclude, options);
+        try scanLine(doc, &items, raw, .{ .start = start, .end = end.content_end }, constructs.items, &ci, &exclude, options);
         if (has_following_content_line) {
             // A line ending inside a construct (code span content — §6.1
             // "line endings are converted to spaces" — or a raw HTML tag)
             // is construct content, never a break: hard line breaks do not
             // occur inside code spans or HTML tags (§6.1/§6.6).
-            if (!terminatorInsideConstruct(ref.terminator, constructs.items)) {
+            if (!terminatorInsideConstruct(ref.terminator, constructs.items, &ti)) {
                 try items.append(doc.allocator(), .{ .brk = .{ .kind = end.kind, .span = ref.terminator } });
             }
         }
@@ -3358,7 +3364,8 @@ fn parseTableCellInlines(
     defer constructs.deinit(doc.allocator());
     try mergeConstructs(doc, &[_]source.Span{content}, spans.items, tags.items, maths.items, comments.items, &constructs);
     var exclude: u32 = 0;
-    try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
+    var ci: usize = 0;
+    try scanLine(doc, &items, content, content, constructs.items, &ci, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
     try matchInlines(doc, node, items.items, options);
     try fixCellCodeSpans(doc, node);
@@ -3437,7 +3444,8 @@ fn parseHeadingInlines(
     defer constructs.deinit(doc.allocator());
     try mergeConstructs(doc, &[_]source.Span{content}, spans.items, tags.items, maths.items, comments.items, &constructs);
     var exclude: u32 = 0;
-    try scanLine(doc, &items, content, content, constructs.items, &exclude, options);
+    var ci: usize = 0;
+    try scanLine(doc, &items, content, content, constructs.items, &ci, &exclude, options);
     try discoverLinksAndImages(doc, &items, content.end, defs, options);
     try matchInlines(doc, node, items.items, options);
 }
@@ -3790,12 +3798,18 @@ fn discoverCodeSpans(doc: *document.Document, contents: []const source.Span, spa
 /// construct content, not a soft/hard break. The resolved list already
 /// dropped first-come losers, so a terminator inside a dead span is a
 /// normal break.
-fn terminatorInsideConstruct(term: source.Span, constructs: []const Construct) bool {
-    for (constructs) |c| {
-        if (c.span.start > term.start) return false; // sorted; later constructs are past it
-        if (term.start < c.span.end) return true;
-    }
-    return false;
+fn terminatorInsideConstruct(term: source.Span, constructs: []const Construct, ti: *usize) bool {
+    // The paragraph's terminators are checked in order and the construct
+    // list is sorted and disjoint, so a caller-owned cursor can advance
+    // past constructs that end at or before the terminator instead of
+    // rescanning the list per line (issue #198). Autolink-killed spans
+    // stay in the list and still count here, so this cursor is separate
+    // from scanLine's: it never applies the `exclude` floor.
+    while (ti.* < constructs.len and constructs[ti.*].span.end <= term.start) ti.* += 1;
+    // constructs[ti.*] is the first construct still open at term.start;
+    // it contains the terminator iff it also starts there or earlier
+    // (sorted: every later construct starts past it).
+    return ti.* < constructs.len and constructs[ti.*].span.start <= term.start;
 }
 
 /// Discovers math spans (docs/MATH.md §1) over the concatenated raw
@@ -5197,55 +5211,61 @@ fn scanLine(
     raw: source.Span,
     emit: source.Span,
     constructs: []const Construct,
+    ci: *usize,
     exclude: *u32,
     options: Options,
 ) ParseError!void {
     const bytes = doc.src.bytes;
     var i = raw.start;
     var run_start = raw.start;
-    var ci: usize = 0;
     // Skip constructs that closed before this line, or that an autolink
     // consumed on an earlier line (first-come: they are dead for the rest
-    // of the paragraph — docs/RAW-HTML.md §2).
-    while (ci < constructs.len and
-        (constructs[ci].span.end <= raw.start or constructs[ci].span.start < exclude.*))
+    // of the paragraph — docs/RAW-HTML.md §2). The cursor is the caller's:
+    // a paragraph's lines are scanned in order and the construct list is
+    // sorted and disjoint, so each construct is passed once per block, not
+    // once per line (issue #198).
+    while (ci.* < constructs.len and
+        (constructs[ci.*].span.end <= raw.start or constructs[ci.*].span.start < exclude.*))
     {
-        ci += 1;
+        ci.* += 1;
     }
     while (i < raw.end) : (i += 1) {
+        // Advance the cursor past constructs fully behind the scan
+        // position. A consumed construct stays at the cursor until its
+        // end is passed — it may continue on a later line, and the next
+        // line's scan must still see it.
+        while (ci.* < constructs.len and constructs[ci.*].span.end <= i) ci.* += 1;
         // Inside a construct that opened on an earlier line: skip to its
         // end; the item was appended when the construct opened.
-        if (ci < constructs.len and i > constructs[ci].span.start and i < constructs[ci].span.end) {
-            i = constructs[ci].span.end - 1;
-            run_start = constructs[ci].span.end;
-            ci += 1;
+        if (ci.* < constructs.len and i > constructs[ci.*].span.start and i < constructs[ci.*].span.end) {
+            i = constructs[ci.*].span.end - 1;
+            run_start = constructs[ci.*].span.end;
             continue;
         }
         // At a construct opening: flush the preceding text, append the
         // construct item, skip the whole construct.
-        if (ci < constructs.len and i == constructs[ci].span.start) {
+        if (ci.* < constructs.len and i == constructs[ci.*].span.start) {
             try appendTextItem(doc, items, .{ .start = run_start, .end = i }, emit);
-            switch (constructs[ci].kind) {
+            switch (constructs[ci.*].kind) {
                 .code_span => try items.append(doc.allocator(), .{
-                    .code_span = .{ .span = constructs[ci].span, .content = constructs[ci].content },
+                    .code_span = .{ .span = constructs[ci.*].span, .content = constructs[ci.*].content },
                 }),
                 .html_tag => try items.append(doc.allocator(), .{
-                    .raw_html = .{ .span = constructs[ci].span },
+                    .raw_html = .{ .span = constructs[ci.*].span },
                 }),
                 .math => try items.append(doc.allocator(), .{
                     .math = .{
-                        .span = constructs[ci].span,
-                        .tex = constructs[ci].tex,
-                        .display = constructs[ci].display,
+                        .span = constructs[ci.*].span,
+                        .tex = constructs[ci.*].tex,
+                        .display = constructs[ci.*].display,
                     },
                 }),
                 // Inline comment (docs/COMMENTS.md §2): removed
                 // entirely — no item is ever produced.
                 .comment => {},
             }
-            i = constructs[ci].span.end - 1;
-            run_start = constructs[ci].span.end;
-            ci += 1;
+            i = constructs[ci.*].span.end - 1;
+            run_start = constructs[ci.*].span.end;
             continue;
         }
         const b = bytes[i];
@@ -5336,7 +5356,7 @@ fn scanLine(
                 // inside the consumed `<...>`, and record the exclusion so
                 // later lines keep them dead (their closers cannot revive
                 // them — docs/RAW-HTML.md §2).
-                while (ci < constructs.len and constructs[ci].span.start < al.span.end) ci += 1;
+                while (ci.* < constructs.len and constructs[ci.*].span.start < al.span.end) ci.* += 1;
                 if (al.span.end > exclude.*) exclude.* = al.span.end;
             }
             // No match: fall through; the `<` is literal text.
@@ -8809,6 +8829,85 @@ test "markdown: deep container stack plus blank-line storm stays fast (issue #18
     try oliver.html.render(testing.allocator, &aw_b.writer, &b.document, .{});
     try testing.expectEqualSlices(u8, aw_a.writer.buffered(), aw_b.writer.buffered());
     try testing.expectEqual(@as(usize, 2_000), std.mem.count(u8, aw_a.writer.buffered(), "<ul>"));
+}
+
+test "markdown: per-line constructs stay linear across a paragraph (issue #198)" {
+    // One construct per line used to rescan the resolved construct list
+    // from the top for every line — O(C·L) for C constructs over L lines.
+    // The scan shares one construct cursor across the paragraph's lines
+    // now; completion is the bound and the bytes are pinned.
+    const n = 20_000;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var expected = std.ArrayList(u8).empty;
+    defer expected.deinit(testing.allocator);
+    try expected.appendSlice(testing.allocator, "<p>");
+    var k: usize = 0;
+    while (k < n) : (k += 1) {
+        if (k > 0) {
+            try input.append(testing.allocator, '\n');
+            try expected.append(testing.allocator, '\n');
+        }
+        try input.appendSlice(testing.allocator, "`a`");
+        try expected.appendSlice(testing.allocator, "<code>a</code>");
+    }
+    try expected.appendSlice(testing.allocator, "</p>\n");
+    var out = try renderMarkdownHtml(input.items);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, expected.items, out.items);
+
+    // Same shape with raw HTML tags.
+    input.clearRetainingCapacity();
+    expected.clearRetainingCapacity();
+    try expected.appendSlice(testing.allocator, "<p>");
+    k = 0;
+    while (k < n) : (k += 1) {
+        if (k > 0) {
+            try input.append(testing.allocator, '\n');
+            try expected.append(testing.allocator, '\n');
+        }
+        try input.appendSlice(testing.allocator, "<i>x</i>");
+        try expected.appendSlice(testing.allocator, "<i>x</i>");
+    }
+    try expected.appendSlice(testing.allocator, "</p>\n");
+    var html_out = try renderMarkdownHtml(input.items);
+    defer html_out.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, expected.items, html_out.items);
+
+    // The isolation shape from the issue: the spans all sit on the first
+    // line, and the plain lines behind them used to rescan the list.
+    input.clearRetainingCapacity();
+    expected.clearRetainingCapacity();
+    try expected.appendSlice(testing.allocator, "<p>");
+    k = 0;
+    while (k < n) : (k += 1) {
+        if (k > 0) try input.append(testing.allocator, ' ');
+        try input.appendSlice(testing.allocator, "`a`");
+        if (k > 0) try expected.append(testing.allocator, ' ');
+        try expected.appendSlice(testing.allocator, "<code>a</code>");
+    }
+    k = 0;
+    while (k < n) : (k += 1) {
+        try input.appendSlice(testing.allocator, "\nx");
+        try expected.appendSlice(testing.allocator, "\nx");
+    }
+    try expected.appendSlice(testing.allocator, "</p>\n");
+    var front = try renderMarkdownHtml(input.items);
+    defer front.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, expected.items, front.items);
+}
+
+test "markdown: per-line comments stay linear across a paragraph (extension, issue #198)" {
+    // `%%…%%` joins the same resolved construct list, so the shared
+    // cursor covers it too: n comment-only lines leave no paragraph.
+    const n = 20_000;
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(testing.allocator);
+    var k: usize = 0;
+    while (k < n) : (k += 1) try input.appendSlice(testing.allocator, "%%a%%\n");
+    var out = try renderCommentsHtml(input.items);
+    defer out.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, "", out.items);
 }
 
 test "markdown: callout parses type and title onto the blockquote (extension)" {
