@@ -182,6 +182,11 @@ Wraps text in `<del>` when it is surrounded by a matching pair of exactly
   left-flanking, closing needs right-flanking), and strikethrough cannot
   span paragraph boundaries. Within a paragraph it may span soft-wrapped
   lines, and it composes with emphasis, links, code spans, and tables.
+- `~~` runs keep their own `openers_bottom` row, clamped like the
+  emphasis rows whenever a match pops the delimiter stack. Before issue
+  #189 the `~` row was never clamped, so a stale bottom could hide a
+  later opener: ``*~~* ~~`~~`` left ``~~`~~`` literal and now renders
+  ``<em>~~</em> <del>`</del>``.
 - `~~` delimiters never interact with `*`/`_` emphasis runs, and the
   block-level definition-list `~` marker is unaffected (definitions require
   a `~` at line start; a two-tilde run never matches).

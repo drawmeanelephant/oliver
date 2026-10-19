@@ -8193,6 +8193,19 @@ test "markdown: strikethrough is literal text when disabled" {
     try testing.expectEqualStrings("~~Hi~~", p.children.items[0].data.text);
 }
 
+test "markdown: a popped `~` openers_bottom is clamped (extension)" {
+    // The `*` match pops the stack below the `~` row's bottom; an
+    // unclamped `~` bottom stayed stale past the stack and hid the
+    // later `~~` opener, leaving `~~`~~` literal.
+    const oliver = @import("oliver.zig");
+    var result = try oliver.parse(testing.allocator, "*~~* ~~`~~", .markdown, ext_parse(.{ .strikethrough = true }));
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    try testing.expectEqualStrings("<p><em>~~</em> <del>`</del></p>\n", aw.written());
+}
+
 test "markdown: wikilinks parse into a .wikilink node with target and label (extension)" {
     const oliver = @import("oliver.zig");
     var result = try oliver.parse(
