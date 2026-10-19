@@ -1058,12 +1058,13 @@ pub fn parse(doc: *document.Document, diags: *std.ArrayList(diagnostic.Diagnosti
         switch (job) {
             .paragraph => |pp| {
                 try parseParagraphInlines(doc, pp.node, pp.lines, pp.task_checkbox, &defs, options);
-                // A paragraph whose inlines are empty once comments are
-                // removed is not emitted (docs/COMMENTS.md §2) — other
+                // A paragraph whose inlines are empty or only whitespace
+                // once comments are removed is not emitted
+                // (docs/COMMENTS.md §2) — other
                 // block shapes (headings, list items, definition terms)
                 // keep their CommonMark containers.
                 if (options.comments and pp.node.tag == .paragraph and
-                    pp.parent.tag != .footnote and pp.node.children.items.len == 0)
+                    pp.parent.tag != .footnote and isBlankInlines(pp.node))
                 {
                     removeChild(pp.parent, pp.node);
                 }
@@ -1963,6 +1964,23 @@ fn commentCloseMarker(bytes: []const u8, view: View) ?struct { i: usize, col: u3
         i += 1;
     }
     return null;
+}
+
+/// True when a block's inlines are "empty or only whitespace"
+/// (docs/COMMENTS.md §2): no children, or only space/tab text and line
+/// breaks — what `%%a%% %%b%%` or a hard break between two comments
+/// leaves behind. Any other inline is content.
+fn isBlankInlines(node: *const document.Node) bool {
+    for (node.children.items) |c| {
+        switch (c.tag) {
+            .soft_break, .hard_break => {},
+            .text => for (c.data.text) |b| {
+                if (b != ' ' and b != '\t') return false;
+            },
+            else => return false,
+        }
+    }
+    return true;
 }
 
 /// Detaches a child node from its parent — used to suppress a
@@ -9133,6 +9151,15 @@ test "markdown: comment-only paragraphs and headings (extension)" {
         "<p>keep</p>\n<h1></h1>\n<ul>\n<li></li>\n</ul>\n",
         out.items,
     );
+    // "Empty or only whitespace": the space between two comments, and a
+    // hard break between comment lines, leave no paragraph behind.
+    var ws = try renderCommentsHtml("keep\n\n%%a%% %%b%%\n\n%%a%%  \n%%b%%\n\n%%a%%\\\n%%b%%\n\n> %%a%%\t%%b%%\n");
+    defer ws.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p>keep</p>\n<blockquote>\n</blockquote>\n", ws.items);
+    // Any real inline keeps the paragraph.
+    var kept = try renderCommentsHtml("%%a%% x\n\n%%a%% `c`\n");
+    defer kept.deinit(testing.allocator);
+    try testing.expectEqualStrings("<p> x</p>\n<p> <code>c</code></p>\n", kept.items);
 }
 
 test "markdown: block comments hide through the close and resume (extension)" {

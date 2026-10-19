@@ -62,7 +62,9 @@ knap 0.6.0's `comment` filter emits `%%x%%` (KNAP-FIDELITY.md §2).
   deletion.
 - **Empty paragraphs:** a paragraph whose inlines are empty or only
   whitespace once comments are removed is **not emitted**. A line that
-  is only `%%x%%` produces nothing. Headings and list items keep their
+  is only `%%x%%` produces nothing, and neither does `%%a%% %%b%%` or
+  two comment lines joined by a hard break: spaces, tabs, and line
+  breaks all count as whitespace here. Headings and list items keep their
   CommonMark shapes: `# %%x%%` is an empty `<h1></h1>`, just as `#`
   alone is.
 - **Link reference definitions** are extracted before inline parsing
