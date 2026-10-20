@@ -189,14 +189,23 @@ src/cooklang.zig and/or fixtures, never an accident.
   is two ingredients; `@salt, @ground black pepper{2}` keeps `@salt`
   single-word at the comma; `@1000 island dressing{ }` keeps the whole
   phrase.
-- **Single-word boundary = Unicode whitespace (Zs + TAB) or P-category
-  punctuation only.** Symbols (S categories) are *not* boundaries — the
-  corpus's `@🧂` (So category) requires this. A new P-only predicate in
-  `src/unicode.zig` backs this (deliberately generalized shared
-  primitive; see CLEANROOM session 21).
+- **Single-word boundary = Unicode whitespace (Zs + TAB), P-category
+  punctuation, or a following token marker (`@`/`#`/`~`).** Symbols
+  (S categories) are *not* boundaries in general — the corpus's `@🧂`
+  (So category) requires this — but the three markers are the explicit
+  exception: they can never appear inside a name, so `@a~b{2%kg}` is
+  ingredient `a` plus timer `b`{2%kg} rather than a name `a~b` whose
+  quantity fell to prose. A new P-only predicate in `src/unicode.zig`
+  backs this (deliberately generalized shared primitive; see CLEANROOM
+  session 21). A `~~` pair is literal text outright (GFM
+  strikethrough territory), so `~~x~~` never mints a timer.
 - **Invalid tokens degrade to text, not errors.** `Message me @ example`
   → one text part (corpus: invalid single/multi-word tests are text).
-  The marker must be immediately followed by a word character.
+  The marker must be immediately followed by a word character. Nested
+  delimiters degrade the same way, silently: a `{` inside a closed
+  `{quantity}` makes the whole token literal prose, and a `(` inside a
+  closed `(preparation)` leaves the group as trailing text after the
+  still-valid ingredient.
 - **Block comments** `[- ... -]` may span lines (EBNF). An unclosed `[-`
   with no `-]` to end of input is **literal text** (the construct fails
   to form — the same literal-fallback policy, with the structural warning

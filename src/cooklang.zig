@@ -448,6 +448,13 @@ fn findBlockComments(parser: *Parser) ParseError![]source.Span {
                 i += 2;
                 continue;
             }
+            // A `~~` pair is literal text: a `~` name can never contain
+            // `~`, so retrying the marker at the second byte would mint
+            // a phantom timer out of `~~x~~` (boris#1123).
+            if (bytes[i] == '~' and i + 1 < line.content_end and bytes[i + 1] == '~') {
+                i += 2;
+                continue;
+            }
             if (bytes[i] == '@' or bytes[i] == '#' or bytes[i] == '~') {
                 if (try tryToken(&ps, i, line.content_end)) |token| {
                     i = token.span.end;
@@ -826,6 +833,14 @@ fn scanLineRange(ps: *ParaState, para: []const source.Span, li: usize, start: us
             continue;
         }
         const b = bytes[i];
+        // A `~~` pair is literal text (GFM strikethrough territory): a
+        // timer name can never contain `~`, so retrying the marker at
+        // the second byte would mint a phantom timer out of `~~x~~`
+        // (boris#1123).
+        if (b == '~' and i + 1 < line_end and bytes[i + 1] == '~') {
+            i += 2;
+            continue;
+        }
         if (b == '@' or b == '#' or b == '~') {
             if (try tryToken(ps, i, line_end)) |t| {
                 if (i > text_start) {
@@ -989,6 +1004,11 @@ fn tryToken(ps: *ParaState, marker_pos: usize, line_end: usize) ParseError!?Toke
         const name = bytes[name_tr.s..name_tr.e];
 
         const content_start = b + 1;
+        // Braces do not nest: a `{` inside the closed quantity made the
+        // token's extent ambiguous, so the whole token degrades to
+        // literal text — ordinary prose, silently, like the corpus's
+        // other near-misses (boris#1123).
+        if (findScalar(bytes, content_start, close, '{') != null) return null;
         // `%units` is an ingredient/timer segment — cookware has no
         // units per the spec, so `%` inside cookware braces is ordinary
         // quantity text (kept verbatim; nothing is silently dropped).
@@ -1007,10 +1027,16 @@ fn tryToken(ps: *ParaState, marker_pos: usize, line_end: usize) ParseError!?Toke
         var token_end = close + 1;
         if (kind == .ingredient and token_end < line_end and bytes[token_end] == '(') {
             if (findScalar(bytes, token_end + 1, line_end, ')')) |pc| {
-                const pr = trimRegion(bytes, token_end + 1, pc);
-                preparation = bytes[pr.s..pr.e];
-                preparation_span = .{ .start = @intCast(token_end), .end = @intCast(pc + 1) };
-                token_end = pc + 1;
+                // Parentheses do not nest either: a `(` inside the closed
+                // group made its extent ambiguous, so the group stays
+                // literal text after the token — ordinary prose — instead
+                // of being captured as a truncated preparation (boris#1123).
+                if (findScalar(bytes, token_end + 1, pc, '(') == null) {
+                    const pr = trimRegion(bytes, token_end + 1, pc);
+                    preparation = bytes[pr.s..pr.e];
+                    preparation_span = .{ .start = @intCast(token_end), .end = @intCast(pc + 1) };
+                    token_end = pc + 1;
+                }
             } else {
                 // A `(` right after the closing brace with no `)` on the
                 // line: an unclosed shorthand preparation. The `(` stays
@@ -1035,11 +1061,17 @@ fn tryToken(ps: *ParaState, marker_pos: usize, line_end: usize) ParseError!?Toke
         };
     }
     // Single-word form: no `{` on the line. The word runs while the
-    // code point is neither whitespace nor P-category punctuation.
+    // code point is neither whitespace nor P-category punctuation — and
+    // stops at a following token marker, the same boundary the multiword
+    // scan above honors. `~` is a symbol (Sm), not P-category, so
+    // without the explicit check `@a~b{2%kg}` absorbed `~b` into the
+    // name and dropped the braced quantity to prose, and `~~x~~`
+    // minted a timer named `~x~~` (boris#1123).
     const word_start = i;
     var k = i;
     while (k < line_end) {
         if (unicode.decode(bytes, k)) |cp| {
+            if (cp == '@' or cp == '#' or cp == '~') break;
             if (unicode.isWhitespace(cp) or unicode.isPunctuationP(cp)) break;
             k += cpLen(bytes[k]);
         } else {
@@ -1419,6 +1451,58 @@ test "cooklang: touching brace still forms the multiword name with quantity" {
     try expectParts(step.parts, &.{"ground black pepper"});
     const ig = step.parts[1].ingredient;
     try std.testing.expectEqualStrings("2", ig.quantity.?);
+}
+
+test "cooklang: a sigil ends a single-word name and starts the next token" {
+    // `~` is a symbol (Sm), not P-category, so the single-word scan must
+    // stop at it explicitly — the same boundary the multiword scan honors
+    // (boris#1123). `@a~b{2%kg}` is ingredient `a` plus timer `b`{2%kg};
+    // the quantity rides the timer's duration instead of being dropped.
+    var res = try parseT(std.testing.allocator, "Add @a~b{2%kg} and stir.");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try expectParts(step.parts, &.{ "a", "b" });
+    const ig = step.parts[1].ingredient;
+    try std.testing.expect(ig.quantity == null);
+    const tm = step.parts[2].timer;
+    try std.testing.expectEqualStrings("2", tm.quantity.?);
+    try std.testing.expectEqualStrings("kg", tm.units.?);
+}
+
+test "cooklang: ~~ pairs stay literal and never mint timers" {
+    // `~~` is strikethrough-looking prose, not two timer markers: without
+    // the pair skip, the second `~` retried the marker and minted a
+    // phantom timer (boris#1123).
+    var res = try parseT(std.testing.allocator, "Strike ~~x~~ now.");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try std.testing.expectEqual(@as(usize, 1), step.parts.len);
+    try std.testing.expectEqualStrings("Strike ~~x~~ now.", step.parts[0].text.text);
+}
+
+test "cooklang: a nested { in a quantity degrades the token to prose" {
+    // Braces do not nest; the closed span `2{3` cannot be an amount, so
+    // the whole token stays literal rather than capturing truncated
+    // garbage (boris#1123).
+    var res = try parseT(std.testing.allocator, "Add @flour{2{3} and stir.");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try std.testing.expectEqual(@as(usize, 1), step.parts.len);
+    try std.testing.expectEqualStrings("Add @flour{2{3} and stir.", step.parts[0].text.text);
+}
+
+test "cooklang: a nested ( in a preparation stays literal text after the token" {
+    // The closed group `fine (grain` cannot be a preparation, so it stays
+    // trailing prose while the well-formed ingredient still parses
+    // (boris#1123).
+    var res = try parseT(std.testing.allocator, "Add @sugar{1}(fine (grain) and stir.");
+    defer res.deinit();
+    const step = res.recipe.blocks[0].step;
+    try expectParts(step.parts, &.{"sugar"});
+    const ig = step.parts[1].ingredient;
+    try std.testing.expectEqualStrings("1", ig.quantity.?);
+    try std.testing.expect(ig.preparation == null);
+    try std.testing.expectEqualStrings("(fine (grain) and stir.", step.parts[2].text.text);
 }
 
 test "cooklang: unnamed timer form keeps its touching brace" {
