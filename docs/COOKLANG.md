@@ -210,6 +210,15 @@ src/cooklang.zig and/or fixtures, never an accident.
   line's first content byte — the terminator is trivia, so the following
   line joins with a space rather than leaking a raw newline into the
   text value (#159).
+  **Removal is a pure deletion:** whitespace flanking a `[- -]` is kept
+  verbatim, never collapsed — `x [- c -] y` yields the text `x  y` (two
+  spaces), and a `-]` at content end can stack the join space onto a
+  preserved space before `[-` (`x [- c -]\ny` → `x  y`). This matches
+  the `--` line-comment policy below and the `%%` Markdown-comments
+  contract (docs/COMMENTS.md §8), which the canonical corpus pins
+  (`"  and some text"`). Consumers that join step text into prose —
+  ingredient lists, menus, HTML renderings — normalize whitespace
+  themselves if they want single spaces (issue #197).
 - **Preparations and `%units` are kind-scoped.** The shorthand
   `(preparation)` attaches to ingredients only, and `%` splits the
   quantity only on ingredients and timers — per the spec, preparations
