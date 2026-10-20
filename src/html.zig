@@ -164,7 +164,11 @@ pub const RenderOptions = struct {
     /// `[^label]` reference becomes a footnote-ref link numbered in
     /// first-reference order, and a `<section class="footnotes">` block is
     /// appended at the end of the document with the used definitions and
-    /// their back-references. Off by default.
+    /// their back-references. Off by default. When off, parsed footnote
+    /// syntax degrades to its literal source bytes — `[^label]`
+    /// references as text, and definitions as literal paragraphs at
+    /// their source positions (issue #203) — rather than dropping
+    /// characters.
     footnotes: bool = false,
     /// Resolve `.wikilink` nodes (the `wikilinks` parse extension,
     /// docs/WIKILINKS.md §5). Null uses the default policy: the href is
@@ -351,7 +355,7 @@ pub fn render(gpa: std.mem.Allocator, writer: anytype, doc: *const document.Docu
             .enter => |f| {
                 if (f.prefix_newline) try writer.writeByte('\n');
                 try writeOpen(gpa, writer, &stack, f.node, f.suppress_p, f.footnote_backref, options, doc.src.bytes, &fn_ctx);
-                try pushChildren(gpa, &stack, f.node, f.tight_item, options);
+                try pushChildren(gpa, &stack, f.node, f.tight_item, options, doc);
             },
             .marker => |text| try writer.writeAll(text),
             .backref => |n| try writeBackrefs(writer, &fn_ctx, n, options),
@@ -409,13 +413,81 @@ const Frame = union(enum) {
     exit: struct { node: *const document.Node, suppress_p: bool, footnote_backref: u32 },
 };
 
+/// The block children `pushChildren` emits for `node`, in render order.
+/// Normally the node's own children — but the Markdown footnote
+/// definitions the parser extracted into `doc.footnotes` are not tree
+/// children, so when the `footnotes` render option is off they are merged
+/// back in at their source positions (issue #203): a definition belongs
+/// to the deepest container whose span covers it, sorting among that
+/// container's children by span start. Returns null when nothing merges —
+/// the option on, no parsed definitions, or no definition positioned
+/// directly under `node` — so callers use `node.children.items`.
+fn mergedChildren(
+    gpa: std.mem.Allocator,
+    node: *const document.Node,
+    doc: *const document.Document,
+    options: RenderOptions,
+) !?[]*const document.Node {
+    if (options.footnotes or doc.footnotes.items.len == 0) return null;
+    // Only containers whose children are blocks can position a
+    // definition — the frontends only extract them from paragraphs under
+    // these, and keeping the list explicit means a hand-built document
+    // with overlapping spans can never nest a literal `<p>` inside an
+    // inline container like `.paragraph` or `.heading`.
+    switch (node.tag) {
+        .document, .block_quote, .list, .list_item, .definition_list, .definition_body => {},
+        else => return null,
+    }
+    const kids = node.children.items;
+    var defs = std.ArrayList(*const document.Node).empty;
+    defer defs.deinit(gpa);
+    for (doc.footnotes.items) |fd| {
+        const s = fd.node.span;
+        if (s.start < node.span.start or s.end > node.span.end) continue;
+        var covered = false;
+        for (kids) |c| {
+            if (s.start >= c.span.start and s.end <= c.span.end) {
+                covered = true;
+                break;
+            }
+        }
+        if (covered) continue;
+        // Insertion-sort the definition into the slice by span start;
+        // children are already in source order.
+        var pos = defs.items.len;
+        while (pos > 0 and defs.items[pos - 1].span.start > s.start) pos -= 1;
+        try defs.insert(gpa, pos, fd.node);
+    }
+    if (defs.items.len == 0) return null;
+    var out = try std.ArrayList(*const document.Node).initCapacity(gpa, kids.len + defs.items.len);
+    errdefer out.deinit(gpa);
+    var ci: usize = 0;
+    var di: usize = 0;
+    while (ci < kids.len or di < defs.items.len) {
+        if (di < defs.items.len and (ci >= kids.len or defs.items[di].span.start < kids[ci].span.start)) {
+            out.appendAssumeCapacity(defs.items[di]);
+            di += 1;
+        } else {
+            out.appendAssumeCapacity(kids[ci]);
+            ci += 1;
+        }
+    }
+    return try out.toOwnedSlice(gpa);
+}
+
 fn pushChildren(
     gpa: std.mem.Allocator,
     stack: *std.ArrayList(Frame),
     node: *const document.Node,
     node_tight_item: bool,
     options: RenderOptions,
+    doc: *const document.Document,
 ) !void {
+    // A `.footnote` node's children render only inside the footnotes
+    // section (`pushFootnotesSection` pushes them itself); the body walk
+    // never descends into one. With the render option off the literal
+    // degrade already emitted at `writeOpen` covers the whole span.
+    if (node.tag == .footnote) return;
     // A GFM table's children are rows; the first is the header row, the rest
     // body rows. The `<thead>`/`<tbody>` split is emitted between them as
     // marker frames (GFM §4.10 output; no `<tbody>` with no body rows).
@@ -473,17 +545,24 @@ fn pushChildren(
         try stack.append(gpa, .{ .marker = if (options.profile == .html4_strict and !has_body) "<tbody>\n" else "<thead>\n" });
         return;
     }
+    // Every remaining path walks the node's block children; with the
+    // `footnotes` render option off, parsed footnote definitions rejoin
+    // at their source positions (issue #203). Tables take the early
+    // return above — their cells hold no block children to merge with.
+    const merged = try mergedChildren(gpa, node, doc, options);
+    defer if (merged) |m| gpa.free(m);
+    const children: []const *const document.Node = merged orelse node.children.items;
     // A callout (extension): the title's inline nodes render first
     // (wrapped by the `<div class="callout-title">` opened in `writeOpen`
     // and closed by the marker), then the body blocks — the quote's
     // `children` are pure blocks (docs/CALLOUTS.md §4–§5).
     if (node.tag == .block_quote and node.data.block_quote.callout_type != null) {
         const bq = node.data.block_quote;
-        var i = node.children.items.len;
+        var i = children.len;
         while (i > 0) {
             i -= 1;
             try stack.append(gpa, .{ .enter = .{
-                .node = node.children.items[i],
+                .node = children[i],
                 .tight_item = false,
                 .suppress_p = false,
                 .prefix_newline = false,
@@ -510,18 +589,18 @@ fn pushChildren(
     // item: a single-paragraph body is `<dd>text</dd>` (no `<p>`), while a
     // multi-block body keeps `<p>` wrappers (docs/MARKDOWN-EXTENSIONS.md).
     if (node.tag == .definition_body) {
-        const tight = node.children.items.len == 1 and node.children.items[0].tag == .paragraph;
-        var di = node.children.items.len;
+        const tight = children.len == 1 and children[0].tag == .paragraph;
+        var di = children.len;
         while (di > 0) {
             di -= 1;
-            const c = node.children.items[di];
+            const c = children[di];
             const suppress = tight and c.tag == .paragraph;
             var prefix_newline = false;
             if (c.tag == .paragraph) {
                 prefix_newline = !tight and di == 0;
             } else {
                 prefix_newline = di == 0 or
-                    (tight and di > 0 and node.children.items[di - 1].tag == .paragraph);
+                    (tight and di > 0 and children[di - 1].tag == .paragraph);
             }
             try stack.append(gpa, .{ .enter = .{
                 .node = c,
@@ -533,10 +612,10 @@ fn pushChildren(
         }
         return;
     }
-    var i = node.children.items.len;
+    var i = children.len;
     while (i > 0) {
         i -= 1;
-        const c = node.children.items[i];
+        const c = children[i];
         // An item's direct paragraph children are suppressed iff its list
         // is tight; a list's children (items) carry the tight flag for
         // their own children.
@@ -555,7 +634,7 @@ fn pushChildren(
                 // paragraph needs the separator that the suppressed
                 // paragraph deliberately does not emit.
                 prefix_newline = i == 0 or
-                    (node_tight_item and i > 0 and node.children.items[i - 1].tag == .paragraph);
+                    (node_tight_item and i > 0 and children[i - 1].tag == .paragraph);
             }
         }
         try stack.append(gpa, .{ .enter = .{
@@ -757,9 +836,19 @@ fn writeOpen(
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .footnote => {
-            // A footnote definition node is only rendered inside the
-            // footnotes section; a hand-built document that places one
-            // elsewhere renders nothing.
+            // A footnote definition's structured form renders only
+            // inside the footnotes section (its children are pushed by
+            // `pushFootnotesSection`, never by the body walk). When the
+            // `footnotes` render option is off the definition degrades
+            // to a literal paragraph of its source bytes, rejoined at
+            // its source position by `pushChildren` (issue #203); with
+            // the option on, a `.footnote` reached in the body walk —
+            // only possible in a hand-built document — renders nothing.
+            if (!options.footnotes) {
+                try writer.writeAll("<p>");
+                try writeEscaped(writer, src[node.span.start..node.span.end]);
+                try writer.writeAll("</p>\n");
+            }
             try stack.append(gpa, .{ .exit = .{ .node = node, .suppress_p = false, .footnote_backref = 0 } });
         },
         .thematic_break => {
@@ -879,8 +968,14 @@ fn writeOpen(
                 try writer.writeAll(num);
                 try writer.writeAll("</a></sup>");
             } else {
-                // A hand-built document with an undefined label: literal.
+                // A parsed reference whose rendering is off (the
+                // `footnotes` render option), or a hand-built document
+                // with an undefined label: degrade to the literal
+                // `[^label]` source form instead of dropping the
+                // brackets (issue #203).
+                try writer.writeAll("[^");
                 try writeEscaped(writer, fr.label);
+                try writer.writeByte(']');
             }
         },
         .span => {
@@ -2491,10 +2586,14 @@ test "html: footnote refs and section render in first-reference order" {
         out.items,
     );
 
-    // Without the option, refs with labels render literally.
+    // Without the option, refs degrade to their literal `[^label]`
+    // source form (issue #203). The definitions' empty hand-built spans
+    // sit inside the paragraph's, so they merge nowhere — a parsed
+    // document's definitions rejoin at their source positions instead
+    // (pinned end-to-end in markdown.zig).
     var out2 = try renderDoc(&doc);
     defer out2.deinit(testing.allocator);
-    try testing.expect(std.mem.indexOf(u8, out2.items, "footnote-ref") == null);
+    try testing.expectEqualStrings("<p>Hi[^second] and [^syntax].</p>\n", out2.items);
 }
 
 test "html: repeated footnote references get unique ids and one backref each" {

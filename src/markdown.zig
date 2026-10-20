@@ -8510,6 +8510,61 @@ test "markdown: footnotes are literal text when disabled" {
     try testing.expectEqual(document.Tag.paragraph, result.document.root.children.items[1].tag);
 }
 
+test "markdown: parsed footnotes degrade to literal text when rendering is off (issue #203)" {
+    const oliver = @import("oliver.zig");
+    // Parse extension on + render option off: the parsed `[^label]`
+    // reference and its extracted definition degrade to their literal
+    // source bytes — parsed-but-not-rendered syntax must not drop
+    // characters.
+    var result = try oliver.parse(
+        testing.allocator,
+        "Text with a note.[^a]\n\n[^a]: the footnote\n",
+        .markdown,
+        ext_parse(.{ .footnotes = true }),
+    );
+    defer result.deinit();
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try oliver.html.render(testing.allocator, &aw.writer, &result.document, .{});
+    try testing.expectEqualStrings(
+        "<p>Text with a note.[^a]</p>\n<p>[^a]: the footnote</p>\n",
+        aw.written(),
+    );
+
+    // A definition rejoins at its source position — between the
+    // paragraphs it split, and inside a container.
+    var res2 = try oliver.parse(
+        testing.allocator,
+        "before[^b]\n\n[^b]: note\nafter\n\n> [^c]: quoted\n",
+        .markdown,
+        ext_parse(.{ .footnotes = true }),
+    );
+    defer res2.deinit();
+    var aw2 = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw2.deinit();
+    try oliver.html.render(testing.allocator, &aw2.writer, &res2.document, .{});
+    try testing.expectEqualStrings(
+        "<p>before[^b]</p>\n<p>[^b]: note</p>\n<p>after</p>\n<blockquote>\n<p>[^c]: quoted</p>\n</blockquote>\n",
+        aw2.written(),
+    );
+
+    // …and inside a list item.
+    var res3 = try oliver.parse(
+        testing.allocator,
+        "- item\n\n  [^d]: listed\n",
+        .markdown,
+        ext_parse(.{ .footnotes = true }),
+    );
+    defer res3.deinit();
+    var aw3 = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw3.deinit();
+    try oliver.html.render(testing.allocator, &aw3.writer, &res3.document, .{});
+    try testing.expectEqualStrings(
+        "<ul>\n<li>\n<p>item</p>\n<p>[^d]: listed</p>\n</li>\n</ul>\n",
+        aw3.written(),
+    );
+}
+
 test "markdown: definition lists build dl/dt/dd structure (extension)" {
     const oliver = @import("oliver.zig");
     var result = try oliver.parse(

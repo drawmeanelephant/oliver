@@ -154,6 +154,9 @@ message:  "block comment is never closed; it hides the rest of its container"
 - The comment still runs to the end. This matches Obsidian's
   hide-the-rest-of-the-note behavior; the diagnostic only makes it
   visible.
+- **Consumers must surface this diagnostic.** An unclosed block comment
+  hides the rest of its container — a consumer that ignores `diags`
+  gets silent content loss (issue #197).
 - Unclosed *inline* markers stay literal and are never diagnosed.
 - This is the **first diagnostic the Markdown frontend emits**.
   `markdown.parse` already threads `diags`, and the CLI already surfaces
