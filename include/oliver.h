@@ -120,7 +120,10 @@ typedef struct oliver_buffer {
  * `raw_html`, `heading_ids`, and `footnotes` are the render options;
  * note `footnotes` appears on both sides — OLIVER_MD_FOOTNOTES turns the
  * parse extension on, the `footnotes` argument turns the rendered
- * section on, and both are needed for footnote output.
+ * section on, and both are needed for footnote output. With the parse
+ * flag on and the render flag off, `[^label]` references and
+ * `[^label]:` definitions degrade to their literal source bytes rather
+ * than dropping characters.
  */
 oliver_buffer oliver_render(
     oliver_alloc_fn alloc,

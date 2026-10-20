@@ -111,6 +111,14 @@ specified — authority. Against the reference implementations, on source:
   anchor on its own line before `</li>`.
 - The footnotes section renders only when the `footnotes` render option is
   on **and** at least one reference exists.
+- **Parse-on + render-off degrades to source bytes (issue #203).** When
+  the `footnotes` *parse* extension produced references and definitions
+  but the `footnotes` *render* option is off, nothing is silently
+  dropped: each `[^label]` reference renders as its literal source form
+  `[^label]` (escaped like text), and each extracted definition rejoins
+  the output at its source position as a literal `<p>` of its source
+  bytes — inside whatever container it was written in. The same literal
+  `[^label]` form covers a hand-built document's undefined label.
 
 ## 2. Definition lists (`parse: definition_lists`)
 
