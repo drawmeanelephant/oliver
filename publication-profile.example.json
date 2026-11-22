@@ -21,7 +21,8 @@
       "theme": "themes/oliver",
       "sitemap": { "path": "sitemap.xml" },
       "rss": { "path": "rss.xml", "limit": 20 },
-      "llms": { "path": "llms.txt" }
+      "llms": { "path": "llms.txt" },
+      "static": { "dir": "static" }
     }
   ]
 }
