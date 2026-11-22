@@ -137,7 +137,8 @@ jobs:
                 theme: "themes/oliver",
                 sitemap: {path: "sitemap.xml"},
                 rss: {path: "rss.xml", limit: 20},
-                llms: {path: "llms.txt"}
+                llms: {path: "llms.txt"},
+                static: {dir: "static"}
               }]
             }' > .boris-pages-profile.json
           boris/zig-out/bin/boris plan --profile .boris-pages-profile.json > evidence/publication-plan.json
@@ -157,6 +158,7 @@ jobs:
             --input docs \
             --target public=dist \
             --target-layout public=themes/oliver/layouts/main.html \
+            --static-dir static \
             --sitemap \
             --pages-base-url "$PAGES_BASE_URL" \
             --pages-origin "$PAGES_ORIGIN" \

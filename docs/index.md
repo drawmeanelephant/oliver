@@ -9,9 +9,20 @@ Oliver is a small, freestanding markup parsing and rendering library in
 Zig: bytes in, a typed document (or Recipe) out, deterministic HTML on
 request. This is the documentation home.
 
+Oliver is the markup library under [Boris](//drawmeanelephant.github.io/boris/):
+Boris embeds it to render every page it compiles.
+
+**The stack:** [Oliver](https://drawmeanelephant.github.io/oliver/) (this
+library) → [Boris](//drawmeanelephant.github.io/boris/) (the
+publication compiler built on Oliver) →
+[Solipsist](https://solipsist.filed.fyi) (the native macOS app that drives
+Boris).
+
 The documentation is written for two audiences:
 
-- **Consumers** — applications (like Boris) that embed Oliver. Start
+- **Consumers** — applications that embed Oliver (like
+  [Boris](//drawmeanelephant.github.io/boris/)) or bundle its CLI
+  (like [Solipsist](https://solipsist.filed.fyi)). Start
   with [Capabilities](CAPABILITIES.html) and the README's library-use and
   CLI sections, then the frontend pages that matter to you.
 - **Contributors** — anyone changing Oliver. Start with

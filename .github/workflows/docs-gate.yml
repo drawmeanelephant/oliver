@@ -91,6 +91,7 @@ jobs:
             --input docs \
             --target public=dist \
             --target-layout public=themes/oliver/layouts/main.html \
+            --static-dir static \
             --sitemap \
             --pages-base-url https://drawmeanelephant.github.io/oliver \
             --pages-origin https://drawmeanelephant.github.io \

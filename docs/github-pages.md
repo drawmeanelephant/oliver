@@ -40,7 +40,7 @@ Each stage is governed by a normative contract in
 | Profile | `jq` builds the profile from `configure-pages`; `boris plan --profile` validates it | [publication-profile](contracts/publication-profile.html) |
 | Plan | normalized declaration with `site_kind` and the cross-checked `base_url`/`origin`/`base_path` | [publication-plan](contracts/publication-plan.html) |
 | Validate | local preflight: renders pages + sitemap in memory, no writes; skips the post-render link audit, so the CI gate runs the full compile ([boris#430](https://github.com/drawmeanelephant/boris/issues/430)) | — (see compile) |
-| Compile | HTML + sitemap under `dist/`; every URL projection audited against the declared location; proof reports emitted. `rss.xml` + `llms.txt` are generated afterward by the standalone exporters (see [Projections](#projections)) | [publication-model](contracts/publication-model.html) · [checks](contracts/publication-checks.html) · [claims](contracts/publication-claims.html) |
+| Compile | HTML + sitemap + root static files (`robots.txt`, `404.html`) under `dist/`; every URL projection audited against the declared location; proof reports emitted. `rss.xml` + `llms.txt` are generated afterward by the standalone exporters (see [Projections](#projections-sitemap-rss-and-llmstxt)) | [publication-model](contracts/publication-model.html) · [checks](contracts/publication-checks.html) · [claims](contracts/publication-claims.html) |
 | Artifact | inventory-verified copy into `public-site/` (bytes + SHA-256, `index.html`, 1 GiB bound) | [artifacts](contracts/publication-artifacts.html) · [touches](contracts/publication-touches.html) · [proof pack](contracts/publication-proof-pack.html) |
 | Deploy | `deploy-pages` publishes the artifact to the `github-pages` environment | — (GitHub's contract) |
 | Audit (optional) | bounded HTTP observation bound to the retained plan and inventory | [deployment evidence](contracts/github-pages-deployment-evidence.html) |
@@ -109,6 +109,7 @@ The build step consumes that normalized plan identity directly:
 boris/zig-out/bin/boris --input docs \
   --target public=dist \
   --target-layout public=themes/oliver/layouts/main.html \
+  --static-dir static \
   --sitemap \
   --pages-base-url https://drawmeanelephant.github.io/oliver \
   --pages-origin https://drawmeanelephant.github.io \
@@ -118,7 +119,11 @@ boris/zig-out/bin/boris --input docs \
 ```
 
 `--input docs` is explicit because the CLI default content root is `content`;
-this repository publishes its `docs/` tree with the `themes/oliver` theme. The
+this repository publishes its `docs/` tree with the `themes/oliver` theme.
+`--static-dir static` copies the repository's `static/` tree byte-identically to the site root —
+`robots.txt` (pointing crawlers at `sitemap.xml`) and the `404.html` GitHub
+Pages serves for unknown paths — and records each file as a `static-file`
+inventory entry; the profile declares the same directory as `static.dir`. The
 compiler audits rendered root-relative/public metadata URLs before target
 replacement and binds sitemap URLs to the same identity. `EPUBLICATIONLOCATION`
 is an actionable publication failure. Root and custom-domain builds pass an
@@ -138,6 +143,7 @@ boris/zig-out/bin/boris plan --profile publication-profile.example.json > /tmp/p
 boris/zig-out/bin/boris validate --input docs \
   --target public=dist \
   --target-layout public=themes/oliver/layouts/main.html \
+  --static-dir static \
   --sitemap \
   --pages-base-url https://drawmeanelephant.github.io/oliver \
   --pages-origin https://drawmeanelephant.github.io \
